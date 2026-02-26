@@ -1,7 +1,7 @@
 import { db } from "../../config/database.js";
 import { parseFechaReunionToUTC } from "../../utils/date.utils.js";
 import { getAccountByLocationId, addContactTag, GHL_TAGS } from "../ghl-api.service.js";
-import type { GhlWebhookPayload, GhlBodyPayload } from "../../schemas/webhooks/ghl.schema.js";
+import type { GhlBodyPayload } from "../../schemas/webhooks/ghl.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
 // ─── Tipos internos ───────────────────────────────────────────────────────────
@@ -204,12 +204,11 @@ async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
 }
 
 // ─── Dispatcher principal ─────────────────────────────────────────────────────
+// Recibe el body ya normalizado (extractWebhookBody en el controller).
 
 export async function processGhlWebhook(
-  payload: GhlWebhookPayload,
+  body: GhlBodyPayload,
 ): Promise<ServiceResult<AgendaResult>> {
-  const event = payload[0];
-  const body = event.body;
   const categoria = body.customData.categoria?.toLowerCase().trim();
 
   switch (categoria) {

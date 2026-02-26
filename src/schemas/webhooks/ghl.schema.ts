@@ -20,9 +20,10 @@ const GhlCustomData = Type.Object(
 );
 
 /**
- * El objeto "body" que GHL genera y que n8n pasa como campo "body" del evento.
+ * El cuerpo real del evento de GHL.
+ * Se exporta como tipo para que el servicio lo use directamente.
  */
-const GhlBodyData = Type.Object(
+export const GhlBodyData = Type.Object(
   {
     first_name: Type.Optional(Type.String()),
     full_name: Type.Optional(Type.String()),
@@ -36,23 +37,22 @@ const GhlBodyData = Type.Object(
 );
 
 /**
- * n8n envuelve cada evento en un objeto con headers, body, params, query, etc.
- * El payload real de GHL está dentro del campo "body".
+ * El body del endpoint acepta dos formatos:
+ *
+ *   ① Directo desde GHL:  { contact_id, customData, ... }
+ *   ② Envuelto por n8n:   [{ body: { contact_id, customData, ... }, headers, ... }]
+ *
+ * El controller usa extractWebhookBody() para normalizar antes de pasar al servicio.
  */
-const GhlEventItem = Type.Object(
-  {
-    body: GhlBodyData,
-    headers: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-    webhookUrl: Type.Optional(Type.String()),
-    executionMode: Type.Optional(Type.String()),
-  },
-  { additionalProperties: true },
-);
-
-/**
- * n8n siempre envía un array de items, incluso cuando es un solo evento.
- */
-export const GhlWebhookBody = Type.Array(GhlEventItem, { minItems: 1 });
+export const GhlWebhookBody = Type.Union([
+  // Formato directo
+  GhlBodyData,
+  // Formato n8n
+  Type.Array(
+    Type.Object({ body: GhlBodyData }, { additionalProperties: true }),
+    { minItems: 1 },
+  ),
+]);
 
 export type GhlWebhookPayload = Static<typeof GhlWebhookBody>;
 export type GhlBodyPayload = Static<typeof GhlBodyData>;

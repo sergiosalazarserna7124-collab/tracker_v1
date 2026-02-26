@@ -48,38 +48,45 @@ const FathomRecordedBy = Type.Object(
   { additionalProperties: true },
 );
 
-// ─── Body del webhook Fathom ──────────────────────────────────────────────────
-// El payload llega envuelto en el array de n8n: [{ body: { ... } }]
-// El controller desenvuelve el array y pasa solo el `body` interno al servicio.
+// ─── Cuerpo real del evento Fathom ────────────────────────────────────────────
 
-export const FathomWebhookBody = Type.Array(
-  Type.Object(
-    {
-      body: Type.Optional(
-        Type.Object(
-          {
-            recording_id: Type.Optional(Type.Number()),
-            share_url: Type.Optional(Type.String()),
-            url: Type.Optional(Type.String()),
-            title: Type.Optional(Type.String()),
-            meeting_title: Type.Optional(Type.String()),
-            created_at: Type.Optional(Type.String()),
-            recording_start_time: Type.Optional(Type.String()),
-            recording_end_time: Type.Optional(Type.String()),
-            recorded_by: Type.Optional(FathomRecordedBy),
-            calendar_invitees: Type.Optional(Type.Array(FathomCalendarInvitee)),
-            transcript: Type.Optional(Type.Array(FathomTranscriptItem)),
-          },
-          { additionalProperties: true },
-        ),
-      ),
-    },
-    { additionalProperties: true },
-  ),
-  { minItems: 1 },
+export const FathomEventBodySchema = Type.Object(
+  {
+    recording_id: Type.Optional(Type.Number()),
+    share_url: Type.Optional(Type.String()),
+    url: Type.Optional(Type.String()),
+    title: Type.Optional(Type.String()),
+    meeting_title: Type.Optional(Type.String()),
+    created_at: Type.Optional(Type.String()),
+    recording_start_time: Type.Optional(Type.String()),
+    recording_end_time: Type.Optional(Type.String()),
+    recorded_by: Type.Optional(FathomRecordedBy),
+    calendar_invitees: Type.Optional(Type.Array(FathomCalendarInvitee)),
+    transcript: Type.Optional(Type.Array(FathomTranscriptItem)),
+  },
+  { additionalProperties: true },
 );
 
-export type FathomWebhookPayload = Static<typeof FathomWebhookBody>;
+/**
+ * El body del endpoint acepta dos formatos:
+ *
+ *   ① Directo desde Fathom: { recording_id, share_url, transcript, ... }
+ *   ② Envuelto por n8n:     [{ body: { recording_id, ... }, headers, ... }]
+ *
+ * El controller usa extractWebhookBody() para normalizar antes de pasar al servicio.
+ */
+export const FathomWebhookBody = Type.Union([
+  // Formato directo
+  FathomEventBodySchema,
+  // Formato n8n
+  Type.Array(
+    Type.Object(
+      { body: Type.Optional(FathomEventBodySchema) },
+      { additionalProperties: true },
+    ),
+    { minItems: 1 },
+  ),
+]);
 
-// Tipo del body interno (un evento Fathom ya desenvuelto)
-export type FathomEventBody = NonNullable<FathomWebhookPayload[number]["body"]>;
+export type FathomWebhookPayload = Static<typeof FathomWebhookBody>;
+export type FathomEventBody = Static<typeof FathomEventBodySchema>;

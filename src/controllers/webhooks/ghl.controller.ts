@@ -1,13 +1,23 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
-import type { GhlWebhookPayload } from "../../schemas/webhooks/ghl.schema.js";
+import type { GhlWebhookPayload, GhlBodyPayload } from "../../schemas/webhooks/ghl.schema.js";
 import { processGhlWebhook } from "../../services/webhooks/ghl.service.js";
+import { extractWebhookBody } from "../../utils/payload.utils.js";
 import type { WebhookResponse } from "../../types/index.js";
 
 export async function handleGhlWebhook(
   request: FastifyRequest<{ Body: GhlWebhookPayload }>,
   reply: FastifyReply,
 ): Promise<WebhookResponse> {
-  const result = await processGhlWebhook(request.body);
+  const body = extractWebhookBody<GhlBodyPayload>(request.body);
+
+  if (!body) {
+    return reply.status(400).send({
+      success: false,
+      message: "Missing or invalid GHL event payload",
+    });
+  }
+
+  const result = await processGhlWebhook(body);
 
   if (!result.success) {
     return reply.status(422).send({
@@ -16,7 +26,7 @@ export async function handleGhlWebhook(
     });
   }
 
-  // Si el evento fue ignorado (categoria distinta a "pendiente")
+  // Si el evento fue ignorado (categoria distinta a "pendiente" / "cancelada" / "reagenda")
   if (!result.data) {
     return { success: true, message: "GHL event acknowledged (no action required)" };
   }

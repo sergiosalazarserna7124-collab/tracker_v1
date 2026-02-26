@@ -1,7 +1,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 
 // Sólo los campos relevantes; additionalProperties: true absorbe el resto
-// (n8n envía decenas de custom fields que no necesitamos procesar).
+// (GHL envía decenas de custom fields que no necesitamos procesar).
 
 const TwilioLocation = Type.Object(
   {
@@ -34,7 +34,7 @@ const TwilioCustomData = Type.Object(
   { additionalProperties: true },
 );
 
-const TwilioBody = Type.Object(
+export const TwilioBody = Type.Object(
   {
     contact_id: Type.Optional(Type.String()),
     first_name: Type.Optional(Type.String()),
@@ -47,13 +47,23 @@ const TwilioBody = Type.Object(
   { additionalProperties: true },
 );
 
-export const TwilioWebhookBody = Type.Array(
-  Type.Object(
-    { body: TwilioBody },
-    { additionalProperties: true },
+/**
+ * El body del endpoint acepta dos formatos:
+ *
+ *   ① Directo desde GHL:  { contact_id, customData, ... }
+ *   ② Envuelto por n8n:   [{ body: { contact_id, customData, ... }, headers, ... }]
+ *
+ * El controller usa extractWebhookBody() para normalizar antes de pasar al servicio.
+ */
+export const TwilioWebhookBody = Type.Union([
+  // Formato directo
+  TwilioBody,
+  // Formato n8n
+  Type.Array(
+    Type.Object({ body: TwilioBody }, { additionalProperties: true }),
+    { minItems: 1 },
   ),
-  { minItems: 1 },
-);
+]);
 
 export type TwilioWebhookPayload = Static<typeof TwilioWebhookBody>;
 export type TwilioEventBody = Static<typeof TwilioBody>;

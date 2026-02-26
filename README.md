@@ -38,7 +38,8 @@ Este backend es el **"Cerebro"** central de un SaaS multi-tenant de ventas. Cada
 | **Fathom** | Videollamada grabada | Analiza transcripción con 4 IAs en paralelo, hace upsert en BD, aplica tag en CRM |
 | **Cron Job** | Diario (tu scheduler externo) | Marca como `no_show` todas las citas pendientes sin videollamada ese día |
 
-> **Todos los eventos llegan desde n8n** envueltos en un array `[{ body: { ... } }]`.
+> **Los eventos llegan directamente** desde GHL, Fathom o Twilio como objetos JSON planos.  
+> El backend también acepta el formato legado de n8n `[{ body: { ... } }]` de forma automática, sin configuración adicional.
 
 ---
 
@@ -144,9 +145,16 @@ VALUES (
 
 ## Endpoints
 
-> **Importante:** Todos los webhooks llegan desde **n8n** envueltos en un array. El Cerebro desenvuelve el array automáticamente.
+> ### 🔌 Compatibilidad de formatos de payload
 >
-> Formato base de todos los payloads: `[{ "body": { ...datos del evento... } }]`
+> El Cerebro acepta **ambos formatos** en todos los endpoints de webhook, de forma automática y transparente:
+>
+> | Formato | Descripción | Ejemplo |
+> |---|---|---|
+> | **Directo** | El origen envía el JSON tal cual | `{ "contact_id": "...", "customData": { ... } }` |
+> | **n8n (legado)** | Envuelto en array por n8n | `[{ "body": { "contact_id": "...", "customData": { ... } } }]` |
+>
+> La función `extractWebhookBody()` en `src/utils/payload.utils.ts` detecta automáticamente cuál formato llegó y normaliza el payload antes de procesarlo. No necesitas cambiar nada en GHL, Twilio o Fathom si ya tienes webhooks configurados.
 
 ---
 
@@ -169,7 +177,7 @@ Verifica que el servidor esté vivo. Úsalo como health check en Cloud Run.
 
 ### `POST /webhooks/ghl` — Citas GHL
 
-Recibe eventos de citas desde GoHighLevel (vía n8n). Procesa tres tipos de eventos según `customData.categoria`.
+Recibe eventos de citas desde GoHighLevel (directo o vía n8n). Procesa tres tipos de eventos según `customData.categoria`.
 
 **URL que configuras en n8n:** `https://tu-dominio.run.app/webhooks/ghl`
 
@@ -532,32 +540,30 @@ Recibe la grabación y transcripción de una videollamada de Fathom (vía n8n). 
 
 Cada cliente puede tener un `prompt_ventas` propio en `public.cuentas`. Ese prompt se inyecta en el análisis forense (Fase 4, análisis #2). Si el campo es `NULL`, se usa un prompt genérico de calificación de ventas.
 
-**Ejemplo de payload de Fathom (envuelto en array n8n):**
+**Ejemplo de payload de Fathom (formato directo):**
 ```json
-[
-  {
-    "body": {
-      "recording_id": 123827160,
-      "share_url": "https://fathom.video/share/abc123",
-      "recorded_by": {
-        "email": "asesor@empresa.com",
-        "name": "Asesor Felipe"
-      },
-      "calendar_invitees": [
-        { "email": "lead@gmail.com", "is_external": true, "name": "Cristian" },
-        { "email": "asesor@empresa.com", "is_external": false, "name": "Asesor Felipe" }
-      ],
-      "transcript": [
-        {
-          "speaker": { "display_name": "Asesor Felipe" },
-          "text": "Buenos días, ¿cómo estás?",
-          "timestamp": "00:00:05"
-        }
-      ]
+{
+  "recording_id": 123827160,
+  "share_url": "https://fathom.video/share/abc123",
+  "recorded_by": {
+    "email": "asesor@empresa.com",
+    "name": "Asesor Felipe"
+  },
+  "calendar_invitees": [
+    { "email": "lead@gmail.com", "is_external": true, "name": "Cristian" },
+    { "email": "asesor@empresa.com", "is_external": false, "name": "Asesor Felipe" }
+  ],
+  "transcript": [
+    {
+      "speaker": { "display_name": "Asesor Felipe" },
+      "text": "Buenos días, ¿cómo estás?",
+      "timestamp": "00:00:05"
     }
-  }
-]
+  ]
+}
 ```
+
+> También acepta el formato n8n envuelto: `[{ "body": { ...datos... } }]`
 
 ---
 
@@ -800,10 +806,10 @@ src/
 │   └── cron/
 │       └── daily-tasks.route.ts       # POST /cron/update-no-shows
 │
-├── controllers/                       # Recibe la request, valida y llama al servicio
+├── controllers/                       # Recibe la request, normaliza payload y llama al servicio
 │   ├── webhooks/
-│   │   ├── ghl.controller.ts
-│   │   ├── fathom.controller.ts       # Desenvuelve array n8n → responde 200 inmediato
+│   │   ├── ghl.controller.ts          # Usa extractWebhookBody → llama ghl.service
+│   │   ├── fathom.controller.ts       # Usa extractWebhookBody → responde 200 inmediato
 │   │   └── twilio.controller.ts       # 3 handlers: pdte / no-answer / effective
 │   └── cron/
 │       └── daily-tasks.controller.ts  # Verifica x-cron-secret → 401 si falla
@@ -830,6 +836,7 @@ src/
 │       └── daily-tasks.schema.ts
 │
 └── utils/
+    ├── payload.utils.ts               # extractWebhookBody — detecta formato directo vs n8n
     ├── date.utils.ts                  # Parsea fechas en español + IANA timezone → UTC
     ├── batch.utils.ts                 # processInChunks — rate limiting para APIs externas
     └── fetch.utils.ts                 # fetchWithTimeout — fetch con AbortController

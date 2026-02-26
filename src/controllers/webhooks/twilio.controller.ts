@@ -1,10 +1,14 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
-import type { TwilioWebhookPayload } from "../../schemas/webhooks/twilio.schema.js";
+import type {
+  TwilioWebhookPayload,
+  TwilioEventBody,
+} from "../../schemas/webhooks/twilio.schema.js";
 import {
   processTwilioWebhook,
   processNoAnswerCall,
   processEffectiveCall,
 } from "../../services/webhooks/twilio.service.js";
+import { extractWebhookBody } from "../../utils/payload.utils.js";
 
 // ─── POST /webhooks/twilio ────────────────────────────────────────────────────
 // Llamada pendiente: inserta registro con estado "pdte"
@@ -13,11 +17,12 @@ export async function handleTwilioWebhook(
   request: FastifyRequest<{ Body: TwilioWebhookPayload }>,
   reply: FastifyReply,
 ): Promise<void> {
-  const eventBody = request.body[0]?.body;
+  const eventBody = extractWebhookBody<TwilioEventBody>(request.body);
+
   if (!eventBody) {
     return reply.status(400).send({
       success: false,
-      message: "Missing body in Twilio/GHL event payload",
+      message: "Missing or invalid call event payload",
     });
   }
 
@@ -45,11 +50,12 @@ export async function handleNoAnswerCall(
   request: FastifyRequest<{ Body: TwilioWebhookPayload }>,
   reply: FastifyReply,
 ): Promise<void> {
-  const eventBody = request.body[0]?.body;
+  const eventBody = extractWebhookBody<TwilioEventBody>(request.body);
+
   if (!eventBody) {
     return reply.status(400).send({
       success: false,
-      message: "Missing body in no-answer event payload",
+      message: "Missing or invalid no-answer event payload",
     });
   }
 
@@ -78,11 +84,12 @@ export async function handleEffectiveCall(
   request: FastifyRequest<{ Body: TwilioWebhookPayload }>,
   reply: FastifyReply,
 ): Promise<void> {
-  const eventBody = request.body[0]?.body;
+  const eventBody = extractWebhookBody<TwilioEventBody>(request.body);
+
   if (!eventBody) {
     return reply.status(400).send({
       success: false,
-      message: "Missing body in effective call event payload",
+      message: "Missing or invalid effective call event payload",
     });
   }
 
