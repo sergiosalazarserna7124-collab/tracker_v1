@@ -49,6 +49,7 @@ export const llamadas = pgTable("registros_de_llamada", {
   trancription: text("trancription"),
   callsid: text("callsid"),
   iadescripcion: text("iadescripcion"),
+  id_user_ghl: text("id_user_ghl"),
 });
 
 /**

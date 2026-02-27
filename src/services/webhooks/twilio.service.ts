@@ -41,8 +41,9 @@ function extractFields(body: TwilioEventBody) {
   const closerMail = cd.closermail?.trim() || null;
   const nombreCloser = cd.nombrecloser?.trim() || null;
   const contactId = body.contact_id?.trim() || null;
+  const idUserGhl = cd.id_customer_ghl?.trim() || null;
 
-  return { locationId, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId };
+  return { locationId, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl };
 }
 
 // ─── Lookup de cuenta (básico: sin Twilio) ───────────────────────────────────
@@ -138,12 +139,13 @@ async function followUpPath(
   iadesc: string | null,
   label: string,
 ): Promise<ServiceResult> {
-  const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId } = fields;
+  const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
 
   type ExistingRow = { id_registro: number; intentos_contacto: number | null };
   let existing: ExistingRow | null = null;
 
+  // Prioridad 1: buscar por mail_lead
   if (mailLead) {
     try {
       const rows = await drizzleDb
@@ -168,6 +170,31 @@ async function followUpPath(
     }
   }
 
+  // Prioridad 2: fallback por id_user_ghl si mail_lead no encontró nada
+  if (!existing && idUserGhl) {
+    try {
+      const rows = await drizzleDb
+        .select({ id_registro: llamadas.id_registro, intentos_contacto: llamadas.intentos_contacto })
+        .from(llamadas)
+        .where(
+          and(
+            eq(llamadas.id_user_ghl, idUserGhl),
+            idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+            or(
+              inArray(llamadas.estado, [...ESTADOS_ACTIVOS]),
+              isNull(llamadas.estado),
+            ),
+          ),
+        )
+        .orderBy(desc(llamadas.fecha_evento))
+        .limit(1);
+
+      existing = rows[0] ?? null;
+    } catch (err) {
+      console.error(`[${label}] Error buscando registro por id_user_ghl="${idUserGhl}":`, err);
+    }
+  }
+
   let idRegistro: number | null = null;
 
   if (existing) {
@@ -184,6 +211,7 @@ async function followUpPath(
           ...(callSid && { callsid: callSid }),
           ...(transcript && { trancription: transcript }),
           ...(iadesc && { iadescripcion: iadesc }),
+          ...(idUserGhl && { id_user_ghl: idUserGhl }),
         })
         .where(eq(llamadas.id_registro, existing.id_registro));
 
@@ -213,6 +241,7 @@ async function followUpPath(
           trancription: transcript,
           callsid: callSid,
           iadescripcion: iadesc,
+          id_user_ghl: idUserGhl,
         })
         .returning({ id_registro: llamadas.id_registro });
 
@@ -240,7 +269,7 @@ async function followUpPath(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export async function processTwilioWebhook(body: TwilioEventBody): Promise<ServiceResult> {
-  const { locationId, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser } =
+  const { locationId, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, idUserGhl } =
     extractFields(body);
 
   const { idCuenta } = await resolveAccount(locationId, "Twilio");
@@ -265,6 +294,7 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
         trancription: null,
         callsid: null,
         iadescripcion: null,
+        id_user_ghl: idUserGhl,
       })
       .returning({ id_registro: llamadas.id_registro });
 
@@ -414,15 +444,16 @@ async function effectivePath(
   transcript: string,
   classification: CallClassification,
 ): Promise<ServiceResult> {
-  const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId } = fields;
+  const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
   const aiEstado = classification.estado ?? "seguimiento";
   const iadesc = classification.iadesc ?? null;
 
-  // Buscar el registro MAS RECIENTE por mail_lead (sin filtrar por estado)
+  // Buscar el registro MAS RECIENTE (sin filtrar por estado)
   type ExistingRow = { id_registro: number; intentos_contacto: number | null; estado: string | null };
   let existing: ExistingRow | null = null;
 
+  // Prioridad 1: buscar por mail_lead
   if (mailLead) {
     try {
       const rows = await drizzleDb
@@ -444,6 +475,31 @@ async function effectivePath(
       existing = rows[0] ?? null;
     } catch (err) {
       console.error(`[Effective] Error buscando registro para mail="${mailLead}":`, err);
+    }
+  }
+
+  // Prioridad 2: fallback por id_user_ghl
+  if (!existing && idUserGhl) {
+    try {
+      const rows = await drizzleDb
+        .select({
+          id_registro: llamadas.id_registro,
+          intentos_contacto: llamadas.intentos_contacto,
+          estado: llamadas.estado,
+        })
+        .from(llamadas)
+        .where(
+          and(
+            eq(llamadas.id_user_ghl, idUserGhl),
+            idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+          ),
+        )
+        .orderBy(desc(llamadas.id_registro))
+        .limit(1);
+
+      existing = rows[0] ?? null;
+    } catch (err) {
+      console.error(`[Effective] Error buscando registro por id_user_ghl="${idUserGhl}":`, err);
     }
   }
 
@@ -470,6 +526,7 @@ async function effectivePath(
           trancription: transcript,
           iadescripcion: iadesc,
           ...(callSid && { callsid: callSid }),
+          ...(idUserGhl && { id_user_ghl: idUserGhl }),
         })
         .where(eq(llamadas.id_registro, existing.id_registro));
 
@@ -499,6 +556,7 @@ async function effectivePath(
           trancription: transcript,
           callsid: callSid,
           iadescripcion: iadesc,
+          id_user_ghl: idUserGhl,
         })
         .returning({ id_registro: llamadas.id_registro });
 

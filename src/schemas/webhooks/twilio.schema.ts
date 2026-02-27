@@ -30,6 +30,8 @@ const TwilioCustomData = Type.Object(
     nombrecloser: Type.Optional(Type.String()),
     // Presente en el evento no-answer; en el evento pdte viene en body.location.id
     locationid: Type.Optional(Type.String()),
+    // ID del contacto en GHL (alternativa al email para identificar al lead)
+    id_customer_ghl: Type.Optional(Type.String()),
   },
   { additionalProperties: true },
 );
