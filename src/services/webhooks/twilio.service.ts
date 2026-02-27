@@ -386,6 +386,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
       call.callSid,
       twilioSid,
       authTwilio,
+      call.parentCallSid,
     );
     if (!recordingSid) {
       console.warn(`[Effective] Sin recordings para callSid="${call.callSid}"`);

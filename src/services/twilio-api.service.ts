@@ -17,6 +17,7 @@ const TWILIO_BASE = "https://api.twilio.com/2010-04-01/Accounts";
 export interface TwilioCall {
   callSid: string;
   accountSid: string;
+  parentCallSid: string | null;
 }
 
 export async function getLatestCompletedCall(
@@ -47,24 +48,31 @@ export async function getLatestCompletedCall(
   }
 
   const data = (await response.json()) as {
-    calls?: Array<{ sid?: string; account_sid?: string }>;
+    calls?: Array<{ sid?: string; account_sid?: string; parent_call_sid?: string }>;
   };
 
   const call = data.calls?.[0];
   if (!call?.sid || !call?.account_sid) return null;
 
-  return { callSid: call.sid, accountSid: call.account_sid };
+  return {
+    callSid: call.sid,
+    accountSid: call.account_sid,
+    parentCallSid: call.parent_call_sid ?? null,
+  };
 }
 
 // ─── 2. Obtener el recording SID de una llamada ─────────────────────────────
+// GHL usa arquitectura de conferencia: la grabación puede estar en el callSid
+// principal O en el parentCallSid. Se intenta el principal primero; si devuelve
+// vacío y existe un parentCallSid, se reintenta con él.
 
-export async function getCallRecordingSid(
+async function fetchRecordingSid(
   accountSid: string,
-  callSid: string,
+  targetCallSid: string,
   twilioSid: string,
   authToken: string,
 ): Promise<string | null> {
-  const url = `${TWILIO_BASE}/${accountSid}/Calls/${callSid}/Recordings.json`;
+  const url = `${TWILIO_BASE}/${accountSid}/Calls/${targetCallSid}/Recordings.json`;
 
   const response = await fetchWithTimeout(
     url,
@@ -87,6 +95,28 @@ export async function getCallRecordingSid(
   };
 
   return data.recordings?.[0]?.sid ?? null;
+}
+
+export async function getCallRecordingSid(
+  accountSid: string,
+  callSid: string,
+  twilioSid: string,
+  authToken: string,
+  parentCallSid?: string | null,
+): Promise<string | null> {
+  // Intento 1: callSid principal
+  const sid = await fetchRecordingSid(accountSid, callSid, twilioSid, authToken);
+  if (sid) return sid;
+
+  // Intento 2: parentCallSid como fallback (patrón frecuente en GHL/conferencias)
+  if (parentCallSid && parentCallSid !== callSid) {
+    console.log(
+      `[Twilio] Sin recordings en callSid="${callSid}"; reintentando con parentCallSid="${parentCallSid}"`,
+    );
+    return fetchRecordingSid(accountSid, parentCallSid, twilioSid, authToken);
+  }
+
+  return null;
 }
 
 // ─── 3. Descargar el audio mp3 de un recording ──────────────────────────────
