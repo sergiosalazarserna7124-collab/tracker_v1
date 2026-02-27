@@ -5,6 +5,19 @@ import { fetchWithTimeout } from "../utils/fetch.utils.js";
 
 const GHL_TIMEOUT_MS = 15_000;
 
+// ─── Helper: normalizar token de GHL ─────────────────────────────────────────
+// Garantiza que el header Authorization sea siempre "Bearer <token>",
+// independientemente de cómo esté guardado en la BD (con o sin prefijo).
+
+function buildBearerAuth(rawToken: string): string {
+  const trimmed = rawToken.trim();
+  // Si ya tiene el prefijo (cualquier capitalización), lo devuelve limpio
+  if (/^bearer\s+/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `Bearer ${trimmed}`;
+}
+
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 // Los campos text() de Drizzle sin .notNull() son string | null.
 
@@ -103,7 +116,7 @@ export async function searchContactByEmail(
     {
       method: "GET",
       headers: {
-        Authorization: bearerToken,
+        Authorization: buildBearerAuth(bearerToken),
         Accept: "application/json",
         Version: "2021-07-28",
       },
@@ -151,7 +164,7 @@ export async function getGhlUser(
     {
       method: "GET",
       headers: {
-        Authorization: bearerToken,
+        Authorization: buildBearerAuth(bearerToken),
         Accept: "application/json",
         Version: "2021-07-28",
       },
@@ -177,31 +190,38 @@ export async function getGhlUser(
   };
 }
 
-// ─── POST a GHL API: agregar tag al contacto ──────────────────────────────────
-// bearerToken ya incluye el prefijo "Bearer ..." tal como viene en la BD.
+// ─── POST a GHL API: agregar tag al contacto ─────────────────────────────────
 
 export async function addContactTag(
   contactId: string,
   bearerToken: string,
   tag: string,
 ): Promise<void> {
-  const response = await fetchWithTimeout(
-    `https://services.leadconnectorhq.com/contacts/${contactId}/tags`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: bearerToken,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        Version: "2021-07-28",
-      },
-      body: JSON.stringify({ tags: [tag] }),
-    },
-    GHL_TIMEOUT_MS,
-  );
+  const url = `https://services.leadconnectorhq.com/contacts/${contactId}/tags`;
+  const authHeader = buildBearerAuth(bearerToken);
+  const requestBody = JSON.stringify({ tags: [tag] });
+
+  const headers = {
+    Authorization: authHeader,
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Version: "2021-07-28",
+  };
+
+  // ── Verbose logging para diagnosticar 401 ────────────────────────────────
+  console.log("[GHL addContactTag] ── REQUEST ──────────────────────────────");
+  console.log("[GHL addContactTag] URL    :", url);
+  console.log("[GHL addContactTag] Headers:", JSON.stringify(headers, null, 2));
+  console.log("[GHL addContactTag] Body   :", requestBody);
+  console.log("[GHL addContactTag] ─────────────────────────────────────────");
+
+  const response = await fetchWithTimeout(url, { method: "POST", headers, body: requestBody }, GHL_TIMEOUT_MS);
+
+  console.log("[GHL addContactTag] Response status:", response.status);
 
   if (!response.ok) {
     const text = await response.text();
+    console.error("[GHL addContactTag] ERROR response body:", text);
     throw new Error(`GHL tag API responded ${response.status}: ${text}`);
   }
 }
@@ -222,7 +242,7 @@ export async function addContactNote(
     {
       method: "POST",
       headers: {
-        Authorization: bearerToken,
+        Authorization: buildBearerAuth(bearerToken),
         Accept: "application/json",
         "Content-Type": "application/json",
         Version: "2021-07-28",
