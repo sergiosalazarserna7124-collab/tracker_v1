@@ -3,8 +3,20 @@
 
 import { fetchWithTimeout } from "../utils/fetch.utils.js";
 
-const TWILIO_METADATA_TIMEOUT_MS = 15_000;
+// 30s para metadata: el primer request desde Cloud Run puede tardar
+// por resolución DNS fría + TLS handshake a api.twilio.com.
+const TWILIO_METADATA_TIMEOUT_MS = 30_000;
 const TWILIO_DOWNLOAD_TIMEOUT_MS = 90_000;
+
+// Polling config: Twilio puede tardar segundos en publicar el recording
+// después de que la llamada termina. En vez de un sleep fijo, hacemos
+// polling con backoff para salir tan pronto como esté disponible.
+const RECORDING_POLL_ATTEMPTS = 3;
+const RECORDING_POLL_DELAYS_MS = [0, 4_000, 8_000]; // inmediato, 4s, 8s
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 function basicAuthHeader(sid: string, token: string): string {
   return `Basic ${Buffer.from(`${sid}:${token}`).toString("base64")}`;
@@ -104,18 +116,44 @@ export async function getCallRecordingSid(
   authToken: string,
   parentCallSid?: string | null,
 ): Promise<string | null> {
-  // Intento 1: callSid principal
-  const sid = await fetchRecordingSid(accountSid, callSid, twilioSid, authToken);
-  if (sid) return sid;
-
-  // Intento 2: parentCallSid como fallback (patrón frecuente en GHL/conferencias)
+  const sidsToTry = [callSid];
   if (parentCallSid && parentCallSid !== callSid) {
-    console.log(
-      `[Twilio] Sin recordings en callSid="${callSid}"; reintentando con parentCallSid="${parentCallSid}"`,
-    );
-    return fetchRecordingSid(accountSid, parentCallSid, twilioSid, authToken);
+    sidsToTry.push(parentCallSid);
   }
 
+  // Polling con backoff: para cada intento, probamos primero callSid
+  // y luego parentCallSid. Si ninguno tiene recording, esperamos y
+  // reintentamos. Twilio puede tardar segundos en publicar la grabación.
+  for (let attempt = 0; attempt < RECORDING_POLL_ATTEMPTS; attempt++) {
+    const delay = RECORDING_POLL_DELAYS_MS[attempt] ?? 8_000;
+    if (delay > 0) {
+      console.log(
+        `[Twilio] Recording no disponible aún (intento ${attempt}/${RECORDING_POLL_ATTEMPTS}); esperando ${delay}ms…`,
+      );
+      await sleep(delay);
+    }
+
+    for (const sid of sidsToTry) {
+      const label = sid === callSid ? "callSid" : "parentCallSid";
+      try {
+        const recSid = await fetchRecordingSid(accountSid, sid, twilioSid, authToken);
+        if (recSid) {
+          if (attempt > 0 || sid !== callSid) {
+            console.log(
+              `[Twilio] Recording encontrado en ${label}="${sid}" (intento ${attempt + 1})`,
+            );
+          }
+          return recSid;
+        }
+      } catch (err) {
+        console.warn(`[Twilio] Error buscando recording en ${label}="${sid}":`, err);
+      }
+    }
+  }
+
+  console.warn(
+    `[Twilio] Sin recordings después de ${RECORDING_POLL_ATTEMPTS} intentos para callSid="${callSid}"${parentCallSid ? ` / parentCallSid="${parentCallSid}"` : ""}`,
+  );
   return null;
 }
 
