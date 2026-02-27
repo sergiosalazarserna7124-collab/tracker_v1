@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
-import { llamadas } from "../../db/schema.js";
+import { llamadas, logLlamadas } from "../../db/schema.js";
 import {
   addContactTag,
   addContactNote,
@@ -26,7 +26,7 @@ import type { ServiceResult } from "../../types/index.js";
 
 // ─── Estados activos para búsqueda de registro existente ─────────────────────
 
-const ESTADOS_ACTIVOS = ["pdte", "seguimiento", "no_contestada", "no_contestado"] as const;
+const ESTADOS_ACTIVOS = ["pdte", "seguimiento", "programado", "no_contestada", "no_contestado"] as const;
 
 // ─── Helper: calcular speed_to_lead (minutos desde fecha_evento hasta ahora) ─
 // Solo aplica cuando el estado anterior era "pdte" y se va a cambiar.
@@ -41,6 +41,49 @@ function calcSpeedToLead(
   const diffMs = now.getTime() - fechaEvento.getTime();
   const minutos = Math.round(diffMs / 60_000);
   return String(Math.max(minutos, 0));
+}
+
+// ─── Helper: insertar evento en log_llamadas (best-effort, nunca bloquea) ────
+
+interface LogEntry {
+  idRegistro: number | null;
+  idCuenta: number | null;
+  fields: ReturnType<typeof extractFields>;
+  tipoEvento: string;
+  estadoResultado: string | null;
+  callSid?: string | null;
+  transcript?: string | null;
+  iadesc?: string | null;
+  speedToLead?: string | null;
+}
+
+async function insertLogEntry(entry: LogEntry): Promise<void> {
+  try {
+    await withRetry(
+      () =>
+        drizzleDb.insert(logLlamadas).values({
+          id_registro: entry.idRegistro,
+          id_cuenta: entry.idCuenta ?? 0,
+          mail_lead: entry.fields.mailLead,
+          id_user_ghl: entry.fields.idUserGhl,
+          contact_id_ghl: entry.fields.contactId,
+          nombre_lead: entry.fields.nombreLead,
+          phone: entry.fields.phone,
+          tipo_evento: entry.tipoEvento,
+          estado_resultado: entry.estadoResultado,
+          call_sid: entry.callSid ?? null,
+          transcripcion: entry.transcript ?? null,
+          ia_descripcion: entry.iadesc ?? null,
+          closer_mail: entry.fields.closerMail,
+          nombre_closer: entry.fields.nombreCloser,
+          creativo_origen: entry.fields.creativoOrigen,
+          speed_to_lead: entry.speedToLead ?? null,
+        }),
+      { label: "insertLogEntry" },
+    );
+  } catch (err) {
+    console.error(`[Log] Error insertando en log_llamadas (tipo=${entry.tipoEvento}):`, err);
+  }
 }
 
 // ─── Extracción compartida de campos del payload ──────────────────────────────
@@ -301,6 +344,23 @@ async function followUpPath(
 
   await applyGhlTagAndNote(contactId, tokenGhl, GHL_TAGS.no_contestada_llamada, label);
 
+  // Determinar tipo_evento para el log según contexto
+  const tipoEvento = label.includes("buzon")
+    ? "buzon"
+    : "no_contesto";
+
+  await insertLogEntry({
+    idRegistro,
+    idCuenta,
+    fields,
+    tipoEvento,
+    estadoResultado: "seguimiento",
+    callSid,
+    transcript,
+    iadesc,
+    speedToLead: existing ? calcSpeedToLead(existing.estado, existing.fecha_evento, now) : "0",
+  });
+
   return {
     success: true,
     data: {
@@ -316,10 +376,8 @@ async function followUpPath(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export async function processTwilioWebhook(body: TwilioEventBody): Promise<ServiceResult> {
-  const { locationId, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, idUserGhl } =
-    extractFields(body);
-
-  const { idCuenta } = await resolveAccount(locationId, "Twilio");
+  const fields = extractFields(body);
+  const { idCuenta } = await resolveAccount(fields.locationId, "Twilio");
 
   try {
     const [inserted] = await withRetry(
@@ -329,13 +387,13 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
           .values({
             fecha_evento: new Date(),
             id_cuenta: idCuenta,
-            nombre_lead: nombreLead,
+            nombre_lead: fields.nombreLead,
             estado: "pdte",
-            mail_lead: mailLead,
-            phone_raw_format: phone,
-            creativo_origen: creativoOrigen,
-            closer_mail: closerMail,
-            nombre_closer: nombreCloser,
+            mail_lead: fields.mailLead,
+            phone_raw_format: fields.phone,
+            creativo_origen: fields.creativoOrigen,
+            closer_mail: fields.closerMail,
+            nombre_closer: fields.nombreCloser,
             intentos_contacto: 0,
             fecha_y_hora_de_seguimiento: null,
             speed_to_lead: null,
@@ -343,13 +401,23 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
             trancription: null,
             callsid: null,
             iadescripcion: null,
-            id_user_ghl: idUserGhl,
+            id_user_ghl: fields.idUserGhl,
           })
           .returning({ id_registro: llamadas.id_registro }),
       { label: "Twilio/insertPdte" },
     );
 
-    return { success: true, data: { id_registro: inserted?.id_registro ?? null } };
+    const idRegistro = inserted?.id_registro ?? null;
+
+    await insertLogEntry({
+      idRegistro,
+      idCuenta,
+      fields,
+      tipoEvento: "pdte",
+      estadoResultado: "pdte",
+    });
+
+    return { success: true, data: { id_registro: idRegistro } };
   } catch (err) {
     console.error("[Twilio] Error insertando registro de llamada:", err);
     return { success: false, error: "Database error while inserting call record" };
@@ -680,6 +748,22 @@ async function effectivePath(
     if (!contactId) console.warn(`[Effective] Sin contact_id; no se puede taggear/notar en GHL`);
     if (!tokenGhl) console.warn(`[Effective] Sin token_ghl; no se puede taggear/notar en GHL`);
   }
+
+  const stlForLog = existing
+    ? calcSpeedToLead(existing.estado, existing.fecha_evento, now)
+    : "0";
+
+  await insertLogEntry({
+    idRegistro,
+    idCuenta,
+    fields,
+    tipoEvento: `efectiva_${aiEstado}`,
+    estadoResultado: aiEstado,
+    callSid,
+    transcript,
+    iadesc,
+    speedToLead: stlForLog,
+  });
 
   return {
     success: true,

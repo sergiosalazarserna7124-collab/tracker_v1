@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, integer, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 
 /**
  * Tabla principal de citas/agendas.
@@ -50,6 +50,32 @@ export const llamadas = pgTable("registros_de_llamada", {
   callsid: text("callsid"),
   iadescripcion: text("iadescripcion"),
   id_user_ghl: text("id_user_ghl"),
+});
+
+/**
+ * Tabla de historial inmutable de eventos de llamadas telefónicas.
+ * Cada interacción (pdte, buzón, no_contesto, efectiva_*) genera una fila.
+ * Nunca se edita, solo se inserta. Es el audit trail del proceso comercial.
+ */
+export const logLlamadas = pgTable("log_llamadas", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  id_registro: integer("id_registro"),
+  id_cuenta: integer("id_cuenta").notNull(),
+  mail_lead: text("mail_lead"),
+  id_user_ghl: text("id_user_ghl"),
+  contact_id_ghl: text("contact_id_ghl"),
+  nombre_lead: text("nombre_lead"),
+  phone: text("phone"),
+  tipo_evento: text("tipo_evento").notNull(),
+  estado_resultado: text("estado_resultado"),
+  call_sid: text("call_sid"),
+  transcripcion: text("transcripcion"),
+  ia_descripcion: text("ia_descripcion"),
+  closer_mail: text("closer_mail"),
+  nombre_closer: text("nombre_closer"),
+  creativo_origen: text("creativo_origen"),
+  speed_to_lead: text("speed_to_lead"),
+  ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
 });
 
 /**
