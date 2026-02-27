@@ -86,25 +86,51 @@ async function insertAgenda(
   fields: ReturnType<typeof extractFields>,
   categoria: string,
 ): Promise<number> {
-  const { rows } = await db.query<{ id_registro_agenda: number }>(
-    `INSERT INTO resumenes_diarios_agendas
-       (id_cuenta, idcliente, ghl_contact_id, fecha, nombre_de_lead, origen, email_lead, categoria, closer, "fecha de la reunion")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     RETURNING id_registro_agenda`,
-    [
-      fields.idCuenta,
-      fields.idcliente,
-      fields.contactId,
-      new Date(),
-      fields.nombreLead,
-      fields.origen,
-      fields.emailLead,
-      categoria,
-      fields.closer,
-      fields.fechaReunion,
-    ],
-  );
-  return rows[0].id_registro_agenda;
+  const payload = {
+    id_cuenta: fields.idCuenta,
+    idcliente: fields.idcliente,
+    ghl_contact_id: fields.contactId,
+    fecha: new Date(),
+    nombre_de_lead: fields.nombreLead,
+    origen: fields.origen,
+    email_lead: fields.emailLead,
+    categoria,
+    closer: fields.closer,
+    fecha_de_la_reunion: fields.fechaReunion,
+  };
+
+  console.log("📦 Payload para BD (resumenes_diarios_agendas):", JSON.stringify(payload, null, 2));
+  console.log("⏳ Iniciando db.query INSERT...");
+
+  let result: number;
+  try {
+    const { rows } = await db.query<{ id_registro_agenda: number }>(
+      `INSERT INTO resumenes_diarios_agendas
+         (id_cuenta, idcliente, ghl_contact_id, fecha, nombre_de_lead, origen, email_lead, categoria, closer, "fecha de la reunion")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id_registro_agenda`,
+      [
+        fields.idCuenta,
+        fields.idcliente,
+        fields.contactId,
+        new Date(),
+        fields.nombreLead,
+        fields.origen,
+        fields.emailLead,
+        categoria,
+        fields.closer,
+        fields.fechaReunion,
+      ],
+    );
+
+    result = rows[0].id_registro_agenda;
+    console.log("✅ Insert exitoso en BD. id_registro_agenda:", result);
+  } catch (dbErr) {
+    console.error("❌ ERROR FATAL EN BASE DE DATOS (INSERT):", dbErr);
+    throw dbErr;
+  }
+
+  return result;
 }
 
 // ─── Helper: aplicar tag en GHL — totalmente aislado ────────────────────────
@@ -135,8 +161,6 @@ async function applyGhlTag(
     await addContactTag(contactId, account.token_ghl, tag);
     return true;
   } catch (err) {
-    // El fallo de GHL (401, 429, timeout, red) no debe romper el webhook.
-    // El registro en BD ya fue guardado. Solo dejamos rastro en logs.
     console.error(
       `[GHL tag][${context}] Error al aplicar tag "${tag}" al contacto "${contactId}":`,
       err,
@@ -151,10 +175,8 @@ async function applyGhlTag(
 async function handlePendiente(body: GhlBodyPayload): Promise<AgendaResult> {
   const fields = extractFields(body);
 
-  // ① BD: siempre primero — si esto falla, lanza y el dispatcher lo captura
   const id = await insertAgenda(fields, "PDTE");
 
-  // ② GHL: best-effort — no puede tirar ni afectar el insert ya realizado
   const tagged = await applyGhlTag(
     fields.locationId,
     fields.contactId,
@@ -168,18 +190,24 @@ async function handlePendiente(body: GhlBodyPayload): Promise<AgendaResult> {
 async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
   const fields = extractFields(body);
 
-  // ① BD: buscar + actualizar/insertar
   const existingId = await findAgenda(fields.idCuenta, fields.idcliente, fields.emailLead);
   let id: number;
   let action: "created" | "updated";
 
   if (existingId !== null) {
-    await db.query(
-      `UPDATE resumenes_diarios_agendas
-       SET categoria = 'CANCELADA'
-       WHERE id_registro_agenda = $1`,
-      [existingId],
-    );
+    console.log("⏳ Iniciando db.query UPDATE (cancelada)... id_registro_agenda:", existingId);
+    try {
+      await db.query(
+        `UPDATE resumenes_diarios_agendas
+         SET categoria = 'CANCELADA'
+         WHERE id_registro_agenda = $1`,
+        [existingId],
+      );
+      console.log("✅ Update exitoso en BD. id_registro_agenda:", existingId);
+    } catch (dbErr) {
+      console.error("❌ ERROR FATAL EN BASE DE DATOS (UPDATE cancelada):", dbErr);
+      throw dbErr;
+    }
     id = existingId;
     action = "updated";
   } else {
@@ -187,7 +215,6 @@ async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
     action = "created";
   }
 
-  // ② GHL: best-effort
   const tagged = await applyGhlTag(
     fields.locationId,
     fields.contactId,
@@ -201,18 +228,24 @@ async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
 async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
   const fields = extractFields(body);
 
-  // ① BD: buscar + actualizar/insertar
   const existingId = await findAgenda(fields.idCuenta, fields.idcliente, fields.emailLead);
   let id: number;
   let action: "created" | "updated";
 
   if (existingId !== null) {
-    await db.query(
-      `UPDATE resumenes_diarios_agendas
-       SET categoria = 'PDTE', "fecha de la reunion" = $2
-       WHERE id_registro_agenda = $1`,
-      [existingId, fields.fechaReunion],
-    );
+    console.log("⏳ Iniciando db.query UPDATE (reagenda)... id_registro_agenda:", existingId);
+    try {
+      await db.query(
+        `UPDATE resumenes_diarios_agendas
+         SET categoria = 'PDTE', "fecha de la reunion" = $2
+         WHERE id_registro_agenda = $1`,
+        [existingId, fields.fechaReunion],
+      );
+      console.log("✅ Update exitoso en BD. id_registro_agenda:", existingId);
+    } catch (dbErr) {
+      console.error("❌ ERROR FATAL EN BASE DE DATOS (UPDATE reagenda):", dbErr);
+      throw dbErr;
+    }
     id = existingId;
     action = "updated";
   } else {
@@ -220,7 +253,6 @@ async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
     action = "created";
   }
 
-  // ② GHL: best-effort
   const tagged = await applyGhlTag(
     fields.locationId,
     fields.contactId,
@@ -232,32 +264,44 @@ async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
 }
 
 // ─── Dispatcher principal ─────────────────────────────────────────────────────
-// Recibe el body ya normalizado (extractWebhookBody en el controller).
-// El try/catch externo asegura que cualquier error inesperado (DB, parse, etc.)
-// se convierta en { success: false } en lugar de lanzar una excepción al controller.
 
 export async function processGhlWebhook(
   body: GhlBodyPayload,
 ): Promise<ServiceResult<AgendaResult>> {
   try {
-    const categoria = body.customData.categoria?.toLowerCase().trim();
+    // ── Rayos X: imprimir el payload completo tal como llegó al servicio ──────
+    console.log("🔍 [GHL webhook] Payload completo recibido:");
+    console.log(JSON.stringify(body, null, 2));
+
+    const categoriaRaw = body.customData?.categoria;
+    const categoria = categoriaRaw?.toLowerCase().trim();
+
+    console.log(
+      `🔍 [GHL webhook] customData.categoria RAW → "${categoriaRaw}" | normalizado → "${categoria}"`,
+    );
 
     switch (categoria) {
       case "pendiente":
+        console.log("🔀 [GHL webhook] Entrando a handlePendiente");
         return { success: true, data: await handlePendiente(body) };
 
       case "cancelada":
+        console.log("🔀 [GHL webhook] Entrando a handleCancelada");
         return { success: true, data: await handleCancelada(body) };
 
       case "reagenda":
+        console.log("🔀 [GHL webhook] Entrando a handleReagenda");
         return { success: true, data: await handleReagenda(body) };
 
       default:
+        console.warn(
+          `⚠️ [GHL webhook] Categoría no reconocida → "${categoria}" (raw: "${categoriaRaw}"). No se hará ninguna acción en BD.`,
+        );
         return { success: true, data: undefined };
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[GHL webhook] Error inesperado en processGhlWebhook:", err);
+    console.error("❌ ERROR FATAL EN BASE DE DATOS:", err);
     return { success: false, error: message };
   }
 }
