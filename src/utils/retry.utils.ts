@@ -18,9 +18,21 @@ const RETRYABLE_PATTERNS = [
   "Client has encountered a connection error",
 ] as const;
 
+// Drizzle envuelve el error de pg en DrizzleQueryError donde .message es
+// "Failed query: SELECT..." y el error real de conexión está en .cause.
+// Recorremos toda la cadena err → err.cause → err.cause.cause para
+// encontrar el patrón retryable en cualquier nivel.
 function isRetryableError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return RETRYABLE_PATTERNS.some((p) => msg.includes(p));
+  let current: unknown = err;
+  while (current) {
+    const msg = current instanceof Error ? current.message : String(current);
+    if (RETRYABLE_PATTERNS.some((p) => msg.includes(p))) return true;
+    current =
+      current instanceof Error && current.cause !== current
+        ? current.cause
+        : undefined;
+  }
+  return false;
 }
 
 export async function withRetry<T>(
