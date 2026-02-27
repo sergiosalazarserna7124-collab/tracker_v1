@@ -693,12 +693,13 @@ Endpoint interno llamado por tu scheduler externo (cron). Marca masivamente como
 | `closer_mail` | text | Email del asesor asignado |
 | `nombre_closer` | text | Nombre del asesor asignado |
 | `fecha_y_hora_de_seguimiento` | timestamptz | Próximo seguimiento programado (UTC) |
-| `speed_to_lead` | text | Tiempo de reacción (calculado externamente) |
+| `speed_to_lead` | text | Minutos desde que la llamada fue "pdte" hasta que cambió de estado (se calcula automáticamente) |
 | `intentos_contacto` | integer | Número de intentos de contacto acumulados |
 | `fecha_primera_llamada` | timestamptz | Momento de la primera llamada registrada (UTC) |
 | `trancription` | text | Transcripción del audio (Whisper) — *typo del esquema original de BD preservado* |
 | `callsid` | text | SID de la llamada en Twilio |
 | `iadescripcion` | text | Análisis IA de la llamada (GPT-4o-mini) |
+| `id_user_ghl` | text | ID del contacto en GHL (alternativa al email, llega como `customData.id_customer_ghl`) |
 
 ---
 

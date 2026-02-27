@@ -27,6 +27,21 @@ import type { ServiceResult } from "../../types/index.js";
 
 const ESTADOS_ACTIVOS = ["pdte", "seguimiento", "no_contestada", "no_contestado"] as const;
 
+// ─── Helper: calcular speed_to_lead (minutos desde fecha_evento hasta ahora) ─
+// Solo aplica cuando el estado anterior era "pdte" y se va a cambiar.
+// El resultado se guarda como TEXT en la BD.
+
+function calcSpeedToLead(
+  estadoAnterior: string | null,
+  fechaEvento: Date | null,
+  now: Date,
+): string | null {
+  if (estadoAnterior?.toLowerCase() !== "pdte" || !fechaEvento) return null;
+  const diffMs = now.getTime() - fechaEvento.getTime();
+  const minutos = Math.round(diffMs / 60_000);
+  return String(Math.max(minutos, 0));
+}
+
 // ─── Extracción compartida de campos del payload ──────────────────────────────
 
 function extractFields(body: TwilioEventBody) {
@@ -142,14 +157,26 @@ async function followUpPath(
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
 
-  type ExistingRow = { id_registro: number; intentos_contacto: number | null };
+  type ExistingRow = {
+    id_registro: number;
+    intentos_contacto: number | null;
+    estado: string | null;
+    fecha_evento: Date | null;
+  };
   let existing: ExistingRow | null = null;
+
+  const selectCols = {
+    id_registro: llamadas.id_registro,
+    intentos_contacto: llamadas.intentos_contacto,
+    estado: llamadas.estado,
+    fecha_evento: llamadas.fecha_evento,
+  };
 
   // Prioridad 1: buscar por mail_lead
   if (mailLead) {
     try {
       const rows = await drizzleDb
-        .select({ id_registro: llamadas.id_registro, intentos_contacto: llamadas.intentos_contacto })
+        .select(selectCols)
         .from(llamadas)
         .where(
           and(
@@ -174,7 +201,7 @@ async function followUpPath(
   if (!existing && idUserGhl) {
     try {
       const rows = await drizzleDb
-        .select({ id_registro: llamadas.id_registro, intentos_contacto: llamadas.intentos_contacto })
+        .select(selectCols)
         .from(llamadas)
         .where(
           and(
@@ -198,6 +225,8 @@ async function followUpPath(
   let idRegistro: number | null = null;
 
   if (existing) {
+    const stl = calcSpeedToLead(existing.estado, existing.fecha_evento, now);
+
     try {
       await drizzleDb
         .update(llamadas)
@@ -212,6 +241,7 @@ async function followUpPath(
           ...(transcript && { trancription: transcript }),
           ...(iadesc && { iadescripcion: iadesc }),
           ...(idUserGhl && { id_user_ghl: idUserGhl }),
+          ...(stl !== null && { speed_to_lead: stl }),
         })
         .where(eq(llamadas.id_registro, existing.id_registro));
 
@@ -237,7 +267,7 @@ async function followUpPath(
           fecha_y_hora_de_seguimiento: now,
           intentos_contacto: 1,
           fecha_primera_llamada: now,
-          speed_to_lead: null,
+          speed_to_lead: "0",
           trancription: transcript,
           callsid: callSid,
           iadescripcion: iadesc,
@@ -450,18 +480,26 @@ async function effectivePath(
   const iadesc = classification.iadesc ?? null;
 
   // Buscar el registro MAS RECIENTE (sin filtrar por estado)
-  type ExistingRow = { id_registro: number; intentos_contacto: number | null; estado: string | null };
+  type ExistingRow = {
+    id_registro: number;
+    intentos_contacto: number | null;
+    estado: string | null;
+    fecha_evento: Date | null;
+  };
   let existing: ExistingRow | null = null;
+
+  const selectCols = {
+    id_registro: llamadas.id_registro,
+    intentos_contacto: llamadas.intentos_contacto,
+    estado: llamadas.estado,
+    fecha_evento: llamadas.fecha_evento,
+  };
 
   // Prioridad 1: buscar por mail_lead
   if (mailLead) {
     try {
       const rows = await drizzleDb
-        .select({
-          id_registro: llamadas.id_registro,
-          intentos_contacto: llamadas.intentos_contacto,
-          estado: llamadas.estado,
-        })
+        .select(selectCols)
         .from(llamadas)
         .where(
           and(
@@ -482,11 +520,7 @@ async function effectivePath(
   if (!existing && idUserGhl) {
     try {
       const rows = await drizzleDb
-        .select({
-          id_registro: llamadas.id_registro,
-          intentos_contacto: llamadas.intentos_contacto,
-          estado: llamadas.estado,
-        })
+        .select(selectCols)
         .from(llamadas)
         .where(
           and(
@@ -513,6 +547,8 @@ async function effectivePath(
   let idRegistro: number | null = null;
 
   if (existing && estadoActivo) {
+    const stl = calcSpeedToLead(existing.estado, existing.fecha_evento, now);
+
     try {
       await drizzleDb
         .update(llamadas)
@@ -527,6 +563,7 @@ async function effectivePath(
           iadescripcion: iadesc,
           ...(callSid && { callsid: callSid }),
           ...(idUserGhl && { id_user_ghl: idUserGhl }),
+          ...(stl !== null && { speed_to_lead: stl }),
         })
         .where(eq(llamadas.id_registro, existing.id_registro));
 
@@ -552,7 +589,7 @@ async function effectivePath(
           fecha_y_hora_de_seguimiento: now,
           intentos_contacto: 1,
           fecha_primera_llamada: now,
-          speed_to_lead: null,
+          speed_to_lead: "0",
           trancription: transcript,
           callsid: callSid,
           iadescripcion: iadesc,
