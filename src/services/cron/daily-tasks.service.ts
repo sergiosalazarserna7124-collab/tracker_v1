@@ -3,6 +3,7 @@ import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas } from "../../db/schema.js";
 import { addContactTag } from "../ghl-api.service.js";
 import { processInChunks } from "../../utils/batch.utils.js";
+import { withRetry } from "../../utils/retry.utils.js";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -33,30 +34,34 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
   //   - categoria → 'no_show'
   //   - tags: concatena ',noshowautoia' (o lo pone como primer tag si está vacío)
 
-  const updated = await drizzleDb
-    .update(agendas)
-    .set({
-      categoria: "no_show",
-      tags: sql<string>`
-        CASE
-          WHEN ${agendas.tags} IS NULL OR ${agendas.tags} = ''
-          THEN 'noshowautoia'
-          ELSE ${agendas.tags} || ',noshowautoia'
-        END
-      `,
-    })
-    .where(
-      and(
-        inArray(agendas.id_cuenta, account_ids),
-        sql`CAST(${agendas.fechaReunion} AS date) = ${target_date}::date`,
-        eq(agendas.categoria, "PDTE"),
-      ),
-    )
-    .returning({
-      id_registro_agenda: agendas.id_registro_agenda,
-      id_cuenta: agendas.id_cuenta,
-      ghl_contact_id: agendas.ghl_contact_id,
-    });
+  const updated = await withRetry(
+    () =>
+      drizzleDb
+        .update(agendas)
+        .set({
+          categoria: "no_show",
+          tags: sql<string>`
+            CASE
+              WHEN ${agendas.tags} IS NULL OR ${agendas.tags} = ''
+              THEN 'noshowautoia'
+              ELSE ${agendas.tags} || ',noshowautoia'
+            END
+          `,
+        })
+        .where(
+          and(
+            inArray(agendas.id_cuenta, account_ids),
+            sql`CAST(${agendas.fechaReunion} AS date) = ${target_date}::date`,
+            eq(agendas.categoria, "PDTE"),
+          ),
+        )
+        .returning({
+          id_registro_agenda: agendas.id_registro_agenda,
+          id_cuenta: agendas.id_cuenta,
+          ghl_contact_id: agendas.ghl_contact_id,
+        }),
+    { label: "updateNoShows/batchUpdate" },
+  );
 
   if (updated.length === 0) {
     return {
@@ -72,10 +77,14 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
 
   const uniqueAccountIds = [...new Set(updated.map((r) => r.id_cuenta))];
 
-  const accountRows = await drizzleDb
-    .select({ id_cuenta: cuentas.id_cuenta, token_ghl: cuentas.token_ghl })
-    .from(cuentas)
-    .where(inArray(cuentas.id_cuenta, uniqueAccountIds));
+  const accountRows = await withRetry(
+    () =>
+      drizzleDb
+        .select({ id_cuenta: cuentas.id_cuenta, token_ghl: cuentas.token_ghl })
+        .from(cuentas)
+        .where(inArray(cuentas.id_cuenta, uniqueAccountIds)),
+    { label: "updateNoShows/getTokens" },
+  );
 
   const tokenByAccount = new Map(
     accountRows

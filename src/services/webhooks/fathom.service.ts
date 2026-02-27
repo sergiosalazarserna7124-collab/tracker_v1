@@ -8,6 +8,7 @@ import {
   GHL_TAGS,
 } from "../ghl-api.service.js";
 import { analyzeCall } from "../ai/call-analysis.service.js";
+import { withRetry } from "../../utils/retry.utils.js";
 import type { FathomEventBody } from "../../schemas/webhooks/fathom.schema.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -65,15 +66,19 @@ export async function processFathomCall(
   } | null = null;
 
   try {
-    const rows = await drizzleDb
-      .select({
-        token_ghl: cuentas.token_ghl,
-        locationid: cuentas.locationid,
-        prompt_ventas: cuentas.prompt_ventas,
-      })
-      .from(cuentas)
-      .where(eq(cuentas.id_cuenta, idCuenta))
-      .limit(1);
+    const rows = await withRetry(
+      () =>
+        drizzleDb
+          .select({
+            token_ghl: cuentas.token_ghl,
+            locationid: cuentas.locationid,
+            prompt_ventas: cuentas.prompt_ventas,
+          })
+          .from(cuentas)
+          .where(eq(cuentas.id_cuenta, idCuenta))
+          .limit(1),
+      { label: "Fathom/getAccount" },
+    );
 
     account = rows[0] ?? null;
   } catch (err) {
@@ -194,45 +199,52 @@ export async function processFathomCall(
   //   - Si ya existe registro (GHL agendó la cita): UPDATE con datos de IA.
   //   - Si NO existe (videollamada sin cita previa en GHL): INSERT completo.
   try {
-    const [existing] = await drizzleDb
-      .select({ id: agendas.id_registro_agenda })
-      .from(agendas)
-      .where(
-        and(
-          eq(agendas.email_lead, emailLead),
-          eq(agendas.id_cuenta, idCuenta),
-        ),
-      )
-      .orderBy(desc(agendas.fecha))
-      .limit(1);
+    const [existing] = await withRetry(
+      () =>
+        drizzleDb
+          .select({ id: agendas.id_registro_agenda })
+          .from(agendas)
+          .where(
+            and(
+              eq(agendas.email_lead, emailLead),
+              eq(agendas.id_cuenta, idCuenta),
+            ),
+          )
+          .orderBy(desc(agendas.fecha))
+          .limit(1),
+      { label: "Fathom/findExisting" },
+    );
 
     if (existing) {
       // ── UPDATE: registro previo encontrado ───────────────────────────────
       // link_llamada siempre se incluye para garantizar que el objeto .set()
       // nunca quede vacío (Drizzle lanza error con {}).
-      await drizzleDb
-        .update(agendas)
-        .set({
-          link_llamada: shareUrl,
-          ...(classifier && {
-            categoria: classifier.categoria,
-            cash_collected: classifier.cash_collected,
-            facturacion: classifier.facturacion,
-          }),
-          ...(forensicText && { resumen_ia: forensicText }),
-          ...(reportText && { reportmarketing: reportText }),
-          ...(objections && { objeciones_ia: objections }),
-          ...(utmContent && { origen: utmContent }),
-          ...(contactId && { ghl_contact_id: contactId }),
-          ...(contactName && { nombre_de_lead: contactName }),
-          // Prioridad 1: closer asignado en GHL. Prioridad 2: nombre del grabador.
-          ...(closerEmailFromGhl
-            ? { closer: closerEmailFromGhl }
-            : closerName
-              ? { closer: closerName }
-              : {}),
-        })
-        .where(eq(agendas.id_registro_agenda, existing.id));
+      await withRetry(
+        () =>
+          drizzleDb
+            .update(agendas)
+            .set({
+              link_llamada: shareUrl,
+              ...(classifier && {
+                categoria: classifier.categoria,
+                cash_collected: classifier.cash_collected,
+                facturacion: classifier.facturacion,
+              }),
+              ...(forensicText && { resumen_ia: forensicText }),
+              ...(reportText && { reportmarketing: reportText }),
+              ...(objections && { objeciones_ia: objections }),
+              ...(utmContent && { origen: utmContent }),
+              ...(contactId && { ghl_contact_id: contactId }),
+              ...(contactName && { nombre_de_lead: contactName }),
+              ...(closerEmailFromGhl
+                ? { closer: closerEmailFromGhl }
+                : closerName
+                  ? { closer: closerName }
+                  : {}),
+            })
+            .where(eq(agendas.id_registro_agenda, existing.id)),
+        { label: "Fathom/updateAgenda" },
+      );
 
       console.info(
         `[Fathom] Updated agenda record ${existing.id} for id_cuenta=${idCuenta}, email=${emailLead}, categoria=${classifier?.categoria ?? "N/A"}`,
@@ -241,25 +253,29 @@ export async function processFathomCall(
       // ── INSERT: sin registro previo (videollamada sin cita en GHL) ───────
       const now = new Date();
 
-      await drizzleDb.insert(agendas).values({
-        id_cuenta: idCuenta,
-        email_lead: emailLead,
-        fecha: now,
-        fechaReunion: now,
-        nombre_de_lead: contactName,
-        origen: utmContent,
-        ghl_contact_id: contactId,
-        closer: closerEmailFromGhl ?? closerName ?? null,
-        link_llamada: shareUrl,
-        ...(classifier && {
-          categoria: classifier.categoria,
-          cash_collected: classifier.cash_collected,
-          facturacion: classifier.facturacion,
-        }),
-        ...(forensicText && { resumen_ia: forensicText }),
-        ...(reportText && { reportmarketing: reportText }),
-        ...(objections && { objeciones_ia: objections }),
-      });
+      await withRetry(
+        () =>
+          drizzleDb.insert(agendas).values({
+            id_cuenta: idCuenta,
+            email_lead: emailLead,
+            fecha: now,
+            fechaReunion: now,
+            nombre_de_lead: contactName,
+            origen: utmContent,
+            ghl_contact_id: contactId,
+            closer: closerEmailFromGhl ?? closerName ?? null,
+            link_llamada: shareUrl,
+            ...(classifier && {
+              categoria: classifier.categoria,
+              cash_collected: classifier.cash_collected,
+              facturacion: classifier.facturacion,
+            }),
+            ...(forensicText && { resumen_ia: forensicText }),
+            ...(reportText && { reportmarketing: reportText }),
+            ...(objections && { objeciones_ia: objections }),
+          }),
+        { label: "Fathom/insertAgenda" },
+      );
 
       console.info(
         `[Fathom] Inserted new agenda record for id_cuenta=${idCuenta}, email=${emailLead}, categoria=${classifier?.categoria ?? "N/A"}`,

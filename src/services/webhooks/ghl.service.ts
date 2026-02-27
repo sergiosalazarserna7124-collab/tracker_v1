@@ -1,6 +1,7 @@
 import { db } from "../../config/database.js";
 import { parseFechaReunionToUTC } from "../../utils/date.utils.js";
 import { getAccountByLocationId, addContactTag, GHL_TAGS } from "../ghl-api.service.js";
+import { withRetry } from "../../utils/retry.utils.js";
 import type { GhlBodyPayload } from "../../schemas/webhooks/ghl.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
@@ -56,23 +57,31 @@ async function findAgenda(
   emailLead: string | null,
 ): Promise<number | null> {
   if (idcliente) {
-    const { rows } = await db.query<{ id_registro_agenda: number }>(
-      `SELECT id_registro_agenda
-       FROM resumenes_diarios_agendas
-       WHERE idcliente = $1 AND id_cuenta = $2
-       ORDER BY fecha DESC LIMIT 1`,
-      [idcliente, idCuenta],
+    const { rows } = await withRetry(
+      () =>
+        db.query<{ id_registro_agenda: number }>(
+          `SELECT id_registro_agenda
+           FROM resumenes_diarios_agendas
+           WHERE idcliente = $1 AND id_cuenta = $2
+           ORDER BY fecha DESC LIMIT 1`,
+          [idcliente, idCuenta],
+        ),
+      { label: "findAgenda/idcliente" },
     );
     if (rows.length > 0) return rows[0].id_registro_agenda;
   }
 
   if (emailLead) {
-    const { rows } = await db.query<{ id_registro_agenda: number }>(
-      `SELECT id_registro_agenda
-       FROM resumenes_diarios_agendas
-       WHERE email_lead = $1 AND id_cuenta = $2
-       ORDER BY fecha DESC LIMIT 1`,
-      [emailLead, idCuenta],
+    const { rows } = await withRetry(
+      () =>
+        db.query<{ id_registro_agenda: number }>(
+          `SELECT id_registro_agenda
+           FROM resumenes_diarios_agendas
+           WHERE email_lead = $1 AND id_cuenta = $2
+           ORDER BY fecha DESC LIMIT 1`,
+          [emailLead, idCuenta],
+        ),
+      { label: "findAgenda/email" },
     );
     if (rows.length > 0) return rows[0].id_registro_agenda;
   }
@@ -104,23 +113,27 @@ async function insertAgenda(
 
   let result: number;
   try {
-    const { rows } = await db.query<{ id_registro_agenda: number }>(
-      `INSERT INTO resumenes_diarios_agendas
-         (id_cuenta, idcliente, ghl_contact_id, fecha, nombre_de_lead, origen, email_lead, categoria, closer, fecha_reunion)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id_registro_agenda`,
-      [
-        fields.idCuenta,
-        fields.idcliente,
-        fields.contactId,
-        new Date(),
-        fields.nombreLead,
-        fields.origen,
-        fields.emailLead,
-        categoria,
-        fields.closer,
-        fields.fechaReunion,
-      ],
+    const { rows } = await withRetry(
+      () =>
+        db.query<{ id_registro_agenda: number }>(
+          `INSERT INTO resumenes_diarios_agendas
+             (id_cuenta, idcliente, ghl_contact_id, fecha, nombre_de_lead, origen, email_lead, categoria, closer, fecha_reunion)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           RETURNING id_registro_agenda`,
+          [
+            fields.idCuenta,
+            fields.idcliente,
+            fields.contactId,
+            new Date(),
+            fields.nombreLead,
+            fields.origen,
+            fields.emailLead,
+            categoria,
+            fields.closer,
+            fields.fechaReunion,
+          ],
+        ),
+      { label: "insertAgenda" },
     );
 
     result = rows[0].id_registro_agenda;
@@ -197,11 +210,15 @@ async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
   if (existingId !== null) {
     console.log("⏳ Iniciando db.query UPDATE (cancelada)... id_registro_agenda:", existingId);
     try {
-      await db.query(
-        `UPDATE resumenes_diarios_agendas
-         SET categoria = 'CANCELADA'
-         WHERE id_registro_agenda = $1`,
-        [existingId],
+      await withRetry(
+        () =>
+          db.query(
+            `UPDATE resumenes_diarios_agendas
+             SET categoria = 'CANCELADA'
+             WHERE id_registro_agenda = $1`,
+            [existingId],
+          ),
+        { label: "handleCancelada/update" },
       );
       console.log("✅ Update exitoso en BD. id_registro_agenda:", existingId);
     } catch (dbErr) {
@@ -235,11 +252,15 @@ async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
   if (existingId !== null) {
     console.log("⏳ Iniciando db.query UPDATE (reagenda)... id_registro_agenda:", existingId);
     try {
-      await db.query(
-        `UPDATE resumenes_diarios_agendas
-         SET categoria = 'PDTE', fecha_reunion = $2
-         WHERE id_registro_agenda = $1`,
-        [existingId, fields.fechaReunion],
+      await withRetry(
+        () =>
+          db.query(
+            `UPDATE resumenes_diarios_agendas
+             SET categoria = 'PDTE', fecha_reunion = $2
+             WHERE id_registro_agenda = $1`,
+            [existingId, fields.fechaReunion],
+          ),
+        { label: "handleReagenda/update" },
       );
       console.log("✅ Update exitoso en BD. id_registro_agenda:", existingId);
     } catch (dbErr) {

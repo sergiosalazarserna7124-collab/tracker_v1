@@ -20,6 +20,7 @@ import {
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
+import { withRetry } from "../../utils/retry.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
@@ -175,21 +176,25 @@ async function followUpPath(
   // Prioridad 1: buscar por mail_lead
   if (mailLead) {
     try {
-      const rows = await drizzleDb
-        .select(selectCols)
-        .from(llamadas)
-        .where(
-          and(
-            sql`LOWER(${llamadas.mail_lead}) = LOWER(${mailLead})`,
-            idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
-            or(
-              inArray(llamadas.estado, [...ESTADOS_ACTIVOS]),
-              isNull(llamadas.estado),
-            ),
-          ),
-        )
-        .orderBy(desc(llamadas.fecha_evento))
-        .limit(1);
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(selectCols)
+            .from(llamadas)
+            .where(
+              and(
+                sql`LOWER(${llamadas.mail_lead}) = LOWER(${mailLead})`,
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+                or(
+                  inArray(llamadas.estado, [...ESTADOS_ACTIVOS]),
+                  isNull(llamadas.estado),
+                ),
+              ),
+            )
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: `${label}/selectByMail` },
+      );
 
       existing = rows[0] ?? null;
     } catch (err) {
@@ -200,21 +205,25 @@ async function followUpPath(
   // Prioridad 2: fallback por id_user_ghl si mail_lead no encontró nada
   if (!existing && idUserGhl) {
     try {
-      const rows = await drizzleDb
-        .select(selectCols)
-        .from(llamadas)
-        .where(
-          and(
-            eq(llamadas.id_user_ghl, idUserGhl),
-            idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
-            or(
-              inArray(llamadas.estado, [...ESTADOS_ACTIVOS]),
-              isNull(llamadas.estado),
-            ),
-          ),
-        )
-        .orderBy(desc(llamadas.fecha_evento))
-        .limit(1);
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(selectCols)
+            .from(llamadas)
+            .where(
+              and(
+                eq(llamadas.id_user_ghl, idUserGhl),
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+                or(
+                  inArray(llamadas.estado, [...ESTADOS_ACTIVOS]),
+                  isNull(llamadas.estado),
+                ),
+              ),
+            )
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: `${label}/selectByGhlId` },
+      );
 
       existing = rows[0] ?? null;
     } catch (err) {
@@ -228,22 +237,26 @@ async function followUpPath(
     const stl = calcSpeedToLead(existing.estado, existing.fecha_evento, now);
 
     try {
-      await drizzleDb
-        .update(llamadas)
-        .set({
-          nombre_lead: nombreLead,
-          estado: "seguimiento",
-          closer_mail: closerMail,
-          nombre_closer: nombreCloser,
-          fecha_y_hora_de_seguimiento: now,
-          intentos_contacto: (existing.intentos_contacto ?? 0) + 1,
-          ...(callSid && { callsid: callSid }),
-          ...(transcript && { trancription: transcript }),
-          ...(iadesc && { iadescripcion: iadesc }),
-          ...(idUserGhl && { id_user_ghl: idUserGhl }),
-          ...(stl !== null && { speed_to_lead: stl }),
-        })
-        .where(eq(llamadas.id_registro, existing.id_registro));
+      await withRetry(
+        () =>
+          drizzleDb
+            .update(llamadas)
+            .set({
+              nombre_lead: nombreLead,
+              estado: "seguimiento",
+              closer_mail: closerMail,
+              nombre_closer: nombreCloser,
+              fecha_y_hora_de_seguimiento: now,
+              intentos_contacto: (existing!.intentos_contacto ?? 0) + 1,
+              ...(callSid && { callsid: callSid }),
+              ...(transcript && { trancription: transcript }),
+              ...(iadesc && { iadescripcion: iadesc }),
+              ...(idUserGhl && { id_user_ghl: idUserGhl }),
+              ...(stl !== null && { speed_to_lead: stl }),
+            })
+            .where(eq(llamadas.id_registro, existing!.id_registro)),
+        { label: `${label}/update` },
+      );
 
       idRegistro = existing.id_registro;
     } catch (err) {
@@ -252,28 +265,32 @@ async function followUpPath(
     }
   } else {
     try {
-      const [inserted] = await drizzleDb
-        .insert(llamadas)
-        .values({
-          fecha_evento: now,
-          id_cuenta: idCuenta,
-          nombre_lead: nombreLead,
-          estado: "seguimiento",
-          mail_lead: mailLead,
-          phone_raw_format: phone,
-          creativo_origen: creativoOrigen,
-          closer_mail: closerMail,
-          nombre_closer: nombreCloser,
-          fecha_y_hora_de_seguimiento: now,
-          intentos_contacto: 1,
-          fecha_primera_llamada: now,
-          speed_to_lead: "0",
-          trancription: transcript,
-          callsid: callSid,
-          iadescripcion: iadesc,
-          id_user_ghl: idUserGhl,
-        })
-        .returning({ id_registro: llamadas.id_registro });
+      const [inserted] = await withRetry(
+        () =>
+          drizzleDb
+            .insert(llamadas)
+            .values({
+              fecha_evento: now,
+              id_cuenta: idCuenta,
+              nombre_lead: nombreLead,
+              estado: "seguimiento",
+              mail_lead: mailLead,
+              phone_raw_format: phone,
+              creativo_origen: creativoOrigen,
+              closer_mail: closerMail,
+              nombre_closer: nombreCloser,
+              fecha_y_hora_de_seguimiento: now,
+              intentos_contacto: 1,
+              fecha_primera_llamada: now,
+              speed_to_lead: "0",
+              trancription: transcript,
+              callsid: callSid,
+              iadescripcion: iadesc,
+              id_user_ghl: idUserGhl,
+            })
+            .returning({ id_registro: llamadas.id_registro }),
+        { label: `${label}/insert` },
+      );
 
       idRegistro = inserted?.id_registro ?? null;
     } catch (err) {
@@ -305,28 +322,32 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
   const { idCuenta } = await resolveAccount(locationId, "Twilio");
 
   try {
-    const [inserted] = await drizzleDb
-      .insert(llamadas)
-      .values({
-        fecha_evento: new Date(),
-        id_cuenta: idCuenta,
-        nombre_lead: nombreLead,
-        estado: "pdte",
-        mail_lead: mailLead,
-        phone_raw_format: phone,
-        creativo_origen: creativoOrigen,
-        closer_mail: closerMail,
-        nombre_closer: nombreCloser,
-        intentos_contacto: 0,
-        fecha_y_hora_de_seguimiento: null,
-        speed_to_lead: null,
-        fecha_primera_llamada: null,
-        trancription: null,
-        callsid: null,
-        iadescripcion: null,
-        id_user_ghl: idUserGhl,
-      })
-      .returning({ id_registro: llamadas.id_registro });
+    const [inserted] = await withRetry(
+      () =>
+        drizzleDb
+          .insert(llamadas)
+          .values({
+            fecha_evento: new Date(),
+            id_cuenta: idCuenta,
+            nombre_lead: nombreLead,
+            estado: "pdte",
+            mail_lead: mailLead,
+            phone_raw_format: phone,
+            creativo_origen: creativoOrigen,
+            closer_mail: closerMail,
+            nombre_closer: nombreCloser,
+            intentos_contacto: 0,
+            fecha_y_hora_de_seguimiento: null,
+            speed_to_lead: null,
+            fecha_primera_llamada: null,
+            trancription: null,
+            callsid: null,
+            iadescripcion: null,
+            id_user_ghl: idUserGhl,
+          })
+          .returning({ id_registro: llamadas.id_registro }),
+      { label: "Twilio/insertPdte" },
+    );
 
     return { success: true, data: { id_registro: inserted?.id_registro ?? null } };
   } catch (err) {
@@ -499,17 +520,21 @@ async function effectivePath(
   // Prioridad 1: buscar por mail_lead
   if (mailLead) {
     try {
-      const rows = await drizzleDb
-        .select(selectCols)
-        .from(llamadas)
-        .where(
-          and(
-            sql`LOWER(${llamadas.mail_lead}) = LOWER(${mailLead})`,
-            idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
-          ),
-        )
-        .orderBy(desc(llamadas.id_registro))
-        .limit(1);
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(selectCols)
+            .from(llamadas)
+            .where(
+              and(
+                sql`LOWER(${llamadas.mail_lead}) = LOWER(${mailLead})`,
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+              ),
+            )
+            .orderBy(desc(llamadas.id_registro))
+            .limit(1),
+        { label: "effectivePath/selectByMail" },
+      );
 
       existing = rows[0] ?? null;
     } catch (err) {
@@ -520,17 +545,21 @@ async function effectivePath(
   // Prioridad 2: fallback por id_user_ghl
   if (!existing && idUserGhl) {
     try {
-      const rows = await drizzleDb
-        .select(selectCols)
-        .from(llamadas)
-        .where(
-          and(
-            eq(llamadas.id_user_ghl, idUserGhl),
-            idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
-          ),
-        )
-        .orderBy(desc(llamadas.id_registro))
-        .limit(1);
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(selectCols)
+            .from(llamadas)
+            .where(
+              and(
+                eq(llamadas.id_user_ghl, idUserGhl),
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+              ),
+            )
+            .orderBy(desc(llamadas.id_registro))
+            .limit(1),
+        { label: "effectivePath/selectByGhlId" },
+      );
 
       existing = rows[0] ?? null;
     } catch (err) {
@@ -551,22 +580,26 @@ async function effectivePath(
     const stl = calcSpeedToLead(existing.estado, existing.fecha_evento, now);
 
     try {
-      await drizzleDb
-        .update(llamadas)
-        .set({
-          nombre_lead: nombreLead,
-          estado: aiEstado,
-          closer_mail: closerMail,
-          nombre_closer: nombreCloser,
-          fecha_y_hora_de_seguimiento: now,
-          intentos_contacto: (existing.intentos_contacto ?? 0) + 1,
-          trancription: transcript,
-          iadescripcion: iadesc,
-          ...(callSid && { callsid: callSid }),
-          ...(idUserGhl && { id_user_ghl: idUserGhl }),
-          ...(stl !== null && { speed_to_lead: stl }),
-        })
-        .where(eq(llamadas.id_registro, existing.id_registro));
+      await withRetry(
+        () =>
+          drizzleDb
+            .update(llamadas)
+            .set({
+              nombre_lead: nombreLead,
+              estado: aiEstado,
+              closer_mail: closerMail,
+              nombre_closer: nombreCloser,
+              fecha_y_hora_de_seguimiento: now,
+              intentos_contacto: (existing!.intentos_contacto ?? 0) + 1,
+              trancription: transcript,
+              iadescripcion: iadesc,
+              ...(callSid && { callsid: callSid }),
+              ...(idUserGhl && { id_user_ghl: idUserGhl }),
+              ...(stl !== null && { speed_to_lead: stl }),
+            })
+            .where(eq(llamadas.id_registro, existing!.id_registro)),
+        { label: "effectivePath/update" },
+      );
 
       idRegistro = existing.id_registro;
     } catch (err) {
@@ -575,28 +608,32 @@ async function effectivePath(
     }
   } else {
     try {
-      const [inserted] = await drizzleDb
-        .insert(llamadas)
-        .values({
-          fecha_evento: now,
-          id_cuenta: idCuenta,
-          nombre_lead: nombreLead,
-          estado: aiEstado,
-          mail_lead: mailLead,
-          phone_raw_format: phone,
-          creativo_origen: creativoOrigen,
-          closer_mail: closerMail,
-          nombre_closer: nombreCloser,
-          fecha_y_hora_de_seguimiento: now,
-          intentos_contacto: 1,
-          fecha_primera_llamada: now,
-          speed_to_lead: "0",
-          trancription: transcript,
-          callsid: callSid,
-          iadescripcion: iadesc,
-          id_user_ghl: idUserGhl,
-        })
-        .returning({ id_registro: llamadas.id_registro });
+      const [inserted] = await withRetry(
+        () =>
+          drizzleDb
+            .insert(llamadas)
+            .values({
+              fecha_evento: now,
+              id_cuenta: idCuenta,
+              nombre_lead: nombreLead,
+              estado: aiEstado,
+              mail_lead: mailLead,
+              phone_raw_format: phone,
+              creativo_origen: creativoOrigen,
+              closer_mail: closerMail,
+              nombre_closer: nombreCloser,
+              fecha_y_hora_de_seguimiento: now,
+              intentos_contacto: 1,
+              fecha_primera_llamada: now,
+              speed_to_lead: "0",
+              trancription: transcript,
+              callsid: callSid,
+              iadescripcion: iadesc,
+              id_user_ghl: idUserGhl,
+            })
+            .returning({ id_registro: llamadas.id_registro }),
+        { label: "effectivePath/insert" },
+      );
 
       idRegistro = inserted?.id_registro ?? null;
     } catch (err) {

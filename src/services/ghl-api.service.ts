@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { drizzleDb } from "../config/drizzle.js";
 import { cuentas } from "../db/schema.js";
 import { fetchWithTimeout } from "../utils/fetch.utils.js";
+import { withRetry } from "../utils/retry.utils.js";
 
 const GHL_TIMEOUT_MS = 15_000;
 
@@ -67,16 +68,20 @@ export const GHL_TAGS = {
 // ─── Consulta a BD: buscar cuenta por locationid (match exacto) ───────────────
 
 export async function getAccountByLocationId(locationId: string): Promise<CuentaRow | null> {
-  const rows = await drizzleDb
-    .select({
-      id_cuenta: cuentas.id_cuenta,
-      nombre_cuenta: cuentas.nombre_cuenta,
-      locationid: cuentas.locationid,
-      token_ghl: cuentas.token_ghl,
-    })
-    .from(cuentas)
-    .where(eq(cuentas.locationid, locationId))
-    .limit(1);
+  const rows = await withRetry(
+    () =>
+      drizzleDb
+        .select({
+          id_cuenta: cuentas.id_cuenta,
+          nombre_cuenta: cuentas.nombre_cuenta,
+          locationid: cuentas.locationid,
+          token_ghl: cuentas.token_ghl,
+        })
+        .from(cuentas)
+        .where(eq(cuentas.locationid, locationId))
+        .limit(1),
+    { label: "getAccountByLocationId" },
+  );
 
   return rows[0] ?? null;
 }
@@ -84,18 +89,22 @@ export async function getAccountByLocationId(locationId: string): Promise<Cuenta
 // ─── Consulta a BD: buscar cuenta con datos de Twilio incluidos ──────────────
 
 export async function getAccountFullByLocationId(locationId: string): Promise<CuentaFullRow | null> {
-  const rows = await drizzleDb
-    .select({
-      id_cuenta: cuentas.id_cuenta,
-      nombre_cuenta: cuentas.nombre_cuenta,
-      locationid: cuentas.locationid,
-      token_ghl: cuentas.token_ghl,
-      twilio_sid: cuentas.twilio_sid,
-      auth_twilio: cuentas.auth_twilio,
-    })
-    .from(cuentas)
-    .where(eq(cuentas.locationid, locationId))
-    .limit(1);
+  const rows = await withRetry(
+    () =>
+      drizzleDb
+        .select({
+          id_cuenta: cuentas.id_cuenta,
+          nombre_cuenta: cuentas.nombre_cuenta,
+          locationid: cuentas.locationid,
+          token_ghl: cuentas.token_ghl,
+          twilio_sid: cuentas.twilio_sid,
+          auth_twilio: cuentas.auth_twilio,
+        })
+        .from(cuentas)
+        .where(eq(cuentas.locationid, locationId))
+        .limit(1),
+    { label: "getAccountFullByLocationId" },
+  );
 
   return rows[0] ?? null;
 }
