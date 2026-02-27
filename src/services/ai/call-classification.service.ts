@@ -194,24 +194,34 @@ Una descripción BREVE y ÚTIL de la llamada. Máximo 2-3 oraciones.
 ### Caso: Secretaria o recepcionista contesta
 → buzon: false. Clasifica según el resultado de la conversación con la secretaria.`;
 
+// La API Responses de OpenAI (usada por @ai-sdk/openai v3+) exige:
+//   1. additionalProperties: false en TODOS los objetos del schema
+//   2. Tipos nullable expresados como anyOf en lugar de type: ["x", "null"]
+
 const classificationSchema = jsonSchema<CallClassification>({
   type: "object",
   properties: {
     buzon: {
-      type: ["boolean", "null"],
+      anyOf: [{ type: "boolean" }, { type: "null" }],
       description: "true = buzón de voz real, false = persona contestó, null = indeterminado",
     },
     estado: {
-      type: ["string", "null"],
-      enum: ["seguimiento", "programado", "interesado", "no_interesado", null],
+      anyOf: [
+        {
+          type: "string",
+          enum: ["seguimiento", "programado", "interesado", "no_interesado"],
+        },
+        { type: "null" },
+      ],
       description: "Estado clasificado de la llamada",
     },
     iadesc: {
-      type: ["string", "null"],
+      anyOf: [{ type: "string" }, { type: "null" }],
       description: "Descripción breve y útil de la llamada (2-3 oraciones max)",
     },
   },
   required: ["buzon", "estado", "iadesc"],
+  additionalProperties: false,
 });
 
 export async function classifyCall(transcript: string): Promise<CallClassification> {
