@@ -107,44 +107,60 @@ async function insertAgenda(
   return rows[0].id_registro_agenda;
 }
 
-// ─── Helper: aplicar tag en GHL (no-blocking) ────────────────────────────────
-// Si falta locationId o contactId se omite en silencio.
-// Si la API falla se loguea el error pero NO propaga la excepción,
-// para que un fallo de tagging nunca rompa la operación de BD.
+// ─── Helper: aplicar tag en GHL — totalmente aislado ────────────────────────
+// NUNCA propaga excepciones. Un fallo de GHL (401, timeout, red) solo loguea
+// y devuelve false. El guardado en BD ya ocurrió antes de llamar aquí.
 
 async function applyGhlTag(
   locationId: string | null,
   contactId: string | null,
   tag: string,
+  context: string,
 ): Promise<boolean> {
   if (!locationId || !contactId) return false;
 
   try {
     const account = await getAccountByLocationId(locationId);
     if (!account) {
-      console.warn(`[GHL tag] No se encontró cuenta para locationId="${locationId}"`);
+      console.warn(`[GHL tag][${context}] No se encontró cuenta para locationId="${locationId}"`);
       return false;
     }
     if (!account.token_ghl) {
-      console.warn(`[GHL tag] La cuenta ${account.id_cuenta} no tiene token_ghl configurado`);
+      console.warn(
+        `[GHL tag][${context}] La cuenta ${account.id_cuenta} no tiene token_ghl configurado`,
+      );
       return false;
     }
 
     await addContactTag(contactId, account.token_ghl, tag);
     return true;
   } catch (err) {
-    console.error(`[GHL tag] Error al aplicar tag "${tag}" al contacto "${contactId}":`, err);
+    // El fallo de GHL (401, 429, timeout, red) no debe romper el webhook.
+    // El registro en BD ya fue guardado. Solo dejamos rastro en logs.
+    console.error(
+      `[GHL tag][${context}] Error al aplicar tag "${tag}" al contacto "${contactId}":`,
+      err,
+    );
     return false;
   }
 }
 
 // ─── Handlers por categoría ──────────────────────────────────────────────────
+// Patrón: DB primero (crítico) → GHL después (best-effort, nunca bloquea).
 
 async function handlePendiente(body: GhlBodyPayload): Promise<AgendaResult> {
   const fields = extractFields(body);
 
+  // ① BD: siempre primero — si esto falla, lanza y el dispatcher lo captura
   const id = await insertAgenda(fields, "PDTE");
-  const tagged = await applyGhlTag(fields.locationId, fields.contactId, GHL_TAGS.pendiente);
+
+  // ② GHL: best-effort — no puede tirar ni afectar el insert ya realizado
+  const tagged = await applyGhlTag(
+    fields.locationId,
+    fields.contactId,
+    GHL_TAGS.pendiente,
+    "handlePendiente",
+  );
 
   return { id_registro_agenda: id, categoria: "PDTE", action: "created", tagged };
 }
@@ -152,8 +168,8 @@ async function handlePendiente(body: GhlBodyPayload): Promise<AgendaResult> {
 async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
   const fields = extractFields(body);
 
+  // ① BD: buscar + actualizar/insertar
   const existingId = await findAgenda(fields.idCuenta, fields.idcliente, fields.emailLead);
-
   let id: number;
   let action: "created" | "updated";
 
@@ -171,7 +187,13 @@ async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
     action = "created";
   }
 
-  const tagged = await applyGhlTag(fields.locationId, fields.contactId, GHL_TAGS.cancelada);
+  // ② GHL: best-effort
+  const tagged = await applyGhlTag(
+    fields.locationId,
+    fields.contactId,
+    GHL_TAGS.cancelada,
+    "handleCancelada",
+  );
 
   return { id_registro_agenda: id, categoria: "CANCELADA", action, tagged };
 }
@@ -179,8 +201,8 @@ async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
 async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
   const fields = extractFields(body);
 
+  // ① BD: buscar + actualizar/insertar
   const existingId = await findAgenda(fields.idCuenta, fields.idcliente, fields.emailLead);
-
   let id: number;
   let action: "created" | "updated";
 
@@ -198,30 +220,44 @@ async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
     action = "created";
   }
 
-  const tagged = await applyGhlTag(fields.locationId, fields.contactId, GHL_TAGS.reagenda);
+  // ② GHL: best-effort
+  const tagged = await applyGhlTag(
+    fields.locationId,
+    fields.contactId,
+    GHL_TAGS.reagenda,
+    "handleReagenda",
+  );
 
   return { id_registro_agenda: id, categoria: "PDTE", action, tagged };
 }
 
 // ─── Dispatcher principal ─────────────────────────────────────────────────────
 // Recibe el body ya normalizado (extractWebhookBody en el controller).
+// El try/catch externo asegura que cualquier error inesperado (DB, parse, etc.)
+// se convierta en { success: false } en lugar de lanzar una excepción al controller.
 
 export async function processGhlWebhook(
   body: GhlBodyPayload,
 ): Promise<ServiceResult<AgendaResult>> {
-  const categoria = body.customData.categoria?.toLowerCase().trim();
+  try {
+    const categoria = body.customData.categoria?.toLowerCase().trim();
 
-  switch (categoria) {
-    case "pendiente":
-      return { success: true, data: await handlePendiente(body) };
+    switch (categoria) {
+      case "pendiente":
+        return { success: true, data: await handlePendiente(body) };
 
-    case "cancelada":
-      return { success: true, data: await handleCancelada(body) };
+      case "cancelada":
+        return { success: true, data: await handleCancelada(body) };
 
-    case "reagenda":
-      return { success: true, data: await handleReagenda(body) };
+      case "reagenda":
+        return { success: true, data: await handleReagenda(body) };
 
-    default:
-      return { success: true, data: undefined };
+      default:
+        return { success: true, data: undefined };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[GHL webhook] Error inesperado en processGhlWebhook:", err);
+    return { success: false, error: message };
   }
 }
