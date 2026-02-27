@@ -1,17 +1,38 @@
+// ─── Tablas de meses ──────────────────────────────────────────────────────────
+
 const MESES_ES: Record<string, number> = {
-  enero: 1,
-  febrero: 2,
-  marzo: 3,
-  abril: 4,
-  mayo: 5,
-  junio: 6,
-  julio: 7,
-  agosto: 8,
-  septiembre: 9,
-  octubre: 10,
-  noviembre: 11,
-  diciembre: 12,
+  enero: 1, febrero: 2, marzo: 3, abril: 4,
+  mayo: 5, junio: 6, julio: 7, agosto: 8,
+  septiembre: 9, octubre: 10, noviembre: 11, diciembre: 12,
 };
+
+const MESES_EN: Record<string, number> = {
+  january: 1, february: 2, march: 3, april: 4,
+  may: 5, june: 6, july: 7, august: 8,
+  september: 9, october: 10, november: 11, december: 12,
+};
+
+// ─── Normalización de timezone IANA ──────────────────────────────────────────
+// GHL puede enviar "america/bogota" (todo minúsculas).
+// Intl.DateTimeFormat es case-insensitive en Node ≥ 18 en la mayoría de casos,
+// pero para garantizar compatibilidad, normalizamos al formato canónico
+// Area/City → primera letra de cada segmento/palabra en mayúscula.
+// Ej: "america/bogota" → "America/Bogota"
+//     "america/new_york" → "America/New_York"
+//     "america/indiana/indianapolis" → "America/Indiana/Indianapolis"
+
+function normalizeIANA(tz: string): string {
+  return tz
+    .trim()
+    .split("/")
+    .map((segment) =>
+      segment
+        .split("_")
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join("_"),
+    )
+    .join("/");
+}
 
 /**
  * Convierte un tiempo local (year/month/day/hour/min) en un timezone IANA
@@ -74,36 +95,74 @@ function ianaLocalToUTC(
   }
 }
 
+// ─── Parser formato español ───────────────────────────────────────────────────
+// Formato: "23 de febrero de 2026 8:00"
+
+function parseEspanol(hora: string): [number, number, number, number, number] | null {
+  const regex = /(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})\s+(\d{1,2}):(\d{2})/i;
+  const match = hora.match(regex);
+  if (!match) return null;
+
+  const mes = MESES_ES[match[2].toLowerCase()];
+  if (!mes) return null;
+
+  return [parseInt(match[3]), mes, parseInt(match[1]), parseInt(match[4]), parseInt(match[5])];
+}
+
+// ─── Parser formato inglés con AM/PM ─────────────────────────────────────────
+// Formato: "February 27, 2026 3:00 PM"  o  "February 27, 2026 3:00PM"
+
+function parseIngles(hora: string): [number, number, number, number, number] | null {
+  const regex = /^(\w+)\s+(\d{1,2}),?\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i;
+  const match = hora.trim().match(regex);
+  if (!match) return null;
+
+  const mes = MESES_EN[match[1].toLowerCase()];
+  if (!mes) return null;
+
+  let horas = parseInt(match[4]);
+  const minutos = parseInt(match[5]);
+  const ampm = match[6].toUpperCase();
+
+  // Conversión 12h → 24h
+  if (ampm === "PM" && horas !== 12) horas += 12;
+  if (ampm === "AM" && horas === 12) horas = 0;
+
+  return [parseInt(match[3]), mes, parseInt(match[2]), horas, minutos];
+}
+
 /**
- * Parsea una fecha en formato español con hora y la convierte a UTC.
+ * Parsea una fecha de reunión con hora y la convierte a UTC.
  *
- * Formato esperado: "DD de MES de YYYY HH:MM"
- * Ejemplo: "23 de febrero de 2026 8:00" con zonahoraria "America/Bogota"
- * Resultado: 2026-02-23T13:00:00.000Z
+ * Acepta dos formatos provenientes de GHL:
+ *   • Inglés con AM/PM: "February 27, 2026 3:00 PM"  (formato actual de GHL)
+ *   • Español 24h:      "27 de febrero de 2026 15:00" (formato legado)
  *
- * Soporta cualquier timezone IANA válido (America/Bogota, Europe/Madrid,
- * America/Buenos_Aires, America/New_York, etc.) y respeta el DST automáticamente.
+ * El timezone puede llegar en cualquier capitalización:
+ *   "America/Bogota", "america/bogota", "AMERICA/BOGOTA" → todos aceptados.
  *
- * @param hora         - "23 de febrero de 2026 8:00"
- * @param zonahoraria  - timezone IANA: "America/Bogota", "America/Buenos_Aires", etc.
+ * @param hora         - Fecha+hora en formato inglés o español
+ * @param zonahoraria  - Timezone IANA (cualquier capitalización)
  * @returns Date en UTC, o null si el formato no pudo ser parseado
  */
 export function parseFechaReunionToUTC(hora: string, zonahoraria: string): Date | null {
   if (!hora || !zonahoraria) return null;
 
-  // Captura: DD  MES  YYYY  HH  MM
-  const regex = /(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})\s+(\d{1,2}):(\d{2})/i;
-  const match = hora.match(regex);
-  if (!match) return null;
+  const tz = normalizeIANA(zonahoraria);
 
-  const dia = parseInt(match[1]);
-  const mesNombre = match[2].toLowerCase();
-  const anio = parseInt(match[3]);
-  const horas = parseInt(match[4]);
-  const minutos = parseInt(match[5]);
+  // Intentar formato inglés primero (es el que envía GHL actualmente)
+  const partsEn = parseIngles(hora);
+  if (partsEn) {
+    const result = ianaLocalToUTC(...partsEn, tz);
+    if (result) return result;
+  }
 
-  const mes = MESES_ES[mesNombre];
-  if (!mes) return null;
+  // Fallback: formato español legado
+  const partsEs = parseEspanol(hora);
+  if (partsEs) {
+    return ianaLocalToUTC(...partsEs, tz);
+  }
 
-  return ianaLocalToUTC(anio, mes, dia, horas, minutos, zonahoraria);
+  console.warn(`[date.utils] No se pudo parsear la fecha: "${hora}" con tz="${zonahoraria}"`);
+  return null;
 }

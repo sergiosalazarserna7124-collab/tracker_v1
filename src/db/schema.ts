@@ -2,8 +2,8 @@ import { pgTable, serial, integer, text, timestamp, jsonb } from "drizzle-orm/pg
 
 /**
  * Tabla principal de citas/agendas.
- * La columna "fecha de la reunion" tiene espacio; Drizzle lo mapea
- * desde el alias TypeScript `fechaReunion` al nombre real de la columna.
+ * La columna fue renombrada de "fecha de la reunion" a "fecha_reunion"
+ * y su tipo cambiado a TIMESTAMPTZ para soportar hora y zona horaria.
  */
 export const agendas = pgTable("resumenes_diarios_agendas", {
   id_registro_agenda: serial("id_registro_agenda").primaryKey(),
@@ -17,7 +17,7 @@ export const agendas = pgTable("resumenes_diarios_agendas", {
   categoria: text("categoria"),
   closer: text("closer"),
   tags: text("tags"),
-  fechaReunion: timestamp("fecha de la reunion", { withTimezone: true }),
+  fechaReunion: timestamp("fecha_reunion", { withTimezone: true }),
   // ── Campos de análisis de videollamada Fathom ──────────────────────────────
   cash_collected: text("cash_collected"),
   facturacion: text("facturacion"),

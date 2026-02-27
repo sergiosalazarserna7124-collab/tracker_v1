@@ -106,7 +106,7 @@ async function insertAgenda(
   try {
     const { rows } = await db.query<{ id_registro_agenda: number }>(
       `INSERT INTO resumenes_diarios_agendas
-         (id_cuenta, idcliente, ghl_contact_id, fecha, nombre_de_lead, origen, email_lead, categoria, closer, "fecha de la reunion")
+         (id_cuenta, idcliente, ghl_contact_id, fecha, nombre_de_lead, origen, email_lead, categoria, closer, fecha_reunion)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id_registro_agenda`,
       [
@@ -237,7 +237,7 @@ async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
     try {
       await db.query(
         `UPDATE resumenes_diarios_agendas
-         SET categoria = 'PDTE', "fecha de la reunion" = $2
+         SET categoria = 'PDTE', fecha_reunion = $2
          WHERE id_registro_agenda = $1`,
         [existingId, fields.fechaReunion],
       );
