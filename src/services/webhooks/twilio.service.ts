@@ -642,9 +642,44 @@ async function effectivePath(
     }
   }
 
-  // Tag dinámico + nota
+  // Tag dinámico
   const tag = mapEstadoToTag(aiEstado);
-  await applyGhlTagAndNote(contactId, tokenGhl, tag, "Effective");
+  if (contactId && tokenGhl) {
+    try {
+      await addContactTag(contactId, tokenGhl, tag);
+    } catch (err) {
+      console.error(`[Effective] Error aplicando tag GHL para contactId="${contactId}":`, err);
+    }
+
+    // Nota 1: Descripción IA
+    if (iadesc) {
+      try {
+        await addContactNote(
+          contactId,
+          tokenGhl,
+          `📞 Llamada Telefónica — Análisis IA\n\n${iadesc}`,
+        );
+      } catch (err) {
+        console.error(`[Effective] Error agregando nota IA en GHL:`, err);
+      }
+    }
+
+    // Nota 2: Transcripción completa
+    if (transcript) {
+      try {
+        await addContactNote(
+          contactId,
+          tokenGhl,
+          `📞 Llamada Telefónica — Transcripción\n\n${transcript}`,
+        );
+      } catch (err) {
+        console.error(`[Effective] Error agregando nota transcripción en GHL:`, err);
+      }
+    }
+  } else {
+    if (!contactId) console.warn(`[Effective] Sin contact_id; no se puede taggear/notar en GHL`);
+    if (!tokenGhl) console.warn(`[Effective] Sin token_ghl; no se puede taggear/notar en GHL`);
+  }
 
   return {
     success: true,

@@ -3,6 +3,7 @@ import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas } from "../../db/schema.js";
 import {
   addContactTag,
+  addContactNote,
   searchContactByEmail,
   getGhlUser,
   GHL_TAGS,
@@ -286,5 +287,45 @@ export async function processFathomCall(
       `[Fathom] DB upsert error for email=${emailLead}, id_cuenta=${idCuenta}:`,
       err,
     );
+  }
+
+  // ── Fase 6: Notas GHL (transcripción + análisis IA) ─────────────────────
+  if (contactId && account.token_ghl) {
+    const aiSummary = [
+      classifier ? `Categoría: ${classifier.categoria}` : null,
+      classifier?.cash_collected && classifier.cash_collected !== "0"
+        ? `Cash collected: ${classifier.cash_collected}`
+        : null,
+      classifier?.facturacion && classifier.facturacion !== "0"
+        ? `Facturación: ${classifier.facturacion}`
+        : null,
+      forensicText ? `\n${forensicText}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    if (aiSummary) {
+      try {
+        await addContactNote(
+          contactId,
+          account.token_ghl,
+          `🎥 Videollamada — Análisis IA\n\n${aiSummary}`,
+        );
+      } catch (err) {
+        console.error(`[Fathom] Error agregando nota IA en GHL:`, err);
+      }
+    }
+
+    if (formattedTranscript) {
+      try {
+        await addContactNote(
+          contactId,
+          account.token_ghl,
+          `🎥 Videollamada — Transcripción\n\n${formattedTranscript}`,
+        );
+      } catch (err) {
+        console.error(`[Fathom] Error agregando nota transcripción en GHL:`, err);
+      }
+    }
   }
 }
