@@ -237,25 +237,18 @@ export async function classifyCall(transcript: string): Promise<CallClassificati
 }
 
 // ─── Mapeo estado IA → tag GHL ───────────────────────────────────────────────
-
-const ESTADOS_NO_CONTESTA = new Set([
-  "seguimiento",
-  "no_contestada",
-  "no_contestado",
-  "no_contesta",
-]);
+// "seguimiento" cuando buzon=false significa que la persona SÍ contestó pero
+// no hubo resultado comercial claro → tag propio, NO el de "no contestó".
+// "no_contestallamadaautoia" solo se aplica desde followUpPath (buzon=true/null).
 
 export function mapEstadoToTag(estado: string | null): string {
   const normalized = (estado ?? "").trim().toLowerCase();
-
-  if (!normalized || ESTADOS_NO_CONTESTA.has(normalized)) {
-    return GHL_TAGS.no_contestada_llamada;
-  }
 
   const tagMap: Record<string, string> = {
     interesado: GHL_TAGS.interesado_llamada,
     programado: GHL_TAGS.programado_llamada,
     no_interesado: GHL_TAGS.no_interesado_llamada,
+    seguimiento: "seguimientollamadaautoia",
   };
 
   return tagMap[normalized] ?? `${normalized}llamadaautoia`;
