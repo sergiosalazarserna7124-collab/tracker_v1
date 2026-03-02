@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, integer, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique } from "drizzle-orm/pg-core";
 
 /**
  * Tabla principal de citas/agendas.
@@ -92,3 +92,33 @@ export const cuentas = pgTable("cuentas", {
   twilio_sid: text("twilio_sid"),
   auth_twilio: text("auth_twilio"),
 });
+
+// ── Tablas de ingesta externa ────────────────────────────────────────────────
+
+export const kpisExternos = pgTable("kpis_externos", {
+  id_registro: serial("id_registro").primaryKey(),
+  id_cuenta: integer("id_cuenta").notNull(),
+  fecha: date("fecha", { mode: "string" }).notNull(),
+  origen: text("origen").default("api_externa"),
+  metricas: jsonb("metricas").notNull().default({}),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export const apiKeysCuenta = pgTable("api_keys_cuenta", {
+  id_key: serial("id_key").primaryKey(),
+  id_cuenta: integer("id_cuenta").notNull(),
+  nombre_key: text("nombre_key").notNull(),
+  token: text("token").unique().notNull(),
+  activa: boolean("activa").default(true),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export const usoApiMensual = pgTable("uso_api_mensual", {
+  id_uso: serial("id_uso").primaryKey(),
+  id_cuenta: integer("id_cuenta").notNull(),
+  mes_anio: text("mes_anio").notNull(),
+  tipo_consumo: text("tipo_consumo").notNull(),
+  cantidad: integer("cantidad").default(0),
+}, (t) => [
+  unique().on(t.id_cuenta, t.mes_anio, t.tipo_consumo),
+]);
