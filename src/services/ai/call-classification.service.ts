@@ -1,14 +1,29 @@
 import OpenAI, { toFile } from "openai";
 import { generateObject, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { GHL_TAGS } from "../ghl-api.service.js";
 
-// ─── Clientes IA ──────────────────────────────────────────────────────────────
+// ─── Clientes IA (singletons globales — fallback) ────────────────────────────
 
-const whisperClient = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-const aiProvider = createOpenAI({ apiKey: env.OPENAI_API_KEY });
-const MODEL = aiProvider("gpt-4o-mini");
+const defaultWhisperClient = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+const defaultAiProvider = createOpenAI({ apiKey: env.OPENAI_API_KEY });
+const defaultModel = defaultAiProvider("gpt-4o-mini");
+
+// ─── Factory: resolver clientes por tenant o fallback global ─────────────────
+
+function resolveClients(openaiApiKey?: string | null): {
+  whisper: OpenAI;
+  model: LanguageModel;
+} {
+  if (openaiApiKey) {
+    const tenantWhisper = new OpenAI({ apiKey: openaiApiKey });
+    const tenantProvider = createOpenAI({ apiKey: openaiApiKey });
+    return { whisper: tenantWhisper, model: tenantProvider("gpt-4o-mini") };
+  }
+  return { whisper: defaultWhisperClient, model: defaultModel };
+}
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -16,14 +31,19 @@ export interface CallClassification {
   buzon: boolean | null;
   estado: string | null;
   iadesc: string | null;
+  tags_internos: string[];
 }
 
 // ─── Whisper: transcribir audio ──────────────────────────────────────────────
 
-export async function transcribeAudio(audioBuffer: Buffer): Promise<string> {
+export async function transcribeAudio(
+  audioBuffer: Buffer,
+  openaiApiKey?: string | null,
+): Promise<string> {
+  const { whisper } = resolveClients(openaiApiKey);
   const file = await toFile(audioBuffer, "recording.mp3", { type: "audio/mpeg" });
 
-  const transcription = await whisperClient.audio.transcriptions.create({
+  const transcription = await whisper.audio.transcriptions.create({
     file,
     model: "whisper-1",
   });
@@ -194,46 +214,125 @@ Una descripción BREVE y ÚTIL de la llamada. Máximo 2-3 oraciones.
 ### Caso: Secretaria o recepcionista contesta
 → buzon: false. Clasifica según el resultado de la conversación con la secretaria.`;
 
+// ─── Extracción segura de IDs desde embudo_personalizado ─────────────────────
+
+const DEFAULT_ESTADOS = ["seguimiento", "programado", "interesado", "no_interesado"] as const;
+
+function extractEmbudoIds(embudo: unknown): string[] | null {
+  try {
+    if (Array.isArray(embudo) && embudo.length > 0) {
+      const ids = embudo
+        .map((item: unknown) => (typeof item === "object" && item !== null && "id" in item ? String((item as Record<string, unknown>).id) : null))
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      return ids.length > 0 ? ids : null;
+    }
+  } catch {
+    console.warn("[classifyCall] embudo_personalizado con formato inválido; usando estados por defecto");
+  }
+  return null;
+}
+
+// ─── Schema builder (estático por defecto, dinámico con embudo) ──────────────
 // La API Responses de OpenAI (usada por @ai-sdk/openai v3+) exige:
 //   1. additionalProperties: false en TODOS los objetos del schema
 //   2. Tipos nullable expresados como anyOf en lugar de type: ["x", "null"]
 
-const classificationSchema = jsonSchema<CallClassification>({
-  type: "object",
-  properties: {
-    buzon: {
-      anyOf: [{ type: "boolean" }, { type: "null" }],
-      description: "true = buzón de voz real, false = persona contestó, null = indeterminado",
+function buildClassificationSchema(estadosEnum: readonly string[]) {
+  return jsonSchema<CallClassification>({
+    type: "object",
+    properties: {
+      buzon: {
+        anyOf: [{ type: "boolean" }, { type: "null" }],
+        description: "true = buzón de voz real, false = persona contestó, null = indeterminado",
+      },
+      estado: {
+        anyOf: [
+          { type: "string", enum: [...estadosEnum] },
+          { type: "null" },
+        ],
+        description: "Estado clasificado de la llamada",
+      },
+      iadesc: {
+        anyOf: [{ type: "string" }, { type: "null" }],
+        description: "Descripción breve y útil de la llamada (2-3 oraciones max)",
+      },
+      tags_internos: {
+        type: "array",
+        items: { type: "string" },
+        description: "Etiquetas clave extraídas de la conversación (objeciones, productos, insights, sentimientos)",
+      },
     },
-    estado: {
-      anyOf: [
-        {
-          type: "string",
-          enum: ["seguimiento", "programado", "interesado", "no_interesado"],
-        },
-        { type: "null" },
-      ],
-      description: "Estado clasificado de la llamada",
-    },
-    iadesc: {
-      anyOf: [{ type: "string" }, { type: "null" }],
-      description: "Descripción breve y útil de la llamada (2-3 oraciones max)",
-    },
-  },
-  required: ["buzon", "estado", "iadesc"],
-  additionalProperties: false,
-});
+    required: ["buzon", "estado", "iadesc", "tags_internos"],
+    additionalProperties: false,
+  });
+}
 
-export async function classifyCall(transcript: string): Promise<CallClassification> {
+const defaultClassificationSchema = buildClassificationSchema(DEFAULT_ESTADOS);
+
+// ─── Prompt builder: inyectar embudo dinámico + instrucción de tags ──────────
+
+const TAGS_INSTRUCTION = `
+
+## CAMPO 4: "tags_internos" (array de strings)
+
+Extrae etiquetas clave de la conversación. Incluye:
+- Objeciones mencionadas (ej: "precio alto", "no tiene tiempo")
+- Nombres de productos o servicios mencionados
+- Insights del prospecto (ej: "ya tiene proveedor", "busca financiamiento")
+- Sentimientos detectados (ej: "frustrado", "entusiasmado", "escéptico")
+
+Si no encuentras etiquetas relevantes, devuelve un arreglo vacío [].
+Cada etiqueta debe ser una frase corta y descriptiva en español.`;
+
+function buildSystemPrompt(embudoPersonalizado?: unknown): string {
+  let prompt = CLASSIFIER_PROMPT + TAGS_INSTRUCTION;
+
+  const customIds = extractEmbudoIds(embudoPersonalizado);
+  if (customIds) {
+    prompt += `
+
+## EMBUDO PERSONALIZADO DEL CLIENTE
+
+ATENCIÓN: Este cliente tiene un embudo de ventas personalizado. Aquí tienes los estados permitidos y sus condiciones de clasificación:
+
+${JSON.stringify(embudoPersonalizado, null, 2)}
+
+Tu obligación estricta es clasificar el resultado de esta llamada usando ÚNICAMENTE uno de los IDs de este JSON: [${customIds.join(", ")}].
+NO uses los estados por defecto (seguimiento, programado, interesado, no_interesado). Usa SOLO los IDs del embudo anterior.
+Si ninguno aplica claramente, elige el más cercano de los proporcionados.`;
+  }
+
+  return prompt;
+}
+
+// ─── Clasificar llamada con IA ───────────────────────────────────────────────
+
+export async function classifyCall(
+  transcript: string,
+  openaiApiKey?: string | null,
+  embudoPersonalizado?: unknown,
+): Promise<CallClassification> {
+  const { model } = resolveClients(openaiApiKey);
+
+  const customIds = extractEmbudoIds(embudoPersonalizado);
+  const schema = customIds
+    ? buildClassificationSchema(customIds)
+    : defaultClassificationSchema;
+
+  const systemPrompt = buildSystemPrompt(embudoPersonalizado);
+
   const { object } = await generateObject({
-    model: MODEL,
-    schema: classificationSchema,
-    system: CLASSIFIER_PROMPT,
+    model,
+    schema,
+    system: systemPrompt,
     prompt: `Analiza la siguiente transcripción y devuelve ÚNICAMENTE el JSON:\n\n${transcript}`,
     temperature: 0,
   });
 
-  return object;
+  return {
+    ...object,
+    tags_internos: Array.isArray(object.tags_internos) ? object.tags_internos : [],
+  };
 }
 
 // ─── Mapeo estado IA → tag GHL ───────────────────────────────────────────────

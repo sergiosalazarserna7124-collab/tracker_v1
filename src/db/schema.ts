@@ -25,6 +25,8 @@ export const agendas = pgTable("resumenes_diarios_agendas", {
   link_llamada: text("link_llamada"),
   objeciones_ia: jsonb("objeciones_ia"),
   reportmarketing: text("reportmarketing"),
+  // ── V2: etiquetado interno omnicanal ──────────────────────────────────────
+  tags_internos: jsonb("tags_internos"),
 });
 
 /**
@@ -50,6 +52,8 @@ export const llamadas = pgTable("registros_de_llamada", {
   callsid: text("callsid"),
   iadescripcion: text("iadescripcion"),
   id_user_ghl: text("id_user_ghl"),
+  // ── V2: etiquetado interno omnicanal ──────────────────────────────────────
+  tags_internos: jsonb("tags_internos"),
 });
 
 /**
@@ -76,6 +80,8 @@ export const logLlamadas = pgTable("log_llamadas", {
   creativo_origen: text("creativo_origen"),
   speed_to_lead: text("speed_to_lead"),
   ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+  // ── V2: etiquetado interno omnicanal ──────────────────────────────────────
+  tags_internos: jsonb("tags_internos"),
 });
 
 /**
@@ -91,6 +97,10 @@ export const cuentas = pgTable("cuentas", {
   prompt_ventas: text("prompt_ventas"),
   twilio_sid: text("twilio_sid"),
   auth_twilio: text("auth_twilio"),
+  // ── V2: BYOK OpenAI, embudo dinámico y config de eventos ─────────────────
+  openai_api_key: text("openai_api_key"),
+  embudo_personalizado: jsonb("embudo_personalizado"),
+  tipos_eventos_config: jsonb("tipos_eventos_config"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

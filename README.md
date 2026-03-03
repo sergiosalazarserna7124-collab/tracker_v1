@@ -5,8 +5,38 @@
 
 ---
 
+## ✨ Novedades en la Versión 2.0
+
+La V2.0 introduce tres capacidades fundamentales que convierten al Cerebro en una plataforma verdaderamente personalizable por tenant:
+
+### Embudos de Ventas Dinámicos por Tenant
+
+Cada cuenta puede definir su propio embudo de ventas personalizado mediante la columna `embudo_personalizado` (JSONB). En lugar de estar limitados a los estados fijos (`interesado`, `programado`, `seguimiento`, `no_interesado`), cada tenant configura sus propios estados de clasificación con condiciones específicas para su negocio. La IA recibe el embudo como contexto y clasifica las llamadas usando exclusivamente los estados definidos por el tenant. Si una cuenta no tiene embudo personalizado, el sistema usa los estados por defecto (backward compatible).
+
+### Bring-Your-Own-Key (BYOK) para OpenAI
+
+Los tenants pueden configurar su propia API key de OpenAI en la columna `openai_api_key`. Cuando está presente, todas las operaciones de IA (Whisper + GPT-4o-mini) para ese tenant se ejecutan con su propia key, permitiendo control total sobre costos y rate limits. Si la key del tenant es `NULL`, el sistema usa la key global de `OPENAI_API_KEY` como fallback. Cada key es soberana: si falla, no se intenta con la key global para evitar fugas de consumo entre tenants.
+
+### Sistema de Tags Internos Omnicanal
+
+Cada interacción procesada por la IA ahora genera un arreglo de **tags internos** (`tags_internos` JSONB) que se persisten en las tres tablas principales: `registros_de_llamada`, `log_llamadas` y `resumenes_diarios_agendas`. Estos tags capturan automáticamente objeciones, nombres de productos, insights del prospecto y sentimientos detectados durante la conversación. El sistema permite análisis transversal de tendencias, objeciones recurrentes y patrones de comportamiento a nivel de tenant.
+
+### Nuevas Columnas en la Base de Datos
+
+| Tabla | Columna | Tipo | Descripción |
+|---|---|---|---|
+| `cuentas` | `openai_api_key` | text | API key de OpenAI del tenant (BYOK) |
+| `cuentas` | `embudo_personalizado` | jsonb | Embudo de ventas dinámico del tenant |
+| `cuentas` | `tipos_eventos_config` | jsonb | Configuración personalizada de tipos de eventos |
+| `resumenes_diarios_agendas` | `tags_internos` | jsonb | Tags extraídos por IA de videollamadas |
+| `registros_de_llamada` | `tags_internos` | jsonb | Tags extraídos por IA de llamadas telefónicas |
+| `log_llamadas` | `tags_internos` | jsonb | Tags del evento (audit trail) |
+
+---
+
 ## Tabla de Contenidos
 
+- [Novedades en la Versión 2.0](#-novedades-en-la-versión-20)
 - [¿Qué hace este sistema?](#qué-hace-este-sistema)
 - [Stack Tecnológico](#stack-tecnológico)
 - [Instalación y Primeros Pasos](#instalación-y-primeros-pasos)
@@ -128,6 +158,9 @@ OPENAI_API_KEY=sk-...
 | `prompt_ventas` | Prompt personalizado para el análisis forense de Fathom. Si es `NULL`, se usa un prompt genérico. | Tú lo redactas (instrucciones para la IA sobre cómo calificar leads de ese cliente) |
 | `twilio_sid` | Account SID de Twilio. Formato `AC...` | En [Twilio Console](https://console.twilio.com) → Dashboard → Account Info |
 | `auth_twilio` | Auth Token de Twilio | En [Twilio Console](https://console.twilio.com) → Dashboard → Account Info (al lado del SID) |
+| `openai_api_key` | **(V2)** API key propia de OpenAI. Si es `NULL`, usa la key global del servidor. | [platform.openai.com](https://platform.openai.com) → API Keys |
+| `embudo_personalizado` | **(V2)** JSON con los estados del embudo de ventas del tenant. Si es `NULL`, usa estados por defecto. | Tú lo defines (ver ejemplo abajo) |
+| `tipos_eventos_config` | **(V2)** JSON con configuración personalizada de tipos de eventos. | Tú lo defines |
 
 ### Ejemplo de INSERT para agregar un cliente:
 
@@ -140,6 +173,19 @@ VALUES (
   'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
   'tu_auth_token_de_twilio'
 );
+```
+
+### Ejemplo de embudo personalizado (V2):
+
+```sql
+UPDATE public.cuentas
+SET embudo_personalizado = '[
+  {"id": "caliente", "label": "Lead Caliente", "condicion": "Mostró interés activo, pidió información o agendó cita"},
+  {"id": "tibio", "label": "Lead Tibio", "condicion": "Escuchó pero no se comprometió, necesita seguimiento"},
+  {"id": "frio", "label": "Lead Frío", "condicion": "Rechazó explícitamente o no mostró interés"},
+  {"id": "callback", "label": "Callback", "condicion": "No pudo hablar en el momento, pidió que le llamen después"}
+]'::jsonb
+WHERE id_cuenta = 1;
 ```
 
 ---
@@ -351,11 +397,12 @@ Recibe la grabación y transcripción de una videollamada de Fathom. El `:id_cue
   Busca contacto por email → contactId, contactName, assignedUserId
   Si hay assignedUserId → obtiene email del closer asignado
 
-[Fase 4] Motor IA — 4 llamadas GPT-4o-mini en PARALELO (Promise.allSettled)
+[Fase 4] Motor IA — 5 llamadas GPT-4o-mini en PARALELO (Promise.allSettled)
   1. Clasificador comercial → categoria + cash_collected + facturacion
   2. Análisis forense → resumen_ia (usa prompt_ventas o prompt genérico)
   3. Lead Report 6 puntos → reportmarketing
   4. Extractor de objeciones → objeciones_ia (array JSON)
+  5. Extractor de tags internos → tags_internos (V2)
 
 [Fase 5] Sync Final
   5a. Tag GHL según categoría IA (cerradaautoia / ofertadaautoia / noofertadaautoia)
@@ -417,6 +464,7 @@ Rate limiting: lotes de 10 requests con 500ms de pausa para respetar rate limits
 | `link_llamada` | text | URL de la grabación en Fathom |
 | `objeciones_ia` | jsonb | Array de `{objecion, categoria}` |
 | `reportmarketing` | text | Lead Report 6 puntos |
+| `tags_internos` | jsonb | **(V2)** Tags extraídos por IA (objeciones, productos, insights) |
 
 ---
 
@@ -444,6 +492,7 @@ Rate limiting: lotes de 10 requests con 500ms de pausa para respetar rate limits
 | `callsid` | text | SID de la llamada en Twilio |
 | `iadescripcion` | text | Análisis IA de la llamada |
 | `id_user_ghl` | text | ID del contacto en GHL (llega como `customData.id_customer_ghl`) |
+| `tags_internos` | jsonb | **(V2)** Tags extraídos por IA (objeciones, productos, insights) |
 
 ---
 
@@ -471,6 +520,7 @@ Rate limiting: lotes de 10 requests con 500ms de pausa para respetar rate limits
 | `creativo_origen` | text | UTM/creativo |
 | `speed_to_lead` | text | Minutos desde pdte |
 | `ts` | timestamptz | Timestamp del evento (UTC, default now) |
+| `tags_internos` | jsonb | **(V2)** Tags extraídos por IA del evento |
 
 #### Tipos de evento registrados
 
@@ -541,6 +591,8 @@ CREATE INDEX idx_log_id_registro ON log_llamadas (id_registro);
 ### `public.cuentas` — Tabla de tenants/clientes
 
 > Ver sección [Configuración de Cuentas](#configuración-de-cuentas-en-la-bd).
+>
+> **V2:** Nuevas columnas `openai_api_key` (BYOK), `embudo_personalizado` (embudo dinámico), `tipos_eventos_config` (config de eventos).
 
 ---
 

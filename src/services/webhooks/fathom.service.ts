@@ -64,6 +64,7 @@ export async function processFathomCall(
     token_ghl: string | null;
     locationid: string | null;
     prompt_ventas: string | null;
+    openai_api_key: string | null;
   } | null = null;
 
   try {
@@ -74,6 +75,7 @@ export async function processFathomCall(
             token_ghl: cuentas.token_ghl,
             locationid: cuentas.locationid,
             prompt_ventas: cuentas.prompt_ventas,
+            openai_api_key: cuentas.openai_api_key,
           })
           .from(cuentas)
           .where(eq(cuentas.id_cuenta, idCuenta))
@@ -168,7 +170,7 @@ export async function processFathomCall(
 
   try {
     if (formattedTranscript) {
-      aiResult = await analyzeCall(formattedTranscript, account.prompt_ventas);
+      aiResult = await analyzeCall(formattedTranscript, account.prompt_ventas, account.openai_api_key);
     } else {
       console.warn(`[Fathom] Empty transcript for call ${shareUrl}. Skipping AI analysis.`);
     }
@@ -180,6 +182,7 @@ export async function processFathomCall(
   const forensicText = aiResult?.forensicText ?? null;
   const reportText = aiResult?.reportText ?? null;
   const objections = aiResult?.objections ?? null;
+  const tagsInternos = aiResult?.tagsInternos ?? [];
 
   // ── Fase 5: Sync final (GHL tag + DB update) ─────────────────────────────
 
@@ -234,6 +237,7 @@ export async function processFathomCall(
               ...(forensicText && { resumen_ia: forensicText }),
               ...(reportText && { reportmarketing: reportText }),
               ...(objections && { objeciones_ia: objections }),
+              tags_internos: tagsInternos,
               ...(utmContent && { origen: utmContent }),
               ...(contactId && { ghl_contact_id: contactId }),
               ...(contactName && { nombre_de_lead: contactName }),
@@ -274,6 +278,7 @@ export async function processFathomCall(
             ...(forensicText && { resumen_ia: forensicText }),
             ...(reportText && { reportmarketing: reportText }),
             ...(objections && { objeciones_ia: objections }),
+            tags_internos: tagsInternos,
           }),
         { label: "Fathom/insertAgenda" },
       );

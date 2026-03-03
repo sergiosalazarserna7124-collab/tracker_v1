@@ -55,6 +55,7 @@ interface LogEntry {
   transcript?: string | null;
   iadesc?: string | null;
   speedToLead?: string | null;
+  tagsInternos?: string[] | null;
 }
 
 async function insertLogEntry(entry: LogEntry): Promise<void> {
@@ -78,6 +79,7 @@ async function insertLogEntry(entry: LogEntry): Promise<void> {
           nombre_closer: entry.fields.nombreCloser,
           creativo_origen: entry.fields.creativoOrigen,
           speed_to_lead: entry.speedToLead ?? null,
+          tags_internos: entry.tagsInternos ?? [],
         }),
       { label: "insertLogEntry" },
     );
@@ -137,26 +139,31 @@ async function resolveAccountFull(
   tokenGhl: string | null;
   twilioSid: string | null;
   authTwilio: string | null;
+  openaiApiKey: string | null;
+  embudoPersonalizado: unknown;
 }> {
+  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null };
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
-    return { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null };
+    return empty;
   }
   try {
     const account: CuentaFullRow | null = await getAccountFullByLocationId(locationId);
     if (!account) {
       console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
-      return { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null };
+      return empty;
     }
     return {
       idCuenta: account.id_cuenta,
       tokenGhl: account.token_ghl,
       twilioSid: account.twilio_sid,
       authTwilio: account.auth_twilio,
+      openaiApiKey: account.openai_api_key,
+      embudoPersonalizado: account.embudo_personalizado,
     };
   } catch (err) {
     console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
-    return { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null };
+    return empty;
   }
 }
 
@@ -441,10 +448,8 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
 
 export async function processEffectiveCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
-  const { idCuenta, tokenGhl, twilioSid, authTwilio } = await resolveAccountFull(
-    fields.locationId,
-    "Effective",
-  );
+  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado } =
+    await resolveAccountFull(fields.locationId, "Effective");
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
 
@@ -507,7 +512,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   let transcript: string;
   try {
-    transcript = await transcribeAudio(audioBuffer);
+    transcript = await transcribeAudio(audioBuffer, openaiApiKey);
   } catch (err) {
     console.error("[Effective] Error transcribiendo audio con Whisper:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, null, null, "Effective");
@@ -522,7 +527,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   let classification: CallClassification;
   try {
-    classification = await classifyCall(transcript);
+    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado);
   } catch (err) {
     console.error("[Effective] Error clasificando llamada con IA:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, transcript, null, "Effective");
@@ -568,6 +573,7 @@ async function effectivePath(
   const now = new Date();
   const aiEstado = classification.estado ?? "seguimiento";
   const iadesc = classification.iadesc ?? null;
+  const tagsInternos = classification.tags_internos ?? [];
 
   // Buscar el registro MAS RECIENTE (sin filtrar por estado)
   type ExistingRow = {
@@ -661,6 +667,7 @@ async function effectivePath(
               intentos_contacto: (existing!.intentos_contacto ?? 0) + 1,
               trancription: transcript,
               iadescripcion: iadesc,
+              tags_internos: tagsInternos,
               ...(callSid && { callsid: callSid }),
               ...(idUserGhl && { id_user_ghl: idUserGhl }),
               ...(stl !== null && { speed_to_lead: stl }),
@@ -698,6 +705,7 @@ async function effectivePath(
               callsid: callSid,
               iadescripcion: iadesc,
               id_user_ghl: idUserGhl,
+              tags_internos: tagsInternos,
             })
             .returning({ id_registro: llamadas.id_registro }),
         { label: "effectivePath/insert" },
@@ -763,6 +771,7 @@ async function effectivePath(
     transcript,
     iadesc,
     speedToLead: stlForLog,
+    tagsInternos,
   });
 
   return {

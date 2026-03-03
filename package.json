@@ -1,6 +1,6 @@
 {
   "name": "tracker-v6-saas",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Headless multi-tenant tracking backend for calls, videocalls and chats",
   "type": "module",
   "main": "dist/server.js",

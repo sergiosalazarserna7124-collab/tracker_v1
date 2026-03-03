@@ -1,9 +1,19 @@
 import { generateObject, generateText, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 
-const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
-const MODEL = openai("gpt-4o-mini");
+// ─── Clientes IA (singleton global — fallback) ──────────────────────────────
+
+const defaultProvider = createOpenAI({ apiKey: env.OPENAI_API_KEY });
+const defaultModel = defaultProvider("gpt-4o-mini");
+
+function resolveModel(openaiApiKey?: string | null): LanguageModel {
+  if (openaiApiKey) {
+    return createOpenAI({ apiKey: openaiApiKey })("gpt-4o-mini");
+  }
+  return defaultModel;
+}
 
 // ─── Tipos de salida ──────────────────────────────────────────────────────────
 
@@ -23,6 +33,7 @@ export interface CallAnalysisResult {
   forensicText: string | null;
   reportText: string | null;
   objections: ObjecionItem[] | null;
+  tagsInternos: string[];
 }
 
 // ─── Prompt fallback para análisis forense (cuando cuenta no tiene prompt_ventas) ─
@@ -137,6 +148,35 @@ ALGORITMO: Solo extrae frases del PROSPECTO que respondan a "¿Por qué NO puede
 
 Si no encuentras objeciones válidas, devuelve {"objeciones": []}.`;
 
+// ─── Prompt: extractor de tags internos ──────────────────────────────────────
+
+const TAGS_PROMPT = `Eres un sistema de extracción de etiquetas de videollamadas de ventas.
+
+Tu tarea es analizar la transcripción y extraer etiquetas clave (tags) que resuman los temas, objeciones, productos, insights y sentimientos más relevantes.
+
+Tipos de etiquetas a extraer:
+- Objeciones mencionadas (ej: "precio alto", "necesita consultar con socio")
+- Nombres de productos o servicios discutidos
+- Insights del prospecto (ej: "ya tiene proveedor", "busca escalar")
+- Sentimientos o actitudes detectadas (ej: "entusiasmado", "escéptico", "frustrado")
+- Puntos de dolor clave (ej: "baja conversión", "no tiene equipo")
+
+Cada etiqueta debe ser una frase corta y descriptiva en español.
+Si no encuentras etiquetas relevantes, devuelve un arreglo vacío.`;
+
+const tagsSchema = jsonSchema<{ tags_internos: string[] }>({
+  type: "object",
+  properties: {
+    tags_internos: {
+      type: "array",
+      items: { type: "string" },
+      description: "Etiquetas clave extraídas de la conversación",
+    },
+  },
+  required: ["tags_internos"],
+  additionalProperties: false,
+});
+
 // ─── Schemas JSON para generateObject ────────────────────────────────────────
 
 const classifierSchema = jsonSchema<ClassifierResult>({
@@ -175,14 +215,16 @@ const objectionsSchema = jsonSchema<{ objeciones: ObjecionItem[] }>({
 export async function analyzeCall(
   formattedTranscript: string,
   promptVentas: string | null,
+  openaiApiKey?: string | null,
 ): Promise<CallAnalysisResult> {
+  const model = resolveModel(openaiApiKey);
   const forensicPrompt = promptVentas ?? DEFAULT_FORENSIC_PROMPT;
 
-  const [classifierSettled, forensicSettled, reportSettled, objectionsSettled] =
+  const [classifierSettled, forensicSettled, reportSettled, objectionsSettled, tagsSettled] =
     await Promise.allSettled([
       // 1. Clasificador comercial (generateObject)
       generateObject({
-        model: MODEL,
+        model,
         schema: classifierSchema,
         system: CLASSIFIER_PROMPT,
         prompt: `Transcript:\n${formattedTranscript}`,
@@ -191,7 +233,7 @@ export async function analyzeCall(
 
       // 2. Análisis forense / calificación de lead (generateText, prompt por cuenta)
       generateText({
-        model: MODEL,
+        model,
         system: forensicPrompt,
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0.3,
@@ -199,7 +241,7 @@ export async function analyzeCall(
 
       // 3. Lead Report 6 puntos (generateText)
       generateText({
-        model: MODEL,
+        model,
         system: LEAD_REPORT_PROMPT,
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0.3,
@@ -207,9 +249,18 @@ export async function analyzeCall(
 
       // 4. Extractor de objeciones (generateObject)
       generateObject({
-        model: MODEL,
+        model,
         schema: objectionsSchema,
         system: OBJECTIONS_PROMPT,
+        prompt: `Transcript:\n${formattedTranscript}`,
+        temperature: 0,
+      }),
+
+      // 5. Extractor de tags internos (generateObject)
+      generateObject({
+        model,
+        schema: tagsSchema,
+        system: TAGS_PROMPT,
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0,
       }),
@@ -230,5 +281,9 @@ export async function analyzeCall(
       objectionsSettled.status === "fulfilled"
         ? objectionsSettled.value.object.objeciones
         : null,
+    tagsInternos:
+      tagsSettled.status === "fulfilled"
+        ? tagsSettled.value.object.tags_internos
+        : [],
   };
 }
