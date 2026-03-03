@@ -305,12 +305,20 @@ Si ninguno aplica claramente, elige el más cercano de los proporcionados.`;
   return prompt;
 }
 
+// ─── Helper: inyectar contexto de empresa del tenant en cualquier system prompt ─
+
+function withBusinessContext(basePrompt: string, promptVentas: string | null | undefined): string {
+  if (!promptVentas) return basePrompt;
+  return `Eres un analista para esta empresa: ${promptVentas}. Usa este contexto para entender el negocio y decidir si el lead cumple las condiciones del embudo.\n\n${basePrompt}`;
+}
+
 // ─── Clasificar llamada con IA ───────────────────────────────────────────────
 
 export async function classifyCall(
   transcript: string,
   openaiApiKey?: string | null,
   embudoPersonalizado?: unknown,
+  promptVentas?: string | null,
 ): Promise<CallClassification> {
   const { model } = resolveClients(openaiApiKey);
 
@@ -319,7 +327,10 @@ export async function classifyCall(
     ? buildClassificationSchema(customIds)
     : defaultClassificationSchema;
 
-  const systemPrompt = buildSystemPrompt(embudoPersonalizado);
+  const systemPrompt = withBusinessContext(
+    buildSystemPrompt(embudoPersonalizado),
+    promptVentas,
+  );
 
   const { object } = await generateObject({
     model,

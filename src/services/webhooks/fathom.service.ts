@@ -1,6 +1,6 @@
 import { eq, and, desc } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
-import { agendas, cuentas } from "../../db/schema.js";
+import { agendas, cuentas, eventosHuerfanos } from "../../db/schema.js";
 import {
   addContactTag,
   addContactNote,
@@ -89,7 +89,18 @@ export async function processFathomCall(
   }
 
   if (!account) {
-    console.warn(`[Fathom] Account ${idCuenta} not found. Aborting.`);
+    console.warn(`[Fathom] Account ${idCuenta} not found. Saving as orphan.`);
+    try {
+      await drizzleDb.insert(eventosHuerfanos).values({
+        id_cuenta: idCuenta,
+        origen: "fathom",
+        motivo: `Cuenta ${idCuenta} no encontrada en la BD`,
+        payload_original: payload,
+        estado: "pendiente",
+      });
+    } catch (orphanErr) {
+      console.error("[Fathom] Error guardando evento huérfano:", orphanErr);
+    }
     return;
   }
 
@@ -160,7 +171,18 @@ export async function processFathomCall(
   }
 
   if (!emailLead) {
-    console.warn(`[Fathom] Could not determine email_lead for call ${shareUrl}. Aborting.`);
+    console.warn(`[Fathom] Could not determine email_lead for call ${shareUrl}. Saving as orphan.`);
+    try {
+      await drizzleDb.insert(eventosHuerfanos).values({
+        id_cuenta: idCuenta,
+        origen: "fathom",
+        motivo: "Email no encontrado en el payload (sin invitados externos o sin match en GHL)",
+        payload_original: payload,
+        estado: "pendiente",
+      });
+    } catch (orphanErr) {
+      console.error("[Fathom] Error guardando evento huérfano:", orphanErr);
+    }
     return;
   }
 

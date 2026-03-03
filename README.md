@@ -28,15 +28,40 @@ Cada interacción procesada por la IA ahora genera un arreglo de **tags internos
 | `cuentas` | `openai_api_key` | text | API key de OpenAI del tenant (BYOK) |
 | `cuentas` | `embudo_personalizado` | jsonb | Embudo de ventas dinámico del tenant |
 | `cuentas` | `tipos_eventos_config` | jsonb | Configuración personalizada de tipos de eventos |
+| `cuentas` | `roles_config` | jsonb | **(V3)** Configuración de roles por tenant |
 | `resumenes_diarios_agendas` | `tags_internos` | jsonb | Tags extraídos por IA de videollamadas |
 | `registros_de_llamada` | `tags_internos` | jsonb | Tags extraídos por IA de llamadas telefónicas |
 | `log_llamadas` | `tags_internos` | jsonb | Tags del evento (audit trail) |
 
 ---
 
+## Novedades en la Versión 3.0 (Enterprise Resilience)
+
+La V3.0 añade resiliencia operativa y contexto de negocio en la IA para un uso Enterprise:
+
+### Contexto de Empresa en la IA
+
+El campo `prompt_ventas` de cada cuenta se **inyecta al inicio de todos los system prompts** de GPT-4o-mini (Fathom y Twilio). La IA recibe la instrucción: *"Eres un analista para esta empresa: [prompt_ventas]. Usa este contexto para entender el negocio y decidir si el lead cumple las condiciones del embudo."* Así, el clasificador comercial, el análisis forense, el lead report, las objeciones y los tags internos se contextualizan por tenant. Si `prompt_ventas` es `NULL`, el comportamiento es el mismo que antes (backward compatible).
+
+### Eventos Huérfanos
+
+Cuando un webhook llega sin datos suficientes para identificar al lead (sin email, sin `contact_id`, o fallo en búsqueda GHL), el sistema **no falla**: hace un `INSERT` en la tabla `eventos_huerfanos` con el payload crudo y estado `pendiente`, y termina el flujo sin error. Un operador puede corregir el email y re-procesar el evento más tarde.
+
+| Origen | Motivo típico de huérfano |
+|---|---|
+| Fathom | Cuenta no encontrada; o email no encontrado (sin invitados externos o sin match en GHL) |
+| Twilio | Lead no identificable: sin email, sin `contact_id`, sin `id_user_ghl` |
+
+### Re-procesamiento de Huérfanos
+
+El endpoint **`POST /webhooks/retry-orphan/:id_huerfano`** permite re-lanzar un evento huérfano tras corregir los datos. El body incluye `email_corregido`; el sistema parchea el payload, marca el huérfano como `resuelto` y vuelve a despachar al servicio correspondiente (Fathom o Twilio). Ver [Endpoint Retry Orphan](#post-webhooksretry-orphanid_huerfano--re-procesar-huérfano) más abajo.
+
+---
+
 ## Tabla de Contenidos
 
 - [Novedades en la Versión 2.0](#-novedades-en-la-versión-20)
+- [Novedades en la Versión 3.0 (Enterprise Resilience)](#novedades-en-la-versión-30-enterprise-resilience)
 - [¿Qué hace este sistema?](#qué-hace-este-sistema)
 - [Stack Tecnológico](#stack-tecnológico)
 - [Instalación y Primeros Pasos](#instalación-y-primeros-pasos)
@@ -49,6 +74,7 @@ Cada interacción procesada por la IA ahora genera un arreglo de **tags internos
   - [POST /webhooks/twilio/no-answer — Llamada no contestada](#post-webhookstwiiliono-answer--llamada-no-contestada)
   - [POST /webhooks/twilio/effective — Llamada efectiva](#post-webhookstwilioeffective--llamada-efectiva)
   - [POST /webhooks/fathom/:id_cuenta — Videollamada](#post-webhooksfathomid_cuenta--videollamada)
+  - [POST /webhooks/retry-orphan/:id_huerfano — Re-procesar huérfano](#post-webhooksretry-orphanid_huerfano--re-procesar-huérfano)
   - [POST /cron/update-no-shows — Cron No-Shows](#post-cronupdate-no-shows--cron-no-shows)
 - [Esquema de Base de Datos](#esquema-de-base-de-datos)
 - [Tags y Notas GHL](#tags-y-notas-ghl)
@@ -161,6 +187,7 @@ OPENAI_API_KEY=sk-...
 | `openai_api_key` | **(V2)** API key propia de OpenAI. Si es `NULL`, usa la key global del servidor. | [platform.openai.com](https://platform.openai.com) → API Keys |
 | `embudo_personalizado` | **(V2)** JSON con los estados del embudo de ventas del tenant. Si es `NULL`, usa estados por defecto. | Tú lo defines (ver ejemplo abajo) |
 | `tipos_eventos_config` | **(V2)** JSON con configuración personalizada de tipos de eventos. | Tú lo defines |
+| `roles_config` | **(V3)** JSON con configuración de roles por tenant. | Tú lo defines |
 
 ### Ejemplo de INSERT para agregar un cliente:
 
@@ -399,10 +426,11 @@ Recibe la grabación y transcripción de una videollamada de Fathom. El `:id_cue
 
 [Fase 4] Motor IA — 5 llamadas GPT-4o-mini en PARALELO (Promise.allSettled)
   1. Clasificador comercial → categoria + cash_collected + facturacion
-  2. Análisis forense → resumen_ia (usa prompt_ventas o prompt genérico)
+  2. Análisis forense → resumen_ia (contexto prompt_ventas inyectado al inicio)
   3. Lead Report 6 puntos → reportmarketing
   4. Extractor de objeciones → objeciones_ia (array JSON)
   5. Extractor de tags internos → tags_internos (V2)
+  *(V3: todos los prompts reciben el contexto de empresa al inicio.)*
 
 [Fase 5] Sync Final
   5a. Tag GHL según categoría IA (cerradaautoia / ofertadaautoia / noofertadaautoia)
@@ -411,6 +439,47 @@ Recibe la grabación y transcripción de una videollamada de Fathom. El `:id_cue
 [Fase 6] Notas GHL
   🎥 Videollamada — Análisis IA (categoría + montos + análisis forense)
   🎥 Videollamada — Transcripción (texto completo formateado)
+```
+
+**Eventos huérfanos (V3):** Si la cuenta no existe o no se puede determinar `email_lead`, el payload se guarda en `eventos_huerfanos` con origen `fathom` y estado `pendiente`, sin lanzar error.
+
+---
+
+### `POST /webhooks/retry-orphan/:id_huerfano` — Re-procesar huérfano
+
+Re-lanza un evento huérfano tras corregir el email. El huérfano debe existir y tener estado `pendiente`.
+
+#### Params
+
+| Parámetro | Tipo | Descripción |
+|---|---|---|
+| `id_huerfano` | integer | ID del registro en `eventos_huerfanos` |
+
+#### Body
+
+```json
+{
+  "email_corregido": "juan@empresa.com"
+}
+```
+
+#### Comportamiento
+
+1. Busca el huérfano por `id_huerfano`.
+2. Si no existe → `404`. Si ya está `resuelto` o `descartado` → `409`.
+3. Parchea `payload_original` con el email corregido:
+   - **Fathom:** añade un invitado externo en `calendar_invitees` con ese email.
+   - **Twilio:** setea `customData.email` al valor indicado.
+4. Actualiza el huérfano a `estado = 'resuelto'` y `updated_at = now()`.
+5. Re-despacha al servicio correspondiente (`processFathomCall` o `processTwilioWebhook`) de forma asíncrona.
+
+**Respuesta 200:**
+```json
+{
+  "success": true,
+  "message": "Orphan event re-dispatched successfully",
+  "data": { "id_huerfano": 42, "origen": "fathom" }
+}
 ```
 
 ---
@@ -593,6 +662,25 @@ CREATE INDEX idx_log_id_registro ON log_llamadas (id_registro);
 > Ver sección [Configuración de Cuentas](#configuración-de-cuentas-en-la-bd).
 >
 > **V2:** Nuevas columnas `openai_api_key` (BYOK), `embudo_personalizado` (embudo dinámico), `tipos_eventos_config` (config de eventos).
+>
+> **V3:** Columna `roles_config` (jsonb) para configuración de roles por tenant.
+
+---
+
+### `eventos_huerfanos` — Eventos sin datos clave (V3)
+
+Webhooks que no pudieron procesarse por falta de email, `contact_id` o cuenta no encontrada se guardan aquí para re-procesamiento manual.
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `id_huerfano` | serial PK | Autoincremental |
+| `id_cuenta` | integer | Tenant (puede ser null si la cuenta no existía) |
+| `origen` | text NOT NULL | `fathom` o `twilio` |
+| `motivo` | text NOT NULL | Descripción del fallo (ej. "Email no encontrado en el payload") |
+| `payload_original` | jsonb NOT NULL | Body crudo del webhook |
+| `estado` | text | `pendiente`, `resuelto` o `descartado` (default: `pendiente`) |
+| `created_at` | timestamptz | Momento del INSERT |
+| `updated_at` | timestamptz | Última actualización (ej. al marcar `resuelto`) |
 
 ---
 
@@ -655,6 +743,10 @@ Todas las operaciones de BD están envueltas con `withRetry()` que:
 
 Los endpoints `/webhooks/twilio/effective` y `/webhooks/fathom/:id_cuenta` responden `200 OK` inmediato y procesan en segundo plano para evitar timeouts del caller.
 
+### Eventos huérfanos (V3)
+
+Cuando falta email, `contact_id` o la cuenta no existe, el flujo **no lanza error**: el INSERT en `eventos_huerfanos` va dentro de un try/catch aislado. Si falla el INSERT, se loguea pero no se propaga, de modo que el webhook sigue respondiendo 200 y el caller no reintenta en bucle. Los huérfanos pueden re-procesarse después con `POST /webhooks/retry-orphan/:id_huerfano`.
+
 ---
 
 ## Despliegue en Google Cloud Run
@@ -693,7 +785,7 @@ src/
 │   └── drizzle.ts                     # Instancia Drizzle ORM sobre el pool
 │
 ├── db/
-│   └── schema.ts                      # Tablas: agendas, llamadas, logLlamadas, cuentas
+│   └── schema.ts                      # Tablas: agendas, llamadas, logLlamadas, cuentas, eventosHuerfanos
 │
 ├── plugins/
 │   └── error-handler.ts               # Error handler global + 404 para Fastify
@@ -703,7 +795,8 @@ src/
 │   ├── webhooks/
 │   │   ├── ghl.route.ts               # POST /webhooks/ghl
 │   │   ├── fathom.route.ts            # POST /webhooks/fathom/:id_cuenta (10MB)
-│   │   └── twilio.route.ts            # POST /webhooks/twilio + /no-answer + /effective
+│   │   ├── twilio.route.ts            # POST /webhooks/twilio + /no-answer + /effective
+│   │   └── orphan.route.ts            # POST /webhooks/retry-orphan/:id_huerfano (V3)
 │   └── cron/
 │       └── daily-tasks.route.ts       # POST /cron/update-no-shows
 │
@@ -711,7 +804,8 @@ src/
 │   ├── webhooks/
 │   │   ├── ghl.controller.ts          # Usa extractWebhookBody → llama ghl.service
 │   │   ├── fathom.controller.ts       # Responde 200 inmediato → async
-│   │   └── twilio.controller.ts       # 3 handlers: pdte / no-answer / effective (async)
+│   │   ├── twilio.controller.ts       # 3 handlers: pdte / no-answer / effective (async)
+│   │   └── orphan.controller.ts       # Retry huérfano: valida params/body → orphan.service (V3)
 │   └── cron/
 │       └── daily-tasks.controller.ts  # Verifica x-cron-secret → 401 si falla
 │
@@ -720,8 +814,9 @@ src/
 │   ├── twilio-api.service.ts          # Twilio REST: calls, recordings (polling), download
 │   ├── webhooks/
 │   │   ├── ghl.service.ts             # Dispatcher: pendiente / cancelada / reagenda
-│   │   ├── fathom.service.ts          # 6 fases + upsert + notas GHL
-│   │   └── twilio.service.ts          # pdte, followUpPath, effectivePath + log_llamadas
+│   │   ├── fathom.service.ts          # 6 fases + upsert + notas GHL + eventos huérfanos (V3)
+│   │   ├── twilio.service.ts          # pdte, followUpPath, effectivePath + log_llamadas + huérfanos (V3)
+│   │   └── orphan.service.ts          # retryOrphanEvent: parchea payload, resuelve, re-despacha (V3)
 │   ├── ai/
 │   │   ├── call-analysis.service.ts   # 4 IAs en paralelo para Fathom
 │   │   └── call-classification.service.ts  # Whisper + GPT-4o-mini para llamadas
@@ -732,7 +827,8 @@ src/
 │   ├── webhooks/
 │   │   ├── ghl.schema.ts
 │   │   ├── fathom.schema.ts
-│   │   └── twilio.schema.ts
+│   │   ├── twilio.schema.ts
+│   │   └── orphan.schema.ts           # Params + body retry-orphan (V3)
 │   └── cron/
 │       └── daily-tasks.schema.ts
 │

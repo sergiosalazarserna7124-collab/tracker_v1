@@ -101,6 +101,8 @@ export const cuentas = pgTable("cuentas", {
   openai_api_key: text("openai_api_key"),
   embudo_personalizado: jsonb("embudo_personalizado"),
   tipos_eventos_config: jsonb("tipos_eventos_config"),
+  // ── V3: configuración de roles por tenant ─────────────────────────────────
+  roles_config: jsonb("roles_config"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────
@@ -132,3 +134,16 @@ export const usoApiMensual = pgTable("uso_api_mensual", {
 }, (t) => [
   unique().on(t.id_cuenta, t.mes_anio, t.tipo_consumo),
 ]);
+
+// ── Tabla de eventos huérfanos (webhooks sin datos clave) ────────────────────
+
+export const eventosHuerfanos = pgTable("eventos_huerfanos", {
+  id_huerfano: serial("id_huerfano").primaryKey(),
+  id_cuenta: integer("id_cuenta"),
+  origen: text("origen").notNull(),
+  motivo: text("motivo").notNull(),
+  payload_original: jsonb("payload_original").notNull(),
+  estado: text("estado").default("pendiente"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
-import { llamadas, logLlamadas } from "../../db/schema.js";
+import { llamadas, logLlamadas, eventosHuerfanos } from "../../db/schema.js";
 import {
   addContactTag,
   addContactNote,
@@ -141,8 +141,9 @@ async function resolveAccountFull(
   authTwilio: string | null;
   openaiApiKey: string | null;
   embudoPersonalizado: unknown;
+  promptVentas: string | null;
 }> {
-  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null };
+  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null };
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
     return empty;
@@ -160,6 +161,7 @@ async function resolveAccountFull(
       authTwilio: account.auth_twilio,
       openaiApiKey: account.openai_api_key,
       embudoPersonalizado: account.embudo_personalizado,
+      promptVentas: account.prompt_ventas,
     };
   } catch (err) {
     console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
@@ -378,12 +380,40 @@ async function followUpPath(
   };
 }
 
+// ─── Helper: guardar evento huérfano (lead no-identificable) ─────────────────
+
+async function saveOrphanEvent(
+  body: TwilioEventBody,
+  idCuenta: number | null,
+  label: string,
+): Promise<ServiceResult> {
+  console.warn(`[${label}] Lead no identificable (sin email, contact_id ni id_user_ghl). Saving as orphan.`);
+  try {
+    await drizzleDb.insert(eventosHuerfanos).values({
+      id_cuenta: idCuenta,
+      origen: "twilio",
+      motivo: "Lead no identificable: sin email, sin contact_id, sin id_user_ghl",
+      payload_original: body,
+      estado: "pendiente",
+    });
+  } catch (orphanErr) {
+    console.error(`[${label}] Error guardando evento huérfano:`, orphanErr);
+  }
+  return { success: true, data: { path: "orphan" } };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // POST /webhooks/twilio — Llamada pendiente
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export async function processTwilioWebhook(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
+
+  if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
+    const { idCuenta } = await resolveAccount(fields.locationId, "Twilio");
+    return saveOrphanEvent(body, idCuenta, "Twilio");
+  }
+
   const { idCuenta } = await resolveAccount(fields.locationId, "Twilio");
 
   try {
@@ -437,6 +467,12 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
 
 export async function processNoAnswerCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
+
+  if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
+    const { idCuenta } = await resolveAccount(fields.locationId, "NoAnswer");
+    return saveOrphanEvent(body, idCuenta, "NoAnswer");
+  }
+
   const { idCuenta, tokenGhl } = await resolveAccount(fields.locationId, "NoAnswer");
 
   return followUpPath(fields, idCuenta, tokenGhl, null, null, null, "NoAnswer");
@@ -448,7 +484,13 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
 
 export async function processEffectiveCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
-  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado } =
+
+  if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
+    const { idCuenta } = await resolveAccount(fields.locationId, "Effective");
+    return saveOrphanEvent(body, idCuenta, "Effective");
+  }
+
+  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas } =
     await resolveAccountFull(fields.locationId, "Effective");
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
@@ -527,7 +569,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   let classification: CallClassification;
   try {
-    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado);
+    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado, promptVentas);
   } catch (err) {
     console.error("[Effective] Error clasificando llamada con IA:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, transcript, null, "Effective");

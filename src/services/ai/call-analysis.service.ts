@@ -36,6 +36,13 @@ export interface CallAnalysisResult {
   tagsInternos: string[];
 }
 
+// ─── Helper: inyectar contexto de empresa del tenant en cualquier system prompt ─
+
+function withBusinessContext(basePrompt: string, promptVentas: string | null): string {
+  if (!promptVentas) return basePrompt;
+  return `Eres un analista para esta empresa: ${promptVentas}. Usa este contexto para entender el negocio y decidir si el lead cumple las condiciones del embudo.\n\n${basePrompt}`;
+}
+
 // ─── Prompt fallback para análisis forense (cuando cuenta no tiene prompt_ventas) ─
 
 const DEFAULT_FORENSIC_PROMPT = `# ROL
@@ -218,7 +225,6 @@ export async function analyzeCall(
   openaiApiKey?: string | null,
 ): Promise<CallAnalysisResult> {
   const model = resolveModel(openaiApiKey);
-  const forensicPrompt = promptVentas ?? DEFAULT_FORENSIC_PROMPT;
 
   const [classifierSettled, forensicSettled, reportSettled, objectionsSettled, tagsSettled] =
     await Promise.allSettled([
@@ -226,7 +232,7 @@ export async function analyzeCall(
       generateObject({
         model,
         schema: classifierSchema,
-        system: CLASSIFIER_PROMPT,
+        system: withBusinessContext(CLASSIFIER_PROMPT, promptVentas),
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0,
       }),
@@ -234,7 +240,7 @@ export async function analyzeCall(
       // 2. Análisis forense / calificación de lead (generateText, prompt por cuenta)
       generateText({
         model,
-        system: forensicPrompt,
+        system: withBusinessContext(DEFAULT_FORENSIC_PROMPT, promptVentas),
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0.3,
       }),
@@ -242,7 +248,7 @@ export async function analyzeCall(
       // 3. Lead Report 6 puntos (generateText)
       generateText({
         model,
-        system: LEAD_REPORT_PROMPT,
+        system: withBusinessContext(LEAD_REPORT_PROMPT, promptVentas),
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0.3,
       }),
@@ -251,7 +257,7 @@ export async function analyzeCall(
       generateObject({
         model,
         schema: objectionsSchema,
-        system: OBJECTIONS_PROMPT,
+        system: withBusinessContext(OBJECTIONS_PROMPT, promptVentas),
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0,
       }),
@@ -260,7 +266,7 @@ export async function analyzeCall(
       generateObject({
         model,
         schema: tagsSchema,
-        system: TAGS_PROMPT,
+        system: withBusinessContext(TAGS_PROMPT, promptVentas),
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0,
       }),

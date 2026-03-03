@@ -34,6 +34,7 @@ export interface CuentaFullRow extends CuentaRow {
   auth_twilio: string | null;
   openai_api_key: string | null;
   embudo_personalizado: unknown;
+  prompt_ventas: string | null;
 }
 
 export interface GhlContact {
@@ -103,6 +104,7 @@ export async function getAccountFullByLocationId(locationId: string): Promise<Cu
           auth_twilio: cuentas.auth_twilio,
           openai_api_key: cuentas.openai_api_key,
           embudo_personalizado: cuentas.embudo_personalizado,
+          prompt_ventas: cuentas.prompt_ventas,
         })
         .from(cuentas)
         .where(eq(cuentas.locationid, locationId))
