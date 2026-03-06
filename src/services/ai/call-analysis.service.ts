@@ -2,6 +2,7 @@ import { generateObject, generateText, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
+import { evaluateReglas, type ReglasEvalResult } from "./reglas-evaluator.service.js";
 
 // ─── Clientes IA (singleton global — fallback) ──────────────────────────────
 
@@ -18,7 +19,7 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
 // ─── Tipos de salida ──────────────────────────────────────────────────────────
 
 export interface ClassifierResult {
-  categoria: "Cerrada" | "Ofertada" | "No_Ofertada";
+  categoria: string;
   cash_collected: string;
   facturacion: string;
 }
@@ -30,34 +31,44 @@ export interface ObjecionItem {
 
 export interface CallAnalysisResult {
   classifier: ClassifierResult | null;
-  forensicText: string | null;
-  reportText: string | null;
+  analysisText: string | null;
   objections: ObjecionItem[] | null;
-  tagsInternos: string[];
+  reglasResult: ReglasEvalResult;
 }
 
-// ─── Helper: inyectar contexto de empresa del tenant en cualquier system prompt ─
+// ─── Helper: inyectar contexto de empresa del tenant ─────────────────────────
 
 function withBusinessContext(basePrompt: string, promptVentas: string | null): string {
   if (!promptVentas) return basePrompt;
-  return `Eres un analista para esta empresa: ${promptVentas}. Usa este contexto para entender el negocio y decidir si el lead cumple las condiciones del embudo.\n\n${basePrompt}`;
+  return `CONTEXTO DE LA EMPRESA:\n${promptVentas}\n\nUsa este contexto para entender el negocio, los productos/servicios que se venden y las condiciones del embudo de ventas.\n\n${basePrompt}`;
 }
 
-// ─── Prompt fallback para análisis forense (cuando cuenta no tiene prompt_ventas) ─
+// ─── Extracción segura de IDs desde embudo_personalizado ─────────────────────
 
-const DEFAULT_FORENSIC_PROMPT = `# ROL
-Eres un Analista Senior de Estrategia de Ventas y Psicología del Consumidor. Tu trabajo es leer transcripciones crudas de llamadas de ventas "High-Ticket" (servicios de alto valor) y generar un diagnóstico preciso, sin relleno y psicológicamente profundo.
+const DEFAULT_CATEGORIAS = ["Cerrada", "Ofertada", "No_Ofertada"] as const;
 
-# OBJETIVO
-Extrae textualmente los problemas, frustraciones, barreras y motivaciones del lead. Identifica qué dolores lo llevaron a la llamada y qué obstáculos surgieron. Responde en formato Markdown, de forma directa y concisa.`;
+function extractEmbudoIds(embudo: unknown): string[] | null {
+  try {
+    if (Array.isArray(embudo) && embudo.length > 0) {
+      const ids = embudo
+        .map((item: unknown) =>
+          typeof item === "object" && item !== null && "id" in item
+            ? String((item as Record<string, unknown>).id)
+            : null,
+        )
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      return ids.length > 0 ? ids : null;
+    }
+  } catch {
+    console.warn("[analyzeCall] embudo_personalizado con formato inválido; usando categorías por defecto");
+  }
+  return null;
+}
 
-// ─── Prompt fijo: Clasificador de resultado comercial ─────────────────────────
+// ─── Clasificador comercial (dinámico con embudo) ────────────────────────────
 
 const CLASSIFIER_PROMPT = `ROLE: Analyst-Pro
-OBJECTIVE: Analizar rigurosamente una transcripción de llamada de ventas para determinar su resultado comercial. Tu única salida debe ser un objeto JSON válido con los campos "categoria", "cash_collected" y "facturacion".
-
-CONTEXTO
-Tu objetivo es clasificar el resultado real de la llamada. Debes analizar el flujo de la conversación para identificar si se menciona un precio y si se concreta una transacción monetaria durante la llamada.
+OBJECTIVE: Analizar rigurosamente una transcripción de videollamada de ventas para determinar su resultado comercial. Tu única salida debe ser un objeto JSON válido con los campos "categoria", "cash_collected" y "facturacion".
 
 PROCESO DE ANÁLISIS PASO A PASO
 
@@ -80,122 +91,117 @@ Paso 3: Asignar Valores Monetarios
 * SI la "categoria" es "Ofertada" o "No_Ofertada": "cash_collected" = "0"; "facturacion" = "0". REGLA DE ORO: Si "categoria" NO es "Cerrada", ambos valores DEBEN ser "0".
 
 STRICT RULES
-• Usa temperature 0 para máxima consistencia.
 • Todos los valores deben ser strings. Extrae únicamente los dígitos para valores monetarios (ej: "1200", no "$1,200.00").
 • REGLA DE ORO (Verificación final): Si "categoria" NO es "Cerrada", entonces "facturacion" y "cash_collected" DEBEN ser "0".`;
 
-// ─── Prompt fijo: Lead Report (6 puntos) ─────────────────────────────────────
+function buildClassifierPrompt(embudoPersonalizado?: unknown): string {
+  let prompt = CLASSIFIER_PROMPT;
 
-const LEAD_REPORT_PROMPT = `# ROL
-Eres un Analista Senior de Estrategia de Ventas y Psicología del Consumidor. Tu trabajo es leer transcripciones crudas de llamadas de ventas "High-Ticket" y generar un diagnóstico preciso, sin relleno y psicológicamente profundo.
+  const customIds = extractEmbudoIds(embudoPersonalizado);
+  if (customIds) {
+    prompt += `
 
-# OBJETIVO
-Tu única función es extraer la verdad detrás de las palabras del "Lead" (el cliente potencial) y responder EXACTAMENTE en el formato solicitado. Debes ignorar la conversación trivial, problemas técnicos de audio y saludos. Céntrate en los dolores, objeciones, creencias limitantes y motivaciones de compra.
+## EMBUDO PERSONALIZADO DEL CLIENTE
 
-# INSTRUCCIONES DE ANÁLISIS PROFUNDO
-Para responder, debes seguir este proceso mental paso a paso:
+ATENCIÓN: Este cliente tiene un embudo de ventas personalizado. Los estados permitidos para "categoria" son los IDs de este JSON:
 
-1. Análisis del Origen (Punto 1): Busca al inicio de la llamada. ¿Qué dolor específico o curiosidad hizo que el lead llenara el formulario? No digas "quería información". Busca la emoción: ¿Miedo a quebrar? ¿Frustración con otra agencia? ¿Esperanza?
-2. Verificación de Entendimiento (Punto 2): Analiza si el "Closer" (vendedor) tuvo que explicar muchas veces lo mismo. ¿Entiende qué se vende? ¿Entiende por qué esto es único? ¿Sabe que esto es para gente como él/ella?
-3. Triángulo de la Confianza (Punto 3 - CRÍTICO): ¿Cree que el sistema funciona matemáticamente? ¿Respeta al vendedor o lo cuestiona? ¿El lead se siente incapaz?
-4. Urgencia (Punto 4): ¿Por qué AHORA? Busca indicadores de crisis financiera, fechas límite, agotamiento emocional o hartazgo.
-5. Limitaciones (Punto 5): ¿Qué excusas puso antes del cierre?
-6. Decisión (Punto 6): ¿Qué pasó al final? ¿Compró? ¿Agendó otra llamada? ¿Por qué sí o por qué no?
+${JSON.stringify(embudoPersonalizado, null, 2)}
 
-# FORMATO DE RESPUESTA OBLIGATORIO
-Responde ÚNICAMENTE con esta estructura. No añadas saludos ni conclusiones extras.
+Tu obligación estricta es clasificar el resultado usando ÚNICAMENTE uno de los IDs de este embudo: [${customIds.join(", ")}].
+NO uses los estados por defecto (Cerrada, Ofertada, No_Ofertada). Usa SOLO los IDs del embudo anterior.
+Si ninguno aplica claramente, elige el más cercano de los proporcionados.
 
-1- El lead reacciona a un anuncio o contenido y agenda por curiosidad o atracción emocional. Por qué razón decidió agendar la reunión:
-[Explica el dolor profundo o la motivación inicial detectada en el transcript]
+IMPORTANTE: Aunque uses el embudo personalizado, SIEMPRE debes extraer cash_collected y facturacion si hubo transacción.`;
+  }
 
-2- El lead entiende estos 3 parámetros?
-a) ¿Qué ofrecemos y cómo funciona?
-[Respuesta: SÍ/NO - Breve justificación de 1 línea]
+  return prompt;
+}
 
-b) ¿Qué nos hace diferentes?
-[Respuesta: SÍ/NO - Breve justificación de 1 línea]
+function buildClassifierSchema(embudoPersonalizado?: unknown) {
+  const customIds = extractEmbudoIds(embudoPersonalizado);
+  const categoriaEnum = customIds ?? [...DEFAULT_CATEGORIAS];
 
-c) ¿A quién ayudamos?
-[Respuesta: SÍ/NO - Breve justificación]
+  return jsonSchema<ClassifierResult>({
+    type: "object",
+    properties: {
+      categoria: { type: "string", enum: categoriaEnum },
+      cash_collected: { type: "string" },
+      facturacion: { type: "string" },
+    },
+    required: ["categoria", "cash_collected", "facturacion"],
+    additionalProperties: false,
+  });
+}
 
-3- El lead confía en lo que ofrecemos es cierto se puede lograr?
-a) Confianza en la oportunidad:
-[Nivel: ALTA/MEDIA/BAJA - Explicación]
+// ─── Análisis IA dinámico (reemplaza forense + lead report) ──────────────────
 
-b) Confianza en Emprendedor (Vendedor):
-[Nivel: ALTA/MEDIA/BAJA - Explicación]
+const DEFAULT_ANALYSIS_PROMPT = `Eres un Analista Senior de Ventas. Analiza la transcripción de esta videollamada y genera un diagnóstico detallado en formato Markdown que incluya:
 
-c) Confianza en sí mismos:
-[Nivel: ALTA/MEDIA/BAJA - Explicación]
+1. **Resumen ejecutivo**: Qué ocurrió en la llamada en 2-3 oraciones.
+2. **Perfil del lead**: Situación actual, dolores, motivaciones detectadas.
+3. **Desarrollo de la conversación**: Puntos clave discutidos, interés mostrado, preguntas relevantes del lead.
+4. **Resultado**: ¿Se cerró? ¿Se ofertó? ¿Qué quedó pendiente?
+5. **Recomendaciones para seguimiento**: Próximos pasos sugeridos.
 
-4- El lead tiene una urgencia por ingresar? Que lo motiva a empezar/no empezar:
-[Nivel de Urgencia + La razón principal]
+Sé directo, preciso y sin relleno. Enfócate en información accionable para el equipo de ventas.`;
 
-5- Que limitaciones tuvo por el cual no entro/no iba a entrar:
-[Lista las barreras reales: Dinero, Tiempo, Creencias Limitantes, Socio, Miedo]
+function buildAnalysisSystemPrompt(
+  promptVentas: string | null,
+  promptVideollamadas: string | null,
+): string {
+  const parts: string[] = [];
 
-6- Que pasa en el momento de tomar una decisión? decide no decide que objeciones salen porque no compraron o porque si compraron?
-[Análisis del cierre]`;
+  parts.push("Estás recibiendo la transcripción de una videollamada de ventas de una empresa.");
 
-// ─── Prompt fijo: Extractor de objeciones ────────────────────────────────────
+  if (promptVentas) {
+    parts.push(`\nCONTEXTO DE LA EMPRESA:\n${promptVentas}`);
+  }
+
+  if (promptVideollamadas) {
+    parts.push(`\nINSTRUCCIONES ESPECÍFICAS DE EVALUACIÓN:\n${promptVideollamadas}`);
+    parts.push("\nAnaliza profundamente la conversación siguiendo las instrucciones anteriores. Genera un análisis detallado y accionable en formato Markdown.");
+  } else {
+    parts.push(`\n${DEFAULT_ANALYSIS_PROMPT}`);
+  }
+
+  return parts.join("\n");
+}
+
+// ─── Objeciones (mejorado con contexto y ejemplos) ───────────────────────────
 
 const OBJECTIONS_PROMPT = `Eres un analizador experto en identificar EXCLUSIVAMENTE objeciones de venta que representan barreras reales para cerrar una venta inmediatamente.
 
-CATEGORÍAS: PRECIO, AUTORIDAD, TIEMPO, CONFIANZA, NECESIDAD, COMPARACION, CAPACIDAD, GENERAL.
+CATEGORÍAS VÁLIDAS: PRECIO, AUTORIDAD, TIEMPO, CONFIANZA, NECESIDAD, COMPARACION, CAPACIDAD, GENERAL.
 
-DEFINICIÓN: Una objeción es una declaración EXPLÍCITA del prospecto que impide cerrar la venta EN ESTE MOMENTO, expresa una barrera ESPECÍFICA para comprar y se refiere a ESTA oferta específica.
+DEFINICIÓN ESTRICTA: Una objeción es una declaración EXPLÍCITA del prospecto que:
+- Impide cerrar la venta EN ESTE MOMENTO
+- Expresa una barrera ESPECÍFICA para comprar
+- Se refiere directamente a ESTA oferta específica
 
-FILTROS CRÍTICOS - Nunca es objeción:
-- Creencias o descripciones del negocio ("mi audiencia no está en redes")
-- Problemas operativos actuales ("las ventas están bajas")
-- Coordinación de pago ("te pago a las 5", "dame los datos para pagar")
-- Interrupciones logísticas ("tengo que irme")
+FILTROS CRÍTICOS — Esto NUNCA es una objeción:
+- Preguntas logísticas: "¿a qué hora abren?", "¿dónde quedan?", "¿cómo llego?", "¿cuál es la dirección?"
+- Coordinación de pago: "te pago a las 5", "dame los datos para pagar", "envío el comprobante"
+- Preguntas informativas: "¿cuánto cuesta?", "¿qué incluye?", "¿cómo funciona?" (son consultas normales del proceso de venta, NO barreras)
+- Interrupciones: "tengo que irme", "me llaman por la otra línea", "espérame un momento"
+- Descripciones del negocio del prospecto: "mi audiencia no está en redes", "tenemos 10 empleados"
+- Problemas operativos del prospecto: "las ventas están bajas", "no tenemos suficiente tráfico"
+- Conversación trivial o saludos: "hola", "¿cómo estás?", "mucho gusto"
+- Preguntas sobre el producto que NO expresan rechazo: "¿tienen arroz con pollo?", "¿qué colores hay?"
 
-ALGORITMO: Solo extrae frases del PROSPECTO que respondan a "¿Por qué NO puedes comprar AHORA?".
+EJEMPLOS DE OBJECIONES REALES:
+- PRECIO: "Es muy caro para mí", "No tengo ese presupuesto", "Encontré algo más barato"
+- AUTORIDAD: "Tengo que consultarlo con mi socio/esposa/jefe", "Yo no tomo esa decisión solo"
+- TIEMPO: "Ahora no es buen momento", "Quizás el próximo mes", "Necesito pensarlo"
+- CONFIANZA: "No estoy seguro de que funcione", "¿Cómo sé que esto da resultados?", "He tenido malas experiencias"
+- NECESIDAD: "No creo que lo necesite", "Ya tengo algo que me funciona"
+- COMPARACION: "Estoy viendo otras opciones", "La competencia ofrece X"
+- CAPACIDAD: "No creo que pueda implementarlo", "No tengo el equipo para eso"
+
+ALGORITMO: Solo extrae frases del PROSPECTO que respondan a "¿Por qué NO puedes o NO quieres comprar AHORA?".
 
 Si no encuentras objeciones válidas, devuelve {"objeciones": []}.`;
 
-// ─── Prompt: extractor de tags internos ──────────────────────────────────────
-
-const TAGS_PROMPT = `Eres un sistema de extracción de etiquetas de videollamadas de ventas.
-
-Tu tarea es analizar la transcripción y extraer etiquetas clave (tags) que resuman los temas, objeciones, productos, insights y sentimientos más relevantes.
-
-Tipos de etiquetas a extraer:
-- Objeciones mencionadas (ej: "precio alto", "necesita consultar con socio")
-- Nombres de productos o servicios discutidos
-- Insights del prospecto (ej: "ya tiene proveedor", "busca escalar")
-- Sentimientos o actitudes detectadas (ej: "entusiasmado", "escéptico", "frustrado")
-- Puntos de dolor clave (ej: "baja conversión", "no tiene equipo")
-
-Cada etiqueta debe ser una frase corta y descriptiva en español.
-Si no encuentras etiquetas relevantes, devuelve un arreglo vacío.`;
-
-const tagsSchema = jsonSchema<{ tags_internos: string[] }>({
-  type: "object",
-  properties: {
-    tags_internos: {
-      type: "array",
-      items: { type: "string" },
-      description: "Etiquetas clave extraídas de la conversación",
-    },
-  },
-  required: ["tags_internos"],
-  additionalProperties: false,
-});
-
-// ─── Schemas JSON para generateObject ────────────────────────────────────────
-
-const classifierSchema = jsonSchema<ClassifierResult>({
-  type: "object",
-  properties: {
-    categoria: { type: "string", enum: ["Cerrada", "Ofertada", "No_Ofertada"] },
-    cash_collected: { type: "string" },
-    facturacion: { type: "string" },
-  },
-  required: ["categoria", "cash_collected", "facturacion"],
-  additionalProperties: false,
-});
+// ─── Schemas ─────────────────────────────────────────────────────────────────
 
 const objectionsSchema = jsonSchema<{ objeciones: ObjecionItem[] }>({
   type: "object",
@@ -217,43 +223,46 @@ const objectionsSchema = jsonSchema<{ objeciones: ObjecionItem[] }>({
   additionalProperties: false,
 });
 
-// ─── Función principal: 4 llamadas IA en paralelo ────────────────────────────
+// ─── Función principal: 3 llamadas IA + evaluador de reglas en paralelo ──────
 
 export async function analyzeCall(
   formattedTranscript: string,
   promptVentas: string | null,
+  promptVideollamadas: string | null,
   openaiApiKey?: string | null,
+  embudoPersonalizado?: unknown,
+  reglasEtiquetas?: unknown,
 ): Promise<CallAnalysisResult> {
   const model = resolveModel(openaiApiKey);
 
-  const [classifierSettled, forensicSettled, reportSettled, objectionsSettled, tagsSettled] =
+  const classifierSystemPrompt = withBusinessContext(
+    buildClassifierPrompt(embudoPersonalizado),
+    promptVentas,
+  );
+  const classifierSch = buildClassifierSchema(embudoPersonalizado);
+
+  const analysisSystemPrompt = buildAnalysisSystemPrompt(promptVentas, promptVideollamadas);
+
+  const [classifierSettled, analysisSettled, objectionsSettled, reglasSettled] =
     await Promise.allSettled([
-      // 1. Clasificador comercial (generateObject)
+      // 1. Clasificador comercial (dinámico con embudo)
       generateObject({
         model,
-        schema: classifierSchema,
-        system: withBusinessContext(CLASSIFIER_PROMPT, promptVentas),
+        schema: classifierSch,
+        system: classifierSystemPrompt,
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0,
       }),
 
-      // 2. Análisis forense / calificación de lead (generateText, prompt por cuenta)
+      // 2. Análisis IA (prompt_ventas + prompt_videollamadas)
       generateText({
         model,
-        system: withBusinessContext(DEFAULT_FORENSIC_PROMPT, promptVentas),
+        system: analysisSystemPrompt,
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0.3,
       }),
 
-      // 3. Lead Report 6 puntos (generateText)
-      generateText({
-        model,
-        system: withBusinessContext(LEAD_REPORT_PROMPT, promptVentas),
-        prompt: `Transcript:\n${formattedTranscript}`,
-        temperature: 0.3,
-      }),
-
-      // 4. Extractor de objeciones (generateObject)
+      // 3. Objeciones (mejorado con contexto y ejemplos)
       generateObject({
         model,
         schema: objectionsSchema,
@@ -262,14 +271,14 @@ export async function analyzeCall(
         temperature: 0,
       }),
 
-      // 5. Extractor de tags internos (generateObject)
-      generateObject({
-        model,
-        schema: tagsSchema,
-        system: withBusinessContext(TAGS_PROMPT, promptVentas),
-        prompt: `Transcript:\n${formattedTranscript}`,
-        temperature: 0,
-      }),
+      // 4. Evaluador de reglas de etiquetas
+      evaluateReglas(
+        formattedTranscript,
+        reglasEtiquetas,
+        "meeting",
+        promptVentas,
+        openaiApiKey,
+      ),
     ]);
 
   return {
@@ -277,19 +286,17 @@ export async function analyzeCall(
       classifierSettled.status === "fulfilled"
         ? classifierSettled.value.object
         : null,
-    forensicText:
-      forensicSettled.status === "fulfilled"
-        ? forensicSettled.value.text
+    analysisText:
+      analysisSettled.status === "fulfilled"
+        ? analysisSettled.value.text
         : null,
-    reportText:
-      reportSettled.status === "fulfilled" ? reportSettled.value.text : null,
     objections:
       objectionsSettled.status === "fulfilled"
         ? objectionsSettled.value.object.objeciones
         : null,
-    tagsInternos:
-      tagsSettled.status === "fulfilled"
-        ? tagsSettled.value.object.tags_internos
-        : [],
+    reglasResult:
+      reglasSettled.status === "fulfilled"
+        ? reglasSettled.value
+        : { matched_tags: [], matched_rules: [] },
   };
 }

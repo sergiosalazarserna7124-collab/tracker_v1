@@ -305,11 +305,25 @@ Si ninguno aplica claramente, elige el más cercano de los proporcionados.`;
   return prompt;
 }
 
-// ─── Helper: inyectar contexto de empresa del tenant en cualquier system prompt ─
+// ─── Helper: inyectar contexto de empresa + prompt específico de llamadas ────
 
-function withBusinessContext(basePrompt: string, promptVentas: string | null | undefined): string {
-  if (!promptVentas) return basePrompt;
-  return `Eres un analista para esta empresa: ${promptVentas}. Usa este contexto para entender el negocio y decidir si el lead cumple las condiciones del embudo.\n\n${basePrompt}`;
+function withFullContext(
+  basePrompt: string,
+  promptVentas: string | null | undefined,
+  promptLlamadas: string | null | undefined,
+): string {
+  const parts: string[] = [];
+
+  if (promptVentas) {
+    parts.push(`CONTEXTO DE LA EMPRESA:\n${promptVentas}\n\nUsa este contexto para entender el negocio y decidir si el lead cumple las condiciones del embudo.`);
+  }
+
+  if (promptLlamadas) {
+    parts.push(`INSTRUCCIONES ESPECÍFICAS PARA EVALUAR LLAMADAS TELEFÓNICAS:\n${promptLlamadas}`);
+  }
+
+  if (parts.length === 0) return basePrompt;
+  return `${parts.join("\n\n")}\n\n${basePrompt}`;
 }
 
 // ─── Clasificar llamada con IA ───────────────────────────────────────────────
@@ -319,6 +333,7 @@ export async function classifyCall(
   openaiApiKey?: string | null,
   embudoPersonalizado?: unknown,
   promptVentas?: string | null,
+  promptLlamadas?: string | null,
 ): Promise<CallClassification> {
   const { model } = resolveClients(openaiApiKey);
 
@@ -327,9 +342,10 @@ export async function classifyCall(
     ? buildClassificationSchema(customIds)
     : defaultClassificationSchema;
 
-  const systemPrompt = withBusinessContext(
+  const systemPrompt = withFullContext(
     buildSystemPrompt(embudoPersonalizado),
     promptVentas,
+    promptLlamadas,
   );
 
   const { object } = await generateObject({

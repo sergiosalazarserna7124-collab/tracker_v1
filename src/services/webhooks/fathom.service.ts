@@ -3,6 +3,7 @@ import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, eventosHuerfanos } from "../../db/schema.js";
 import {
   addContactTag,
+  addContactTags,
   addContactNote,
   searchContactByEmail,
   getGhlUser,
@@ -27,7 +28,7 @@ function formatTranscript(
  * Mapea la categoría devuelta por el clasificador IA al nombre del tag de GHL.
  */
 function categoriaToGhlTag(
-  categoria: "Cerrada" | "Ofertada" | "No_Ofertada",
+  categoria: string,
 ): string {
   const map: Record<string, string> = {
     Cerrada: GHL_TAGS.cerrada,
@@ -64,7 +65,10 @@ export async function processFathomCall(
     token_ghl: string | null;
     locationid: string | null;
     prompt_ventas: string | null;
+    prompt_videollamadas: string | null;
     openai_api_key: string | null;
+    embudo_personalizado: unknown;
+    reglas_etiquetas: unknown;
   } | null = null;
 
   try {
@@ -75,7 +79,10 @@ export async function processFathomCall(
             token_ghl: cuentas.token_ghl,
             locationid: cuentas.locationid,
             prompt_ventas: cuentas.prompt_ventas,
+            prompt_videollamadas: cuentas.prompt_videollamadas,
             openai_api_key: cuentas.openai_api_key,
+            embudo_personalizado: cuentas.embudo_personalizado,
+            reglas_etiquetas: cuentas.reglas_etiquetas,
           })
           .from(cuentas)
           .where(eq(cuentas.id_cuenta, idCuenta))
@@ -192,7 +199,14 @@ export async function processFathomCall(
 
   try {
     if (formattedTranscript) {
-      aiResult = await analyzeCall(formattedTranscript, account.prompt_ventas, account.openai_api_key);
+      aiResult = await analyzeCall(
+        formattedTranscript,
+        account.prompt_ventas,
+        account.prompt_videollamadas,
+        account.openai_api_key,
+        account.embudo_personalizado,
+        account.reglas_etiquetas,
+      );
     } else {
       console.warn(`[Fathom] Empty transcript for call ${shareUrl}. Skipping AI analysis.`);
     }
@@ -201,14 +215,14 @@ export async function processFathomCall(
   }
 
   const classifier = aiResult?.classifier ?? null;
-  const forensicText = aiResult?.forensicText ?? null;
-  const reportText = aiResult?.reportText ?? null;
+  const analysisText = aiResult?.analysisText ?? null;
   const objections = aiResult?.objections ?? null;
-  const tagsInternos = aiResult?.tagsInternos ?? [];
+  const reglasResult = aiResult?.reglasResult ?? { matched_tags: [], matched_rules: [] };
+  const tagsInternos = reglasResult.matched_tags;
 
   // ── Fase 5: Sync final (GHL tag + DB update) ─────────────────────────────
 
-  // 5a. Aplicar tag en GHL si tenemos contactId y clasificación
+  // 5a. Aplicar tag de clasificación en GHL
   if (contactId && account.token_ghl && classifier) {
     try {
       const tag = categoriaToGhlTag(classifier.categoria);
@@ -216,6 +230,18 @@ export async function processFathomCall(
     } catch (err) {
       console.error(
         `[Fathom] GHL tag error for contact ${contactId}:`,
+        err,
+      );
+    }
+  }
+
+  // 5a-bis. Aplicar tags de reglas_etiquetas en GHL
+  if (contactId && account.token_ghl && tagsInternos.length > 0) {
+    try {
+      await addContactTags(contactId, account.token_ghl, tagsInternos);
+    } catch (err) {
+      console.error(
+        `[Fathom] GHL reglas tags error for contact ${contactId}:`,
         err,
       );
     }
@@ -256,8 +282,7 @@ export async function processFathomCall(
                 cash_collected: classifier.cash_collected,
                 facturacion: classifier.facturacion,
               }),
-              ...(forensicText && { resumen_ia: forensicText }),
-              ...(reportText && { reportmarketing: reportText }),
+              ...(analysisText && { resumen_ia: analysisText }),
               ...(objections && { objeciones_ia: objections }),
               tags_internos: tagsInternos,
               ...(utmContent && { origen: utmContent }),
@@ -297,8 +322,7 @@ export async function processFathomCall(
               cash_collected: classifier.cash_collected,
               facturacion: classifier.facturacion,
             }),
-            ...(forensicText && { resumen_ia: forensicText }),
-            ...(reportText && { reportmarketing: reportText }),
+            ...(analysisText && { resumen_ia: analysisText }),
             ...(objections && { objeciones_ia: objections }),
             tags_internos: tagsInternos,
           }),
@@ -326,7 +350,8 @@ export async function processFathomCall(
       classifier?.facturacion && classifier.facturacion !== "0"
         ? `Facturación: ${classifier.facturacion}`
         : null,
-      forensicText ? `\n${forensicText}` : null,
+      analysisText ? `\n${analysisText}` : null,
+      tagsInternos.length > 0 ? `\nEtiquetas: ${tagsInternos.join(", ")}` : null,
     ]
       .filter(Boolean)
       .join("\n");

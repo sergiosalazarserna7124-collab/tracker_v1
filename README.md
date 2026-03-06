@@ -58,10 +58,71 @@ El endpoint **`POST /webhooks/retry-orphan/:id_huerfano`** permite re-lanzar un 
 
 ---
 
+## Novedades en la Versión 4.0 (IA Overhaul)
+
+La V4.0 reestructura completamente el sistema de IA del Cerebro: prompts dinámicos por canal, tags basados en reglas configurables y embudo personalizado en ambos canales.
+
+### Prompts Dinámicos por Canal
+
+Cada cuenta ahora tiene tres campos de prompt: `prompt_ventas` (contexto general de la empresa), `prompt_videollamadas` (instrucciones específicas para evaluar videollamadas Fathom) y `prompt_llamadas` (instrucciones específicas para evaluar llamadas Twilio). Los tres se inyectan en los system prompts de GPT-4o-mini según el canal. Si un prompt específico es `NULL`, se usa un análisis genérico por defecto.
+
+**Videollamadas (Fathom):** El análisis forense y el lead report de 6 puntos fueron eliminados y reemplazados por un único análisis IA dinámico construido con `prompt_ventas` + `prompt_videollamadas`. El resultado se guarda en `resumen_ia`.
+
+**Llamadas (Twilio):** El clasificador ahora recibe `prompt_ventas` + `prompt_llamadas` como contexto completo para entender el negocio al clasificar.
+
+### Tags Basados en Reglas (`reglas_etiquetas`)
+
+Los tags ya no son generados libremente por la IA. Ahora cada cuenta configura **reglas de etiquetado** en `cuentas.reglas_etiquetas` (JSONB), con estructura: `[{id, tag, source, condition, funnelStage?}]`. El nuevo servicio `reglas-evaluator.service.ts` evalúa cada regla contra la transcripción y devuelve solo los tags de las reglas que matchean. Los tags resultantes se guardan en `tags_internos` y se aplican automáticamente como tags al contacto en GHL (se crean si no existen).
+
+Ejemplo de reglas:
+```json
+[
+  {"id": "1772642753454", "tag": "arroz_con_pollo", "source": "call", "condition": "Si el usuario menciona arroz con pollo"},
+  {"id": "1772642809852", "tag": "atun_prueba", "source": "meeting", "condition": "Si el usuario menciona atún"}
+]
+```
+
+### Embudo Personalizado en Videollamadas
+
+El `embudo_personalizado` ahora también aplica para videollamadas (Fathom), no solo para llamadas (Twilio). El clasificador comercial usa los IDs del embudo como categorías permitidas, manteniendo la extracción de `cash_collected` y `facturacion`.
+
+### Nueva Columna `lead_embudo_personalizado`
+
+En `registros_de_llamada` y `log_llamadas` se agrega la columna JSONB `lead_embudo_personalizado` que guarda el resultado de clasificación del embudo por IA:
+```json
+{"estado_ia": "caliente", "embudo_origen": "embudo_personalizado", "timestamp": "2026-03-05T..."}
+```
+
+### Objeciones Mejoradas
+
+El prompt de extracción de objeciones fue mejorado con ejemplos claros de lo que NO es una objeción (preguntas logísticas, coordinación de pago, consultas informativas, interrupciones).
+
+### Nuevas Columnas en la Base de Datos
+
+| Tabla | Columna | Tipo | Descripción |
+|---|---|---|---|
+| `cuentas` | `prompt_videollamadas` | text | Instrucciones específicas para evaluar videollamadas |
+| `cuentas` | `prompt_llamadas` | text | Instrucciones específicas para evaluar llamadas |
+| `cuentas` | `reglas_etiquetas` | jsonb | Array de reglas de etiquetado `[{id, tag, source, condition, funnelStage?}]` |
+| `registros_de_llamada` | `lead_embudo_personalizado` | jsonb | Resultado de clasificación del embudo por IA |
+| `log_llamadas` | `lead_embudo_personalizado` | jsonb | Resultado de clasificación del embudo (audit trail) |
+
+### SQL de Migración
+
+```sql
+ALTER TABLE public.registros_de_llamada ADD COLUMN IF NOT EXISTS lead_embudo_personalizado jsonb;
+ALTER TABLE public.log_llamadas ADD COLUMN IF NOT EXISTS lead_embudo_personalizado jsonb;
+```
+
+Las columnas `prompt_videollamadas`, `prompt_llamadas` y `reglas_etiquetas` ya existen en la BD.
+
+---
+
 ## Tabla de Contenidos
 
 - [Novedades en la Versión 2.0](#-novedades-en-la-versión-20)
 - [Novedades en la Versión 3.0 (Enterprise Resilience)](#novedades-en-la-versión-30-enterprise-resilience)
+- [Novedades en la Versión 4.0 (IA Overhaul)](#novedades-en-la-versión-40-ia-overhaul)
 - [¿Qué hace este sistema?](#qué-hace-este-sistema)
 - [Stack Tecnológico](#stack-tecnológico)
 - [Instalación y Primeros Pasos](#instalación-y-primeros-pasos)
@@ -424,13 +485,12 @@ Recibe la grabación y transcripción de una videollamada de Fathom. El `:id_cue
   Busca contacto por email → contactId, contactName, assignedUserId
   Si hay assignedUserId → obtiene email del closer asignado
 
-[Fase 4] Motor IA — 5 llamadas GPT-4o-mini en PARALELO (Promise.allSettled)
-  1. Clasificador comercial → categoria + cash_collected + facturacion
-  2. Análisis forense → resumen_ia (contexto prompt_ventas inyectado al inicio)
-  3. Lead Report 6 puntos → reportmarketing
-  4. Extractor de objeciones → objeciones_ia (array JSON)
-  5. Extractor de tags internos → tags_internos (V2)
-  *(V3: todos los prompts reciben el contexto de empresa al inicio.)*
+[Fase 4] Motor IA — 4 llamadas GPT-4o-mini en PARALELO (Promise.allSettled)
+  1. Clasificador comercial (embudo dinámico) → categoria + cash_collected + facturacion
+  2. Análisis IA dinámico (prompt_ventas + prompt_videollamadas) → resumen_ia
+  3. Extractor de objeciones (mejorado con contexto empresa) → objeciones_ia
+  4. Evaluador de reglas_etiquetas (source=meeting) → tags_internos
+  *(V4: análisis forense y lead report eliminados. Tags basados en reglas configurables.)*
 
 [Fase 5] Sync Final
   5a. Tag GHL según categoría IA (cerradaautoia / ofertadaautoia / noofertadaautoia)
@@ -818,7 +878,8 @@ src/
 │   │   ├── twilio.service.ts          # pdte, followUpPath, effectivePath + log_llamadas + huérfanos (V3)
 │   │   └── orphan.service.ts          # retryOrphanEvent: parchea payload, resuelve, re-despacha (V3)
 │   ├── ai/
-│   │   ├── call-analysis.service.ts   # 4 IAs en paralelo para Fathom
+│   │   ├── call-analysis.service.ts   # 4 IAs en paralelo para Fathom (V4: dinámico)
+│   │   ├── reglas-evaluator.service.ts # Evaluador de reglas_etiquetas (V4)
 │   │   └── call-classification.service.ts  # Whisper + GPT-4o-mini para llamadas
 │   └── cron/
 │       └── daily-tasks.service.ts     # Batch no-show + GHL tagging con rate limit

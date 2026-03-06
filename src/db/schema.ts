@@ -54,6 +54,8 @@ export const llamadas = pgTable("registros_de_llamada", {
   id_user_ghl: text("id_user_ghl"),
   // ── V2: etiquetado interno omnicanal ──────────────────────────────────────
   tags_internos: jsonb("tags_internos"),
+  // ── V4: resultado de clasificación del embudo personalizado por IA ─────────
+  lead_embudo_personalizado: jsonb("lead_embudo_personalizado"),
 });
 
 /**
@@ -82,6 +84,8 @@ export const logLlamadas = pgTable("log_llamadas", {
   ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
   // ── V2: etiquetado interno omnicanal ──────────────────────────────────────
   tags_internos: jsonb("tags_internos"),
+  // ── V4: resultado de clasificación del embudo personalizado por IA ─────────
+  lead_embudo_personalizado: jsonb("lead_embudo_personalizado"),
 });
 
 /**
@@ -103,6 +107,10 @@ export const cuentas = pgTable("cuentas", {
   tipos_eventos_config: jsonb("tipos_eventos_config"),
   // ── V3: configuración de roles por tenant ─────────────────────────────────
   roles_config: jsonb("roles_config"),
+  // ── V4: prompts específicos por canal + reglas de etiquetas ────────────────
+  prompt_videollamadas: text("prompt_videollamadas"),
+  prompt_llamadas: text("prompt_llamadas"),
+  reglas_etiquetas: jsonb("reglas_etiquetas"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

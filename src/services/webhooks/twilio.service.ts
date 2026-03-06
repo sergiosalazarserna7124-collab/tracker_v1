@@ -3,6 +3,7 @@ import { drizzleDb } from "../../config/drizzle.js";
 import { llamadas, logLlamadas, eventosHuerfanos } from "../../db/schema.js";
 import {
   addContactTag,
+  addContactTags,
   addContactNote,
   getAccountByLocationId,
   getAccountFullByLocationId,
@@ -20,6 +21,7 @@ import {
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
+import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
 import type { ServiceResult } from "../../types/index.js";
@@ -56,6 +58,7 @@ interface LogEntry {
   iadesc?: string | null;
   speedToLead?: string | null;
   tagsInternos?: string[] | null;
+  leadEmbudoPersonalizado?: Record<string, unknown> | null;
 }
 
 async function insertLogEntry(entry: LogEntry): Promise<void> {
@@ -80,6 +83,7 @@ async function insertLogEntry(entry: LogEntry): Promise<void> {
           creativo_origen: entry.fields.creativoOrigen,
           speed_to_lead: entry.speedToLead ?? null,
           tags_internos: entry.tagsInternos ?? [],
+          ...(entry.leadEmbudoPersonalizado && { lead_embudo_personalizado: entry.leadEmbudoPersonalizado }),
         }),
       { label: "insertLogEntry" },
     );
@@ -142,8 +146,10 @@ async function resolveAccountFull(
   openaiApiKey: string | null;
   embudoPersonalizado: unknown;
   promptVentas: string | null;
+  promptLlamadas: string | null;
+  reglasEtiquetas: unknown;
 }> {
-  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null };
+  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null };
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
     return empty;
@@ -162,6 +168,8 @@ async function resolveAccountFull(
       openaiApiKey: account.openai_api_key,
       embudoPersonalizado: account.embudo_personalizado,
       promptVentas: account.prompt_ventas,
+      promptLlamadas: account.prompt_llamadas,
+      reglasEtiquetas: account.reglas_etiquetas,
     };
   } catch (err) {
     console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
@@ -490,7 +498,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     return saveOrphanEvent(body, idCuenta, "Effective");
   }
 
-  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas } =
+  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas } =
     await resolveAccountFull(fields.locationId, "Effective");
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
@@ -569,7 +577,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   let classification: CallClassification;
   try {
-    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado, promptVentas);
+    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas);
   } catch (err) {
     console.error("[Effective] Error clasificando llamada con IA:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, transcript, null, "Effective");
@@ -598,6 +606,10 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     callSid,
     transcript,
     classification,
+    openaiApiKey,
+    embudoPersonalizado,
+    promptVentas,
+    reglasEtiquetas,
   );
 }
 
@@ -610,12 +622,37 @@ async function effectivePath(
   callSid: string | null,
   transcript: string,
   classification: CallClassification,
+  openaiApiKey?: string | null,
+  embudoPersonalizado?: unknown,
+  promptVentas?: string | null,
+  reglasEtiquetas?: unknown,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
   const aiEstado = classification.estado ?? "seguimiento";
   const iadesc = classification.iadesc ?? null;
-  const tagsInternos = classification.tags_internos ?? [];
+
+  // Evaluar reglas de etiquetas en paralelo (best-effort)
+  let reglasMatchedTags: string[] = [];
+  try {
+    const reglasResult = await evaluateReglas(
+      transcript,
+      reglasEtiquetas,
+      "call",
+      promptVentas ?? null,
+      openaiApiKey,
+    );
+    reglasMatchedTags = reglasResult.matched_tags;
+  } catch (err) {
+    console.error("[Effective] Error evaluando reglas de etiquetas:", err);
+  }
+
+  const tagsInternos = reglasMatchedTags;
+
+  // Construir objeto lead_embudo_personalizado si hay embudo configurado
+  const leadEmbudoData = embudoPersonalizado
+    ? { estado_ia: aiEstado, embudo_origen: "embudo_personalizado", timestamp: now.toISOString() }
+    : null;
 
   // Buscar el registro MAS RECIENTE (sin filtrar por estado)
   type ExistingRow = {
@@ -710,6 +747,7 @@ async function effectivePath(
               trancription: transcript,
               iadescripcion: iadesc,
               tags_internos: tagsInternos,
+              ...(leadEmbudoData && { lead_embudo_personalizado: leadEmbudoData }),
               ...(callSid && { callsid: callSid }),
               ...(idUserGhl && { id_user_ghl: idUserGhl }),
               ...(stl !== null && { speed_to_lead: stl }),
@@ -748,6 +786,7 @@ async function effectivePath(
               iadescripcion: iadesc,
               id_user_ghl: idUserGhl,
               tags_internos: tagsInternos,
+              ...(leadEmbudoData && { lead_embudo_personalizado: leadEmbudoData }),
             })
             .returning({ id_registro: llamadas.id_registro }),
         { label: "effectivePath/insert" },
@@ -760,13 +799,22 @@ async function effectivePath(
     }
   }
 
-  // Tag dinámico
+  // Tag dinámico de clasificación
   const tag = mapEstadoToTag(aiEstado);
   if (contactId && tokenGhl) {
     try {
       await addContactTag(contactId, tokenGhl, tag);
     } catch (err) {
       console.error(`[Effective] Error aplicando tag GHL para contactId="${contactId}":`, err);
+    }
+
+    // Tags de reglas_etiquetas
+    if (tagsInternos.length > 0) {
+      try {
+        await addContactTags(contactId, tokenGhl, tagsInternos);
+      } catch (err) {
+        console.error(`[Effective] Error aplicando tags de reglas en GHL:`, err);
+      }
     }
 
     // Nota 1: Descripción IA
@@ -814,6 +862,7 @@ async function effectivePath(
     iadesc,
     speedToLead: stlForLog,
     tagsInternos,
+    leadEmbudoPersonalizado: leadEmbudoData,
   });
 
   return {

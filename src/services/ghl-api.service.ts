@@ -35,6 +35,8 @@ export interface CuentaFullRow extends CuentaRow {
   openai_api_key: string | null;
   embudo_personalizado: unknown;
   prompt_ventas: string | null;
+  prompt_llamadas: string | null;
+  reglas_etiquetas: unknown;
 }
 
 export interface GhlContact {
@@ -105,6 +107,8 @@ export async function getAccountFullByLocationId(locationId: string): Promise<Cu
           openai_api_key: cuentas.openai_api_key,
           embudo_personalizado: cuentas.embudo_personalizado,
           prompt_ventas: cuentas.prompt_ventas,
+          prompt_llamadas: cuentas.prompt_llamadas,
+          reglas_etiquetas: cuentas.reglas_etiquetas,
         })
         .from(cuentas)
         .where(eq(cuentas.locationid, locationId))
@@ -270,5 +274,39 @@ export async function addContactNote(
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`GHL notes API responded ${response.status}: ${text}`);
+  }
+}
+
+// ─── POST a GHL API: agregar múltiples tags al contacto en una sola llamada ──
+
+export async function addContactTags(
+  contactId: string,
+  bearerToken: string,
+  tags: string[],
+): Promise<void> {
+  if (!tags.length) return;
+
+  const url = `https://services.leadconnectorhq.com/contacts/${contactId}/tags`;
+  const requestBody = JSON.stringify({ tags });
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+      body: requestBody,
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error(`[GHL addContactTags] ERROR ${response.status}:`, text);
+    throw new Error(`GHL tag API responded ${response.status}: ${text}`);
   }
 }
