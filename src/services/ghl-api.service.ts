@@ -68,6 +68,8 @@ export const GHL_TAGS = {
   interesado_llamada: "interesadollamadaautoia",
   programado_llamada: "programadollamadaautoia",
   no_interesado_llamada: "no_interesadollamadaautoia",
+  contestada_llamada: "contestada_autoia_llamada",
+  videollamada_efectiva: "videollamada_efectiva_autoia",
 } as const;
 
 // ─── Consulta a BD: buscar cuenta por locationid (match exacto) ───────────────
@@ -308,5 +310,86 @@ export async function addContactTags(
     const text = await response.text();
     console.error(`[GHL addContactTags] ERROR ${response.status}:`, text);
     throw new Error(`GHL tag API responded ${response.status}: ${text}`);
+  }
+}
+
+// ─── POST a GHL API: crear tag en una location ──────────────────────────────
+
+export async function createLocationTag(
+  locationId: string,
+  bearerToken: string,
+  tagName: string,
+): Promise<void> {
+  const url = `https://services.leadconnectorhq.com/locations/${locationId}/tags`;
+  const requestBody = JSON.stringify({ name: tagName });
+
+  console.log(`[GHL createLocationTag] Creating tag "${tagName}" in location ${locationId}`);
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+      body: requestBody,
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.warn(`[GHL createLocationTag] Failed to create tag "${tagName}": ${response.status} ${text}`);
+  }
+}
+
+// ─── Safe wrappers: aplica tag y, si falla, intenta crearlo primero ──────────
+
+export async function safeAddContactTag(
+  contactId: string,
+  bearerToken: string,
+  tag: string,
+  locationId?: string | null,
+): Promise<void> {
+  try {
+    await addContactTag(contactId, bearerToken, tag);
+  } catch (err) {
+    if (locationId) {
+      console.warn(`[GHL safeAddContactTag] Tag "${tag}" failed, attempting to create it first`);
+      try {
+        await createLocationTag(locationId, bearerToken, tag);
+      } catch { /* best-effort */ }
+      await addContactTag(contactId, bearerToken, tag);
+    } else {
+      throw err;
+    }
+  }
+}
+
+export async function safeAddContactTags(
+  contactId: string,
+  bearerToken: string,
+  tags: string[],
+  locationId?: string | null,
+): Promise<void> {
+  if (!tags.length) return;
+
+  try {
+    await addContactTags(contactId, bearerToken, tags);
+  } catch (err) {
+    if (locationId) {
+      console.warn(`[GHL safeAddContactTags] Bulk tag failed, creating tags individually first`);
+      for (const tag of tags) {
+        try {
+          await createLocationTag(locationId, bearerToken, tag);
+        } catch { /* best-effort */ }
+      }
+      await addContactTags(contactId, bearerToken, tags);
+    } else {
+      throw err;
+    }
   }
 }

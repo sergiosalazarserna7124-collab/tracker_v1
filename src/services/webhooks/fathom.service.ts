@@ -2,11 +2,11 @@ import { eq, and, desc } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, eventosHuerfanos } from "../../db/schema.js";
 import {
-  addContactTag,
-  addContactTags,
   addContactNote,
   searchContactByEmail,
   getGhlUser,
+  safeAddContactTag,
+  safeAddContactTags,
   GHL_TAGS,
 } from "../ghl-api.service.js";
 import { analyzeCall } from "../ai/call-analysis.service.js";
@@ -222,11 +222,13 @@ export async function processFathomCall(
 
   // ── Fase 5: Sync final (GHL tag + DB update) ─────────────────────────────
 
+  const locationId = account.locationid;
+
   // 5a. Aplicar tag de clasificación en GHL
   if (contactId && account.token_ghl && classifier) {
     try {
       const tag = categoriaToGhlTag(classifier.categoria);
-      await addContactTag(contactId, account.token_ghl, tag);
+      await safeAddContactTag(contactId, account.token_ghl, tag, locationId);
     } catch (err) {
       console.error(
         `[Fathom] GHL tag error for contact ${contactId}:`,
@@ -235,10 +237,22 @@ export async function processFathomCall(
     }
   }
 
-  // 5a-bis. Aplicar tags de reglas_etiquetas en GHL
+  // 5a-bis. Tag de videollamada efectiva (hubo transcripción procesada)
+  if (contactId && account.token_ghl && formattedTranscript) {
+    try {
+      await safeAddContactTag(contactId, account.token_ghl, GHL_TAGS.videollamada_efectiva, locationId);
+    } catch (err) {
+      console.error(
+        `[Fathom] GHL videollamada_efectiva tag error for contact ${contactId}:`,
+        err,
+      );
+    }
+  }
+
+  // 5a-ter. Aplicar tags de reglas_etiquetas en GHL
   if (contactId && account.token_ghl && tagsInternos.length > 0) {
     try {
-      await addContactTags(contactId, account.token_ghl, tagsInternos);
+      await safeAddContactTags(contactId, account.token_ghl, tagsInternos, locationId);
     } catch (err) {
       console.error(
         `[Fathom] GHL reglas tags error for contact ${contactId}:`,

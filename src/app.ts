@@ -8,6 +8,7 @@ import { twilioWebhookRoute } from "./routes/webhooks/twilio.route.js";
 import { cronDailyTasksRoute } from "./routes/cron/daily-tasks.route.js";
 import { externalDataRoute } from "./routes/webhooks/external-data.route.js";
 import { orphanRoute } from "./routes/webhooks/orphan.route.js";
+import { reasignacionRoute } from "./routes/webhooks/reasignacion.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -24,6 +25,7 @@ export async function buildApp() {
   await app.register(twilioWebhookRoute, { prefix: "/webhooks" });
   await app.register(externalDataRoute, { prefix: "/webhooks" });
   await app.register(orphanRoute, { prefix: "/webhooks" });
+  await app.register(reasignacionRoute, { prefix: "/webhooks" });
   await app.register(cronDailyTasksRoute, { prefix: "/cron" });
 
   return app;

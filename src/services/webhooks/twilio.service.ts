@@ -2,11 +2,11 @@ import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { llamadas, logLlamadas, eventosHuerfanos } from "../../db/schema.js";
 import {
-  addContactTag,
-  addContactTags,
   addContactNote,
   getAccountByLocationId,
   getAccountFullByLocationId,
+  safeAddContactTag,
+  safeAddContactTags,
   GHL_TAGS,
   type CuentaFullRow,
 } from "../ghl-api.service.js";
@@ -184,6 +184,7 @@ async function applyGhlTagAndNote(
   tokenGhl: string | null,
   tag: string,
   label: string,
+  locationId?: string | null,
 ): Promise<void> {
   if (!contactId || !tokenGhl) {
     if (!contactId) console.warn(`[${label}] Sin contact_id; no se puede taggear/notar en GHL`);
@@ -192,7 +193,7 @@ async function applyGhlTagAndNote(
   }
 
   try {
-    await addContactTag(contactId, tokenGhl, tag);
+    await safeAddContactTag(contactId, tokenGhl, tag, locationId);
   } catch (err) {
     console.error(`[${label}] Error aplicando tag GHL para contactId="${contactId}":`, err);
   }
@@ -359,9 +360,8 @@ async function followUpPath(
     }
   }
 
-  await applyGhlTagAndNote(contactId, tokenGhl, GHL_TAGS.no_contestada_llamada, label);
+  await applyGhlTagAndNote(contactId, tokenGhl, GHL_TAGS.no_contestada_llamada, label, fields.locationId);
 
-  // Determinar tipo_evento para el log según contexto
   const tipoEvento = label.includes("buzon")
     ? "buzon"
     : "no_contesto";
@@ -799,25 +799,30 @@ async function effectivePath(
     }
   }
 
-  // Tag dinámico de clasificación
+  // Tag dinámico de clasificación + tag de llamada contestada
   const tag = mapEstadoToTag(aiEstado);
+  const locationId = fields.locationId;
   if (contactId && tokenGhl) {
     try {
-      await addContactTag(contactId, tokenGhl, tag);
+      await safeAddContactTag(contactId, tokenGhl, tag, locationId);
     } catch (err) {
       console.error(`[Effective] Error aplicando tag GHL para contactId="${contactId}":`, err);
     }
 
-    // Tags de reglas_etiquetas
+    try {
+      await safeAddContactTag(contactId, tokenGhl, GHL_TAGS.contestada_llamada, locationId);
+    } catch (err) {
+      console.error(`[Effective] Error aplicando tag contestada_llamada en GHL:`, err);
+    }
+
     if (tagsInternos.length > 0) {
       try {
-        await addContactTags(contactId, tokenGhl, tagsInternos);
+        await safeAddContactTags(contactId, tokenGhl, tagsInternos, locationId);
       } catch (err) {
         console.error(`[Effective] Error aplicando tags de reglas en GHL:`, err);
       }
     }
 
-    // Nota 1: Descripción IA
     if (iadesc) {
       try {
         await addContactNote(
@@ -830,7 +835,6 @@ async function effectivePath(
       }
     }
 
-    // Nota 2: Transcripción completa
     if (transcript) {
       try {
         await addContactNote(
