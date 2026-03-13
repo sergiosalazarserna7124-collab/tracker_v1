@@ -67,7 +67,7 @@ Recibirás una transcripción de una llamada telefónica. Debes analizarla y dev
 
 Un buzón de voz REAL es cuando:
 - NO hay ningún humano que responda en tiempo real durante toda la llamada
-- Solo se escucha un mensaje pregrabado que indica dejar un mensaje
+- Solo se escucha un mensaje pregrabado o automático que indica dejar un mensaje / identificarse
 - Ejemplos de frases típicas de buzón REAL:
   - "Deja tu mensaje después del tono"
   - "El número que usted marcó no está disponible"
@@ -78,17 +78,21 @@ Un buzón de voz REAL es cuando:
   - "Leave your name and number"
   - "No se encuentra disponible, deje su mensaje"
   - "Hi, you've reached [nombre], I can't come to the phone right now"
+  - **iPhone Live Voicemail / Call Screening (mensaje automático largo):**
+    - "How to reach [Nombre] at [Lugar] is your name and phone number"
+    - "Ustedes van a ver a [Nombre] con [Lugar]"
+    - "To reach [Nombre] at [Lugar], please state your name and phone number"
+    - Si la transcripción es SOLO o mayormente este tipo de mensaje y NUNCA habla la persona llamada para tener una conversación real → buzon: true
   - Cualquier variación en INGLÉS o ESPAÑOL de mensajes automáticos de buzón
 
 ### ¿QUÉ NO ES UN BUZÓN DE VOZ? (buzon: false)
 
 CRÍTICO - LEE CON ATENCIÓN:
 
-1. **FUNCIÓN DE FILTRADO DE iPHONE (Call Screening)**:
-   - El iPhone tiene una función donde al principio puede sonar como buzón
-   - Dice cosas como: "¿Quién llama?" o "El teléfono está filtrando esta llamada" o "Who is calling?"
-   - PERO luego la persona CONTESTA y hay conversación real
-   - Si después del "buzón inicial" hay una conversación humana real → buzon: false
+1. **FUNCIÓN DE FILTRADO DE iPHONE (Call Screening) — DOS CASOS**:
+   - **Caso A (mensaje corto + persona contesta):** El iPhone puede decir "¿Quién llama?" / "Who is calling?" y LUEGO la persona CONTESTA y hay conversación real → buzon: false.
+   - **Caso B (mensaje largo automático SIN conversación):** El iPhone puede leer un mensaje largo tipo "How to reach Liza at Botanical Santo Nino is your name and phone number. Ustedes van a ver a Liza con Botanical Santo Nino." Si la transcripción contiene SOLO (o casi solo) ese tipo de mensaje automático y la persona llamada NUNCA habla para tener un diálogo real → buzon: true (es buzón/filtrado automático, NO efectiva).
+   - Regla: si NO hay en ningún momento voz de la persona llamada manteniendo una conversación (preguntas, respuestas, intercambio), es buzón.
 
 2. **PERSONA QUE CONTESTA**:
    - Si en CUALQUIER momento hay un humano que responde y conversa → buzon: false
@@ -212,7 +216,10 @@ Una descripción BREVE y ÚTIL de la llamada. Máximo 2-3 oraciones.
 → Evalúa el nivel de interés. Si fue tibio sin compromiso → podría ser "seguimiento". Si mostró interés activo → "interesado"
 
 ### Caso: Secretaria o recepcionista contesta
-→ buzon: false. Clasifica según el resultado de la conversación con la secretaria.`;
+→ buzon: false. Clasifica según el resultado de la conversación con la secretaria.
+
+### Caso: iPhone Live Voicemail / mensaje automático largo sin respuesta humana
+Si la transcripción dice cosas como "How to reach Liza at Botanical Santo Nino is your name and phone number. Ustedes van a ver a Liza con Botanical Santo Nino." y NO hay después ninguna voz de la persona llamada manteniendo una conversación (solo ese mensaje automático o silencio), es buzón automático → buzon: true, estado: "seguimiento". NO clasificar como efectiva.`;
 
 // ─── Extracción segura de IDs desde embudo_personalizado ─────────────────────
 
