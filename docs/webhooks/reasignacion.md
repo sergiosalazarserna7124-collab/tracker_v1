@@ -2,7 +2,7 @@
 
 **POST** `/webhooks/reasignacion`
 
-Recibe desde GHL los datos de una reasignación de closer. Si faltan nombre o correo del closer, el evento se guarda como huérfano para revisión.
+Recibe desde GHL los datos de una reasignación de closer. Si faltan datos del closer (nombre o correo) o del lead (nombre o teléfono), el evento se guarda como huérfano para revisión.
 
 ---
 
@@ -33,10 +33,10 @@ Envía un JSON con `customData` conteniendo los siguientes campos. Puede llegar 
 | `locationid`   | Sí        | ID de la location en GHL (para resolver la cuenta). |
 | `correocloser` | Sí*       | Email del closer asignado. Si falta → se guarda como evento huérfano. |
 | `nombrecloser` | Sí*       | Nombre del closer. Si falta → se guarda como evento huérfano. |
-| `nombre`       | No        | Nombre del lead/customer. Se guarda en `nombre_lead`. Si no se envía, en registros nuevos se usa "sin nombre". |
-| `telefono`     | No        | Teléfono del lead. Se guarda en `phone_raw_format`. |
+| `nombre`       | Sí*       | Nombre del lead/customer. Se guarda en `nombre_lead`. Si falta → evento huérfano. |
+| `telefono`     | Sí*       | Teléfono del lead. Se guarda en `phone_raw_format`. Si falta → evento huérfano. |
 
-\* Si falta **correocloser** o **nombrecloser**, el webhook responde 200 pero no actualiza/crea registro de llamada; guarda el payload en `eventos_huerfanos` con `origen: "reasignacion"` y `motivo` indicando qué faltó.
+\* Si falta **correocloser**, **nombrecloser**, **nombre** (del lead) o **telefono** (del lead), el webhook responde 200 pero no actualiza/crea registro; guarda el payload en `eventos_huerfanos` con `origen: "reasignacion"` y `motivo` indicando qué campos faltaron.
 
 ---
 
@@ -45,7 +45,7 @@ Envía un JSON con `customData` conteniendo los siguientes campos. Puede llegar 
 Los huérfanos de reasignación están en la tabla `eventos_huerfanos` con:
 
 - `origen`: `"reasignacion"`
-- `motivo`: p. ej. `"Reasignación incompleta: falta correo del closer"` o `"Reasignación incompleta: falta nombre del closer"` o ambos
+- `motivo`: p. ej. `"Reasignación incompleta: falta correo del closer, nombre del lead"` (lista los campos que faltaron: correo/nombre del closer, nombre/teléfono del lead)
 - `payload_original`: el JSON completo que envió GHL
 
 ### Estructura sugerida para listar y corregir

@@ -65,11 +65,15 @@ export async function processReasignacion(
     }
   }
 
-  if (!fields.closerMail || !fields.nombreCloser) {
+  const faltanCloser = !fields.closerMail || !fields.nombreCloser;
+  const faltanLead = !fields.nombreLead || !fields.telefonoLead;
+  if (faltanCloser || faltanLead) {
     const motivos: string[] = [];
     if (!fields.closerMail) motivos.push("correo del closer");
     if (!fields.nombreCloser) motivos.push("nombre del closer");
-    const motivo = `Reasignación incompleta: falta ${motivos.join(" y ")}`;
+    if (!fields.nombreLead) motivos.push("nombre del lead");
+    if (!fields.telefonoLead) motivos.push("teléfono del lead");
+    const motivo = `Reasignación incompleta: falta ${motivos.join(", ")}`;
     console.warn(`[${label}] ${motivo}. Guardando como huérfano.`);
     return saveReasignacionOrphan(body, idCuenta, motivo);
   }
