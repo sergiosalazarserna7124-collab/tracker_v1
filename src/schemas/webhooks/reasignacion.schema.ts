@@ -3,9 +3,11 @@ import { Type, type Static } from "@sinclair/typebox";
 const ReasignacionCustomData = Type.Object(
   {
     idusuario: Type.String(),
-    correocloser: Type.String(),
-    nombrecloser: Type.String(),
     locationid: Type.String(),
+    correocloser: Type.Optional(Type.String()),
+    nombrecloser: Type.Optional(Type.String()),
+    nombre: Type.Optional(Type.String()),
+    telefono: Type.Optional(Type.String()),
   },
   { additionalProperties: true },
 );

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
-import { llamadas } from "../../db/schema.js";
+import { llamadas, eventosHuerfanos } from "../../db/schema.js";
 import { getAccountByLocationId } from "../ghl-api.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { ReasignacionBodyPayload } from "../../schemas/webhooks/reasignacion.schema.js";
@@ -17,11 +17,32 @@ const ESTADOS_REASIGNABLES = [
 function extractFields(body: ReasignacionBodyPayload) {
   const cd = body.customData;
   return {
-    idUserGhl: cd.idusuario.trim(),
-    closerMail: cd.correocloser.trim(),
-    nombreCloser: cd.nombrecloser.trim(),
-    locationId: cd.locationid.trim(),
+    idUserGhl: (cd.idusuario ?? "").trim(),
+    locationId: (cd.locationid ?? "").trim(),
+    closerMail: (cd.correocloser ?? "").trim(),
+    nombreCloser: (cd.nombrecloser ?? "").trim(),
+    nombreLead: (cd.nombre ?? "").trim(),
+    telefonoLead: (cd.telefono ?? "").trim(),
   };
+}
+
+async function saveReasignacionOrphan(
+  body: ReasignacionBodyPayload,
+  idCuenta: number | null,
+  motivo: string,
+): Promise<ServiceResult> {
+  try {
+    await drizzleDb.insert(eventosHuerfanos).values({
+      id_cuenta: idCuenta,
+      origen: "reasignacion",
+      motivo,
+      payload_original: body,
+      estado: "pendiente",
+    });
+  } catch (err) {
+    console.error("[Reasignacion] Error guardando evento huérfano:", err);
+  }
+  return { success: true, data: { path: "orphan" } };
 }
 
 export async function processReasignacion(
@@ -42,6 +63,15 @@ export async function processReasignacion(
     } catch (err) {
       console.error(`[${label}] Error buscando cuenta para locationId="${fields.locationId}":`, err);
     }
+  }
+
+  if (!fields.closerMail || !fields.nombreCloser) {
+    const motivos: string[] = [];
+    if (!fields.closerMail) motivos.push("correo del closer");
+    if (!fields.nombreCloser) motivos.push("nombre del closer");
+    const motivo = `Reasignación incompleta: falta ${motivos.join(" y ")}`;
+    console.warn(`[${label}] ${motivo}. Guardando como huérfano.`);
+    return saveReasignacionOrphan(body, idCuenta, motivo);
   }
 
   type ExistingRow = {
@@ -90,13 +120,15 @@ export async function processReasignacion(
             .set({
               closer_mail: fields.closerMail,
               nombre_closer: fields.nombreCloser,
+              ...(fields.nombreLead && { nombre_lead: fields.nombreLead }),
+              ...(fields.telefonoLead && { phone_raw_format: fields.telefonoLead }),
             })
             .where(eq(llamadas.id_registro, existing!.id_registro)),
         { label: `${label}/update` },
       );
 
       console.info(
-        `[${label}] Updated closer on record ${existing.id_registro} (estado="${existing.estado}") → closer="${fields.nombreCloser}" <${fields.closerMail}>`,
+        `[${label}] Updated record ${existing.id_registro} (estado="${existing.estado}") → closer="${fields.nombreCloser}" <${fields.closerMail}>`,
       );
 
       return {
@@ -113,6 +145,7 @@ export async function processReasignacion(
     }
   }
 
+  const nombreLead = fields.nombreLead || "sin nombre";
   try {
     const [inserted] = await withRetry(
       () =>
@@ -121,7 +154,8 @@ export async function processReasignacion(
           .values({
             fecha_evento: new Date(),
             id_cuenta: idCuenta,
-            nombre_lead: "sin nombre",
+            nombre_lead: nombreLead,
+            phone_raw_format: fields.telefonoLead || null,
             estado: "pdte",
             closer_mail: fields.closerMail,
             nombre_closer: fields.nombreCloser,
@@ -135,7 +169,7 @@ export async function processReasignacion(
     const idRegistro = inserted?.id_registro ?? null;
 
     console.info(
-      `[${label}] Created new record ${idRegistro} for idUserGhl="${fields.idUserGhl}" → closer="${fields.nombreCloser}" <${fields.closerMail}>`,
+      `[${label}] Created record ${idRegistro} for idUserGhl="${fields.idUserGhl}" → lead="${nombreLead}" closer="${fields.nombreCloser}" <${fields.closerMail}>`,
     );
 
     return {
