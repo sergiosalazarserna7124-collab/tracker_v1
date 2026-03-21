@@ -584,6 +584,8 @@ Endpoint autenticado por API key para que el frontend consulte reuniones de Fath
 }
 ```
 
+Los campos `teams`, `recorded_by` y `calendar_invitees_domains` son opcionales: puedes **omitirlos** o enviarlos como **`[]`** para no aplicar ese filtro (cuentas Fathom personales sin “teams”).
+
 #### Respuesta 200
 
 ```json

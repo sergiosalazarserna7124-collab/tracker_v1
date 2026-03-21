@@ -45,9 +45,10 @@ export const VideoRecoveryPreviewBody = Type.Object({
   from: Type.String({ minLength: 1 }),
   to: Type.String({ minLength: 1 }),
   timezone: Type.String({ minLength: 1 }),
-  teams: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
-  recorded_by: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
-  calendar_invitees_domains: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+  // Arrays vacíos = "sin filtro" (el front puede enviar [] u omitir la clave).
+  teams: Type.Optional(Type.Array(Type.String())),
+  recorded_by: Type.Optional(Type.Array(Type.String())),
+  calendar_invitees_domains: Type.Optional(Type.Array(Type.String())),
   calendar_invitees_domains_type: Type.Optional(
     Type.Union([
       Type.Literal("all"),
