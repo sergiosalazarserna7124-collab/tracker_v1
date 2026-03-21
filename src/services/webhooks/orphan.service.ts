@@ -43,7 +43,9 @@ export async function retryOrphanEvent(
       .set({ estado: "resuelto", updated_at: new Date() })
       .where(eq(eventosHuerfanos.id_huerfano, idHuerfano));
 
-    processFathomCall(orphan.id_cuenta ?? 0, payload as never).catch((err) => {
+    processFathomCall(orphan.id_cuenta ?? 0, payload as never, {
+      ingestionSource: "orphan_retry",
+    }).catch((err) => {
       console.error(`[OrphanRetry] Error re-procesando Fathom huérfano ${idHuerfano}:`, err);
     });
 

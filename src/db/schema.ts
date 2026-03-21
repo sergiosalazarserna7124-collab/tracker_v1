@@ -27,6 +27,11 @@ export const agendas = pgTable("resumenes_diarios_agendas", {
   reportmarketing: text("reportmarketing"),
   // ── V2: etiquetado interno omnicanal ──────────────────────────────────────
   tags_internos: jsonb("tags_internos"),
+  // ── V5: trazabilidad de ingestión Fathom (recording_id dedupe) ────────────
+  fathom_recording_id: text("fathom_recording_id"),
+  fathom_share_url: text("fathom_share_url"),
+  fathom_processed_at: timestamp("fathom_processed_at", { withTimezone: true }),
+  fathom_ingestion_source: text("fathom_ingestion_source"),
 });
 
 /**
@@ -154,4 +159,11 @@ export const eventosHuerfanos = pgTable("eventos_huerfanos", {
   estado: text("estado").default("pendiente"),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+// ── Tabla de usuarios del dashboard (selección de API key Fathom) ────────────
+export const usuariosDashboard = pgTable("usuarios_dashboard", {
+  id_evento: text("id_evento").primaryKey(),
+  id_cuenta: integer("id_cuenta").notNull(),
+  fathom: text("fathom"),
 });

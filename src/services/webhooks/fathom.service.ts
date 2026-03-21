@@ -13,6 +13,11 @@ import { analyzeCall } from "../ai/call-analysis.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { FathomEventBody } from "../../schemas/webhooks/fathom.schema.js";
 
+interface ProcessFathomCallOptions {
+  ingestionSource?: "webhook" | "quick_recovery" | "orphan_retry";
+  allowDuplicateRecordingId?: boolean;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatTranscript(
@@ -43,9 +48,15 @@ function categoriaToGhlTag(
 export async function processFathomCall(
   idCuenta: number,
   payload: FathomEventBody,
+  options: ProcessFathomCallOptions = {},
 ): Promise<void> {
+  const ingestionSource = options.ingestionSource ?? "webhook";
+
   // ── Fase 1: Data Prep (síncrono) ──────────────────────────────────────────
 
+  const recordingId = payload.recording_id != null
+    ? String(payload.recording_id)
+    : null;
   const closerName = payload.recorded_by?.name ?? null;
   const closerEmail = payload.recorded_by?.email ?? null;
   // closerName se usa como fallback si GHL no tiene un assignedUserId
@@ -58,6 +69,38 @@ export async function processFathomCall(
   const externalInvitees = (payload.calendar_invitees ?? []).filter(
     (inv) => inv.is_external === true && inv.email !== closerEmail,
   );
+
+  // Evita reprocesar la misma videollamada para la misma cuenta.
+  if (recordingId && !options.allowDuplicateRecordingId) {
+    try {
+      const [alreadyProcessed] = await withRetry(
+        () =>
+          drizzleDb
+            .select({ id: agendas.id_registro_agenda })
+            .from(agendas)
+            .where(
+              and(
+                eq(agendas.id_cuenta, idCuenta),
+                eq(agendas.fathom_recording_id, recordingId),
+              ),
+            )
+            .limit(1),
+        { label: "Fathom/dedupeByRecordingId" },
+      );
+
+      if (alreadyProcessed) {
+        console.info(
+          `[Fathom] Skipping duplicated recording_id=${recordingId} for id_cuenta=${idCuenta} (agenda=${alreadyProcessed.id})`,
+        );
+        return;
+      }
+    } catch (err) {
+      console.error(
+        `[Fathom] Error checking duplicate recording_id=${recordingId}:`,
+        err,
+      );
+    }
+  }
 
   // ── Fase 2: Obtener datos de la cuenta ────────────────────────────────────
 
@@ -291,6 +334,10 @@ export async function processFathomCall(
             .update(agendas)
             .set({
               link_llamada: shareUrl,
+              fathom_recording_id: recordingId,
+              fathom_share_url: shareUrl,
+              fathom_processed_at: new Date(),
+              fathom_ingestion_source: ingestionSource,
               ...(classifier && {
                 categoria: classifier.categoria,
                 cash_collected: classifier.cash_collected,
@@ -331,6 +378,10 @@ export async function processFathomCall(
             ghl_contact_id: contactId,
             closer: closerEmailFromGhl ?? closerName ?? null,
             link_llamada: shareUrl,
+            fathom_recording_id: recordingId,
+            fathom_share_url: shareUrl,
+            fathom_processed_at: now,
+            fathom_ingestion_source: ingestionSource,
             ...(classifier && {
               categoria: classifier.categoria,
               cash_collected: classifier.cash_collected,

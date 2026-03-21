@@ -106,12 +106,23 @@ El prompt de extracción de objeciones fue mejorado con ejemplos claros de lo qu
 | `cuentas` | `reglas_etiquetas` | jsonb | Array de reglas de etiquetado `[{id, tag, source, condition, funnelStage?}]` |
 | `registros_de_llamada` | `lead_embudo_personalizado` | jsonb | Resultado de clasificación del embudo por IA |
 | `log_llamadas` | `lead_embudo_personalizado` | jsonb | Resultado de clasificación del embudo (audit trail) |
+| `resumenes_diarios_agendas` | `fathom_recording_id` | text | Recording ID único de Fathom para deduplicación |
+| `resumenes_diarios_agendas` | `fathom_share_url` | text | Copia normalizada del share URL de Fathom |
+| `resumenes_diarios_agendas` | `fathom_processed_at` | timestamptz | Timestamp de procesamiento de videollamada |
+| `resumenes_diarios_agendas` | `fathom_ingestion_source` | text | Origen de ingesta (`webhook`, `quick_recovery`, `orphan_retry`) |
 
 ### SQL de Migración
 
 ```sql
 ALTER TABLE public.registros_de_llamada ADD COLUMN IF NOT EXISTS lead_embudo_personalizado jsonb;
 ALTER TABLE public.log_llamadas ADD COLUMN IF NOT EXISTS lead_embudo_personalizado jsonb;
+ALTER TABLE public.resumenes_diarios_agendas ADD COLUMN IF NOT EXISTS fathom_recording_id text;
+ALTER TABLE public.resumenes_diarios_agendas ADD COLUMN IF NOT EXISTS fathom_share_url text;
+ALTER TABLE public.resumenes_diarios_agendas ADD COLUMN IF NOT EXISTS fathom_processed_at timestamptz;
+ALTER TABLE public.resumenes_diarios_agendas ADD COLUMN IF NOT EXISTS fathom_ingestion_source text;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_agendas_cuenta_recording_id
+  ON public.resumenes_diarios_agendas (id_cuenta, fathom_recording_id)
+  WHERE fathom_recording_id IS NOT NULL;
 ```
 
 Las columnas `prompt_videollamadas`, `prompt_llamadas` y `reglas_etiquetas` ya existen en la BD.
@@ -135,6 +146,8 @@ Las columnas `prompt_videollamadas`, `prompt_llamadas` y `reglas_etiquetas` ya e
   - [POST /webhooks/twilio/no-answer — Llamada no contestada](#post-webhookstwiiliono-answer--llamada-no-contestada)
   - [POST /webhooks/twilio/effective — Llamada efectiva](#post-webhookstwilioeffective--llamada-efectiva)
   - [POST /webhooks/fathom/:id_cuenta — Videollamada](#post-webhooksfathomid_cuenta--videollamada)
+  - [POST /api/quick-triggers/video-recovery/preview — Recuperador (preview)](#post-apiquick-triggersvideo-recoverypreview--recuperador-preview)
+  - [POST /api/quick-triggers/video-recovery/execute — Recuperador (execute)](#post-apiquick-triggersvideo-recoveryexecute--recuperador-execute)
   - [POST /webhooks/retry-orphan/:id_huerfano — Re-procesar huérfano](#post-webhooksretry-orphanid_huerfano--re-procesar-huérfano)
   - [POST /cron/update-no-shows — Cron No-Shows](#post-cronupdate-no-shows--cron-no-shows)
 - [Esquema de Base de Datos](#esquema-de-base-de-datos)
@@ -544,6 +557,116 @@ Re-lanza un evento huérfano tras corregir el email. El huérfano debe existir y
 
 ---
 
+### `POST /api/quick-triggers/video-recovery/preview` — Recuperador (preview)
+
+Endpoint autenticado por API key para que el frontend consulte reuniones de Fathom por rango de fechas y obtenga una lista clasificada (`recover_existing`, `create_if_missing`, `skip`) antes de ejecutar la recuperación.
+
+#### Headers requeridos
+
+| Header | Valor |
+|---|---|
+| `Authorization` | `Bearer <api_key_cuenta>` |
+| `X-Api-Key` | Alternativa al Authorization |
+
+#### Body
+
+```json
+{
+  "id_evento": "usr_123",
+  "from": "2026-03-01T00:00:00.000Z",
+  "to": "2026-03-07T23:59:59.999Z",
+  "timezone": "America/Bogota",
+  "teams": ["Sales"],
+  "recorded_by": ["closer@empresa.com"],
+  "calendar_invitees_domains": ["cliente.com"],
+  "calendar_invitees_domains_type": "all",
+  "limit": 50
+}
+```
+
+#### Respuesta 200
+
+```json
+{
+  "success": true,
+  "message": "Preview generated",
+  "data": {
+    "items": [
+      {
+        "recording_id": 123456789,
+        "meeting_title": "QBR 2026 Q1",
+        "share_url": "https://fathom.video/share/xyz123",
+        "scheduled_start_time": "2026-03-01T16:00:00Z",
+        "lead_email_detected": "lead@cliente.com",
+        "estado_bd_actual": "PDTE",
+        "accion_sugerida": "recover_existing",
+        "motivo": "Coincide con un registro pendiente/no_show en BD.",
+        "id_registro_agenda": 9812,
+        "meeting_snapshot": {}
+      }
+    ]
+  }
+}
+```
+
+---
+
+### `POST /api/quick-triggers/video-recovery/execute` — Recuperador (execute)
+
+Procesa las reuniones seleccionadas en el preview. Para cada item:
+- ignora duplicados ya procesados por `fathom_recording_id`
+- obtiene transcript con `GET /recordings/{recording_id}/transcript`
+- ejecuta `processFathomCall` con `ingestionSource=quick_recovery`
+- si falta email externo, guarda evento en `eventos_huerfanos` (`origen=fathom`)
+
+#### Body
+
+```json
+{
+  "id_evento": "usr_123",
+  "request_id": "f4ce1d37-10ba-4cb2-b2bb-324f77f8e31a",
+  "selected_recordings": [
+    {
+      "recording_id": 123456789,
+      "id_registro_agenda": 9812,
+      "action": "recover_existing",
+      "meeting_snapshot": {
+        "recording_id": 123456789,
+        "share_url": "https://fathom.video/share/xyz123",
+        "recorded_by": { "name": "Closer", "email": "closer@empresa.com" },
+        "calendar_invitees": [{ "email": "lead@cliente.com", "is_external": true }]
+      }
+    }
+  ]
+}
+```
+
+#### Respuesta 200
+
+```json
+{
+  "success": true,
+  "message": "Execution completed",
+  "data": {
+    "processed": 1,
+    "skipped": 0,
+    "errors": 0,
+    "items": [
+      {
+        "recording_id": 123456789,
+        "action": "recover_existing",
+        "status": "processed",
+        "estado_anterior": "PDTE",
+        "estado_final": "Cerrada",
+        "motivo": "Videollamada recuperada y procesada."
+      }
+    ]
+  }
+}
+```
+
+---
+
 ### `POST /cron/update-no-shows` — Cron No-Shows
 
 Endpoint interno para tu scheduler. Marca masivamente como `no_show` las citas `PDTE` y aplica tag `noshowautoia` en GHL.
@@ -594,6 +717,10 @@ Rate limiting: lotes de 10 requests con 500ms de pausa para respetar rate limits
 | `objeciones_ia` | jsonb | Array de `{objecion, categoria}` |
 | `reportmarketing` | text | Lead Report 6 puntos |
 | `tags_internos` | jsonb | **(V2)** Tags extraídos por IA (objeciones, productos, insights) |
+| `fathom_recording_id` | text | Recording ID de Fathom para dedupe entre webhook/quick-trigger |
+| `fathom_share_url` | text | Share URL normalizado de Fathom |
+| `fathom_processed_at` | timestamptz | Último procesamiento de videollamada |
+| `fathom_ingestion_source` | text | `webhook`, `quick_recovery` u `orphan_retry` |
 
 ---
 
