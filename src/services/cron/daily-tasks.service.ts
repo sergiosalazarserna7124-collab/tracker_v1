@@ -1,9 +1,11 @@
 import { eq, and, inArray, sql, lt } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, llamadas } from "../../db/schema.js";
-import { addContactTag } from "../ghl-api.service.js";
+import { addContactTag, addContactTags } from "../ghl-api.service.js";
 import { processInChunks } from "../../utils/batch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
+import { db as pgPool } from "../../config/database.js";
+import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -272,4 +274,178 @@ async function applyReglaAutomaticaForCuenta(
   }
 
   return moved;
+}
+
+// ─── Análisis nocturno de chats con IA ───────────────────────────────────────
+
+interface ChatLogRow {
+  id_evento: number;
+  id_cuenta: number;
+  chat: unknown;
+  id_lead: string | null;
+  nombre_lead: string | null;
+}
+
+interface CuentaAnalisisRow {
+  id_cuenta: number;
+  token_ghl: string | null;
+  openai_api_key: string | null;
+  embudo_personalizado: unknown;
+  reglas_etiquetas: unknown;
+  prompt_ventas: string | null;
+}
+
+interface AnalyzeChatsResult {
+  processed: number;
+  updated: number;
+  errors: number;
+  costEstimate: string;
+}
+
+const MAX_CHATS_PER_ACCOUNT = 20;
+const DELAY_MS = 200;
+// GPT-4o-mini pricing (input: $0.15/1M tokens, output: $0.60/1M tokens)
+// Estimate ~500 tokens input + ~100 tokens output per chat
+const COST_PER_CHAT_USD = (500 * 0.15 + 100 * 0.60) / 1_000_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function analyzeChatsNightly(accountIds?: number[]): Promise<AnalyzeChatsResult> {
+  let processed = 0;
+  let updated = 0;
+  let errors = 0;
+
+  // ── 1. Obtener cuentas activas con embudo configurado ─────────────────────
+  const accountFilter = accountIds && accountIds.length > 0
+    ? `AND c.id_cuenta = ANY($1::int[])`
+    : "";
+
+  const cuentasQuery = `
+    SELECT c.id_cuenta, c.token_ghl, c.openai_api_key,
+           c.embudo_personalizado, c.reglas_etiquetas, c.prompt_ventas
+    FROM cuentas c
+    WHERE c.embudo_personalizado IS NOT NULL
+      AND jsonb_array_length(c.embudo_personalizado::jsonb) > 0
+    ${accountFilter}
+  `;
+
+  const cuentasResult = await withRetry(
+    () => pgPool.query<CuentaAnalisisRow>(
+      cuentasQuery,
+      accountIds && accountIds.length > 0 ? [accountIds] : [],
+    ),
+    { label: "analyzeChatsNightly/getCuentas" },
+  );
+
+  const cuentas = cuentasResult.rows;
+  console.info(`[analyzeChats] ${cuentas.length} cuentas con embudo para analizar`);
+
+  for (const cuenta of cuentas) {
+    // ── 2. Buscar chats sin ia_categoria de las últimas 24h ─────────────────
+    const chatsResult = await withRetry(
+      () => pgPool.query<ChatLogRow>(
+        `SELECT id_evento, id_cuenta, chat, id_lead, nombre_lead
+         FROM chats_logs
+         WHERE id_cuenta = $1
+           AND ia_categoria IS NULL
+           AND fecha_y_hora_z >= NOW() - INTERVAL '24 hours'
+         ORDER BY fecha_y_hora_z DESC
+         LIMIT $2`,
+        [cuenta.id_cuenta, MAX_CHATS_PER_ACCOUNT],
+      ),
+      { label: `analyzeChats/getChats/${cuenta.id_cuenta}` },
+    );
+
+    const chats = chatsResult.rows;
+    if (chats.length === 0) continue;
+
+    console.info(`[analyzeChats] cuenta=${cuenta.id_cuenta}: ${chats.length} chats a analizar`);
+
+    const embudo = Array.isArray(cuenta.embudo_personalizado)
+      ? (cuenta.embudo_personalizado as Array<{ id: string; nombre: string; condition?: string }>)
+      : [];
+
+    const reglas_etiquetas = Array.isArray(cuenta.reglas_etiquetas)
+      ? (cuenta.reglas_etiquetas as Array<{ id: string; tag: string; condition: string; source: string }>)
+      : [];
+
+    for (const chat of chats) {
+      processed++;
+      try {
+        const messages = Array.isArray(chat.chat)
+          ? (chat.chat as Array<{ role: string; message: string; timestamp: string; name?: string }>)
+          : [];
+
+        if (messages.length === 0) {
+          // Marcar como analizado sin categoría
+          await pgPool.query(
+            `UPDATE chats_logs SET ia_categoria = 'sin_mensajes', ia_analizado_at = NOW() WHERE id_evento = $1`,
+            [chat.id_evento],
+          );
+          continue;
+        }
+
+        // ── 3. Analizar con IA ──────────────────────────────────────────────
+        const result = await analyzeChatWithAI({
+          messages,
+          embudo,
+          reglas_etiquetas,
+          prompt_empresa: cuenta.prompt_ventas ?? undefined,
+          openai_api_key: cuenta.openai_api_key ?? undefined,
+        });
+
+        // ── 4. Actualizar chats_logs ────────────────────────────────────────
+        await pgPool.query(
+          `UPDATE chats_logs
+           SET estado = COALESCE($1, estado),
+               tags_internos = COALESCE($2::jsonb, tags_internos),
+               ia_categoria = $3,
+               ia_analizado_at = NOW()
+           WHERE id_evento = $4`,
+          [
+            result.categoria,
+            result.tags_internos.length > 0 ? JSON.stringify(result.tags_internos) : null,
+            result.categoria ?? "analizado_sin_categoria",
+            chat.id_evento,
+          ],
+        );
+
+        // ── 5. Aplicar tags en GHL ──────────────────────────────────────────
+        if (result.tags_internos.length > 0 && chat.id_lead && cuenta.token_ghl) {
+          try {
+            await addContactTags(chat.id_lead, cuenta.token_ghl, result.tags_internos);
+          } catch (ghlErr) {
+            console.warn(
+              `[analyzeChats] GHL tag fallido lead=${chat.id_lead} cuenta=${cuenta.id_cuenta}:`,
+              ghlErr,
+            );
+          }
+        }
+
+        updated++;
+        console.info(
+          `[analyzeChats] chat=${chat.id_evento} → categoria="${result.categoria}" tags=${result.tags_internos.join(",")} confianza=${result.confianza}`,
+        );
+      } catch (err) {
+        errors++;
+        console.error(`[analyzeChats] Error en chat=${chat.id_evento}:`, err);
+        // Marcar como intentado para no reintentar indefinidamente
+        await pgPool.query(
+          `UPDATE chats_logs SET ia_categoria = 'error_analisis', ia_analizado_at = NOW() WHERE id_evento = $1`,
+          [chat.id_evento],
+        ).catch(() => {});
+      }
+
+      // ── 6. Rate limit: 200ms entre llamadas ─────────────────────────────
+      await sleep(DELAY_MS);
+    }
+  }
+
+  const costEstimate = `~$${(updated * COST_PER_CHAT_USD).toFixed(4)} USD (${updated} chats × $${COST_PER_CHAT_USD.toFixed(6)}/chat)`;
+
+  console.info(`[analyzeChats] Finalizado: processed=${processed} updated=${updated} errors=${errors} costo=${costEstimate}`);
+
+  return { processed, updated, errors, costEstimate };
 }

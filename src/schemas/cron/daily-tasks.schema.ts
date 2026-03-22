@@ -17,3 +17,9 @@ export const CronDailyTasksBody = Type.Object({
 });
 
 export type CronDailyTasksPayload = Static<typeof CronDailyTasksBody>;
+
+export const CronAnalyzeChatsBody = Type.Object({
+  account_ids: Type.Optional(Type.Array(Type.Number({ minimum: 1 }))),
+});
+
+export type CronAnalyzeChatsPayload = Static<typeof CronAnalyzeChatsBody>;
