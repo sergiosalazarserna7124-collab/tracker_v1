@@ -10,6 +10,7 @@ import { externalDataRoute } from "./routes/webhooks/external-data.route.js";
 import { orphanRoute } from "./routes/webhooks/orphan.route.js";
 import { reasignacionRoute } from "./routes/webhooks/reasignacion.route.js";
 import { videoRecoveryRoute } from "./routes/quick-triggers/video-recovery.route.js";
+import { chatWebhookRoute } from "./routes/webhooks/chat.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -29,6 +30,7 @@ export async function buildApp() {
   await app.register(reasignacionRoute, { prefix: "/webhooks" });
   await app.register(cronDailyTasksRoute, { prefix: "/cron" });
   await app.register(videoRecoveryRoute, { prefix: "/api/quick-triggers" });
+  await app.register(chatWebhookRoute, { prefix: "/webhooks" });
 
   return app;
 }
