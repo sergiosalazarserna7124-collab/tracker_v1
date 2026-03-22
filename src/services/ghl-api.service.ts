@@ -393,3 +393,43 @@ export async function safeAddContactTags(
     }
   }
 }
+
+/**
+ * Obtiene los appointments de un contacto en GHL.
+ * Retorna el startTime del más cercano a la fecha dada, o null si no hay.
+ */
+export async function getContactAppointmentDate(
+  contactId: string,
+  bearerToken: string,
+  referenceDate: Date,
+): Promise<Date | null> {
+  try {
+    const token = bearerToken.startsWith("Bearer ") ? bearerToken : `Bearer ${bearerToken}`;
+    const res = await fetch(
+      `https://services.leadconnectorhq.com/contacts/${contactId}/appointments`,
+      {
+        headers: {
+          Authorization: token,
+          Version: "2021-07-28",
+          "Content-Type": "application/json",
+        },
+      },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { appointments?: Array<{ startTime?: string }> };
+    const appts = data.appointments ?? [];
+    if (!appts.length) return null;
+
+    let best: Date | null = null;
+    let bestDiff = Infinity;
+    for (const a of appts) {
+      if (!a.startTime) continue;
+      const d = new Date(a.startTime);
+      const diff = Math.abs(d.getTime() - referenceDate.getTime());
+      if (diff < bestDiff) { bestDiff = diff; best = d; }
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}

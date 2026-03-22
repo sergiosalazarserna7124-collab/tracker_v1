@@ -1,6 +1,6 @@
 import { db } from "../../config/database.js";
 import { parseFechaReunionToUTC } from "../../utils/date.utils.js";
-import { getAccountByLocationId, addContactTag, GHL_TAGS } from "../ghl-api.service.js";
+import { getAccountByLocationId, addContactTag, GHL_TAGS, getContactAppointmentDate } from "../ghl-api.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { GhlBodyPayload } from "../../schemas/webhooks/ghl.schema.js";
 import type { ServiceResult } from "../../types/index.js";
@@ -185,8 +185,17 @@ async function applyGhlTag(
 // ─── Handlers por categoría ──────────────────────────────────────────────────
 // Patrón: DB primero (crítico) → GHL después (best-effort, nunca bloquea).
 
-async function handlePendiente(body: GhlBodyPayload): Promise<AgendaResult> {
+async function handlePendiente(body: GhlBodyPayload, tokenGhl?: string): Promise<AgendaResult> {
   const fields = extractFields(body);
+
+  // Fallback: si hora/zonahoraria no vinieron en el payload, consultar GHL por la cita real
+  if (!fields.fechaReunion && fields.contactId && tokenGhl) {
+    const apptDate = await getContactAppointmentDate(fields.contactId, tokenGhl, new Date());
+    if (apptDate) {
+      fields.fechaReunion = apptDate;
+      console.info(`[GHL handlePendiente] fechaReunion tomada de GHL appointments: ${apptDate.toISOString()}`);
+    }
+  }
 
   const id = await insertAgenda(fields, "PDTE");
 
@@ -301,10 +310,21 @@ export async function processGhlWebhook(
       `🔍 [GHL webhook] customData.categoria RAW → "${categoriaRaw}" | normalizado → "${categoria}"`,
     );
 
+    // Obtener token GHL para fallback de appointments (best-effort)
+    let tokenGhl: string | undefined;
+    try {
+      const idCuenta = parseInt(body.customData?.idcuenta, 10);
+      if (!isNaN(idCuenta)) {
+        const locationId = body.locationid?.trim() || "";
+        const account = await getAccountByLocationId(locationId);
+        tokenGhl = account?.token_ghl ?? undefined;
+      }
+    } catch { /* best-effort */ }
+
     switch (categoria) {
       case "pendiente":
         console.log("🔀 [GHL webhook] Entrando a handlePendiente");
-        return { success: true, data: await handlePendiente(body) };
+        return { success: true, data: await handlePendiente(body, tokenGhl) };
 
       case "cancelada":
         console.log("🔀 [GHL webhook] Entrando a handleCancelada");
