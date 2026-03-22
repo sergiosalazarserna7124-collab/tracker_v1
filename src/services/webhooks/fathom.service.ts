@@ -334,7 +334,7 @@ export async function processFathomCall(
     const [existing] = await withRetry(
       () =>
         drizzleDb
-          .select({ id: agendas.id_registro_agenda })
+          .select({ id: agendas.id_registro_agenda, closer: agendas.closer })
           .from(agendas)
           .where(
             and(
@@ -373,11 +373,15 @@ export async function processFathomCall(
               ...(utmContent && { origen: utmContent }),
               ...(contactId && { ghl_contact_id: contactId }),
               ...(contactName && { nombre_de_lead: contactName }),
-              ...(closerEmailFromGhl
-                ? { closer: closerEmailFromGhl }
-                : closerName
-                  ? { closer: closerName }
-                  : {}),
+              // Solo actualizar closer si el registro existente NO tiene uno asignado
+              // Evita pisar al asesor original con el nombre de la cuenta de Fathom
+              ...(!existing.closer
+                ? closerEmailFromGhl
+                  ? { closer: closerEmailFromGhl }
+                  : closerName
+                    ? { closer: closerName }
+                    : {}
+                : {}),
             })
             .where(eq(agendas.id_registro_agenda, existing.id)),
         { label: "Fathom/updateAgenda" },
