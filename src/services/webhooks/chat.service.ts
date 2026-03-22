@@ -156,6 +156,52 @@ async function fetchGhlContact(
 
 // ─── Procesador principal ─────────────────────────────────────────────────────
 
+/**
+ * Persiste el payload crudo en chat_webhook_raw para diagnóstico.
+ * Guarda SIEMPRE — antes de cualquier filtro — para ver todo lo que llega.
+ * Si falla el insert de debug, no bloquea el procesamiento principal.
+ */
+async function saveRawWebhook(
+  body: ChatWebhookBody,
+  locationId: string,
+  processed: boolean,
+  skipReason: string | null,
+): Promise<void> {
+  try {
+    const contentType = (body.contentType ?? "") as string;
+    const msgTypeNum = typeof (body as any).message?.type === "number"
+      ? (body as any).message.type as number
+      : null;
+    const channelStr = body.messageType ?? (body as any).message?.messageType ?? null;
+    const hasAtt = body.attachments !== undefined &&
+      body.attachments !== null &&
+      !(Array.isArray(body.attachments) && (body.attachments as unknown[]).length === 0);
+
+    await db.query(
+      `INSERT INTO chat_webhook_raw
+         (location_id, event_type, direction, channel_type_number, channel_type_string,
+          content_type, status, has_attachments, processed, skip_reason, payload)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [
+        locationId,
+        body.type ?? null,
+        body.direction ?? (body as any).message?.direction ?? null,
+        msgTypeNum,
+        channelStr ?? null,
+        contentType || null,
+        body.status ?? null,
+        hasAtt,
+        processed,
+        skipReason,
+        body,
+      ],
+    );
+  } catch (err) {
+    // Debug: nunca bloquear el flujo principal
+    console.warn("[Chat] Error guardando raw webhook:", err);
+  }
+}
+
 export async function processChatWebhook(
   body: ChatWebhookBody,
   locationId: string,
@@ -164,11 +210,11 @@ export async function processChatWebhook(
   console.log("[Chat] ── Webhook recibido ──────────────────────────────────");
   console.log("[Chat] locationId        :", locationId);
   console.log("[Chat] type (evento)     :", body.type ?? "(undefined)");
-  console.log("[Chat] direction         :", body.direction ?? body.message?.direction ?? "(undefined)");
+  console.log("[Chat] direction         :", body.direction ?? (body as any).message?.direction ?? "(undefined)");
   console.log("[Chat] contentType       :", body.contentType ?? "(undefined)");
   console.log("[Chat] status            :", body.status ?? "(undefined)");
   console.log("[Chat] attachments       :", body.attachments !== undefined ? JSON.stringify(body.attachments) : "(no attachments)");
-  console.log("[Chat] messageType       :", body.messageType ?? body.message?.messageType ?? "(undefined)");
+  console.log("[Chat] messageType       :", body.messageType ?? (body as any).message?.messageType ?? "(undefined)");
   console.log("[Chat] conversationId    :", body.conversationId ?? "(undefined)");
   console.log("[Chat] contactId         :", body.contactId ?? "(undefined)");
 
@@ -182,14 +228,17 @@ export async function processChatWebhook(
 
   if (!contentType.includes("text/plain")) {
     console.log(`[Chat] Ignorado — contentType="${contentType}" (no es text/plain)`);
+    void saveRawWebhook(body, locationId, false, `contentType:${contentType || "vacío"}`);
     return { success: true, data: { skipped: true, reason: "contentType" } };
   }
   if (!status.includes("delivered")) {
     console.log(`[Chat] Ignorado — status="${status}" (no es delivered)`);
+    void saveRawWebhook(body, locationId, false, `status:${status || "vacío"}`);
     return { success: true, data: { skipped: true, reason: "status" } };
   }
   if (hasAttachments) {
     console.log("[Chat] Ignorado — tiene attachments");
+    void saveRawWebhook(body, locationId, false, "has_attachments");
     return { success: true, data: { skipped: true, reason: "attachments" } };
   }
 
@@ -197,6 +246,7 @@ export async function processChatWebhook(
   const eventType = body.type;
   if (eventType && !PROCESSABLE_EVENT_TYPES.has(eventType)) {
     console.log(`[Chat] Ignorado — tipo de evento="${eventType}" (no es mensaje entrante/saliente)`);
+    void saveRawWebhook(body, locationId, false, `eventType:${eventType}`);
     return { success: true, data: { skipped: true, reason: "eventType" } };
   }
 
@@ -330,6 +380,9 @@ export async function processChatWebhook(
   );
 
   console.log(`[Chat] ✅ Upsert OK — conversationId="${conversationId}" | id_cuenta=${idCuenta}`);
+
+  // Guardar raw para diagnóstico (processed = true)
+  void saveRawWebhook(body, locationId, true, null);
 
   return {
     success: true,
