@@ -409,7 +409,11 @@ export async function processChatWebhook(
     _ghl_user_id: userId,
   };
 
-  // ── 10. Upsert en chats_logs (replicando el ON CONFLICT de n8n) ─────────
+  // ── 10. Upsert en chats_logs con deduplicación por _ghl_message_id ────────
+  // GHL envía dos eventos por mensaje outbound: "sent" y "delivered".
+  // Solo append si el messageId no existe ya en el array para evitar duplicados.
+  const ghlMessageId = messageObj._ghl_message_id;
+
   await withRetry(
     () =>
       db.query(
@@ -417,7 +421,14 @@ export async function processChatWebhook(
            (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat)
          VALUES ($1, $2, $3, $4, NOW(), 'activo', $5, $6::jsonb)
          ON CONFLICT (chatid) DO UPDATE SET
-           chat           = chats_logs.chat || EXCLUDED.chat,
+           -- Solo append si el messageId no está ya en el array (deduplicación)
+           chat = CASE
+             WHEN $7::text IS NOT NULL AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements(chats_logs.chat) m
+               WHERE m->>'_ghl_message_id' = $7::text
+             ) THEN chats_logs.chat  -- ya existe, no duplicar
+             ELSE chats_logs.chat || EXCLUDED.chat
+           END,
            fecha_y_hora_z = NOW(),
            notas_extra    = COALESCE(EXCLUDED.notas_extra, chats_logs.notas_extra),
            nombre_lead    = EXCLUDED.nombre_lead`,
@@ -428,6 +439,7 @@ export async function processChatWebhook(
           conversationId,
           closerName ?? null,
           JSON.stringify([messageObj]),
+          ghlMessageId ?? null,
         ],
       ),
     { label: "chat/upsertChatLog" },
