@@ -273,8 +273,20 @@ export async function processChatWebhook(
     void saveRawWebhook(body, locationId, false, `contentType:${contentType || "vacío"}`);
     return { success: true, data: { skipped: true, reason: "contentType" } };
   }
-  if (!status.includes("delivered")) {
-    console.log(`[Chat] Ignorado — status="${status}" (no es delivered)`);
+  // Mensajes outbound tienen status="sent", inbound="delivered"
+  // CALL/completed son eventos de llamada, no mensajes de chat → ignorar
+  const isCallEvent = status === "completed" || (body as any).message?.type === "CALL" ||
+    ((body as any).messageType ?? (body as any).message?.messageType) === "CALL";
+  if (isCallEvent) {
+    console.log(`[Chat] Ignorado — evento de llamada (CALL/completed)`);
+    void saveRawWebhook(body, locationId, false, `call_event`);
+    return { success: true, data: { skipped: true, reason: "call_event" } };
+  }
+  // Aceptar: delivered (inbound), sent (outbound), y vacío/undefined si hay direction
+  const validStatus = status.includes("delivered") || status.includes("sent") ||
+    (!status && (body.direction === "inbound" || body.direction === "outbound"));
+  if (!validStatus) {
+    console.log(`[Chat] Ignorado — status="${status}" (no es delivered/sent)`);
     void saveRawWebhook(body, locationId, false, `status:${status || "vacío"}`);
     return { success: true, data: { skipped: true, reason: "status" } };
   }
