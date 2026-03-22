@@ -634,6 +634,7 @@ async function effectivePath(
 
   // Evaluar reglas de etiquetas en paralelo (best-effort)
   let reglasMatchedTags: string[] = [];
+  let funnelStageFromReglas: string | null = null;
   try {
     const reglasResult = await evaluateReglas(
       transcript,
@@ -643,15 +644,20 @@ async function effectivePath(
       openaiApiKey,
     );
     reglasMatchedTags = reglasResult.matched_tags;
+    // Si alguna regla tiene funnelStage, la regla explícita del cliente sobreescribe la clasificación IA
+    funnelStageFromReglas = reglasResult.matched_rules
+      .find((r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage)?.funnelStage ?? null;
   } catch (err) {
     console.error("[Effective] Error evaluando reglas de etiquetas:", err);
   }
 
   const tagsInternos = reglasMatchedTags;
+  // Regla explícita del cliente tiene mayor prioridad que clasificación IA
+  const effectiveEstado = funnelStageFromReglas ?? aiEstado;
 
   // Construir objeto lead_embudo_personalizado si hay embudo configurado
   const leadEmbudoData = embudoPersonalizado
-    ? { estado_ia: aiEstado, embudo_origen: "embudo_personalizado", timestamp: now.toISOString() }
+    ? { estado_ia: effectiveEstado, embudo_origen: "embudo_personalizado", timestamp: now.toISOString() }
     : null;
 
   // Buscar el registro MAS RECIENTE (sin filtrar por estado)
@@ -739,7 +745,7 @@ async function effectivePath(
             .update(llamadas)
             .set({
               nombre_lead: nombreLead,
-              estado: aiEstado,
+              estado: effectiveEstado,
               closer_mail: closerMail,
               nombre_closer: nombreCloser,
               fecha_y_hora_de_seguimiento: now,
@@ -771,7 +777,7 @@ async function effectivePath(
               fecha_evento: now,
               id_cuenta: idCuenta,
               nombre_lead: nombreLead,
-              estado: aiEstado,
+              estado: effectiveEstado,
               mail_lead: mailLead,
               phone_raw_format: phone,
               creativo_origen: creativoOrigen,
@@ -800,7 +806,7 @@ async function effectivePath(
   }
 
   // Tag dinámico de clasificación + tag de llamada contestada
-  const tag = mapEstadoToTag(aiEstado);
+  const tag = mapEstadoToTag(effectiveEstado);
   const locationId = fields.locationId;
   if (contactId && tokenGhl) {
     try {
@@ -859,8 +865,8 @@ async function effectivePath(
     idRegistro,
     idCuenta,
     fields,
-    tipoEvento: `efectiva_${aiEstado}`,
-    estadoResultado: aiEstado,
+    tipoEvento: `efectiva_${effectiveEstado}`,
+    estadoResultado: effectiveEstado,
     callSid,
     transcript,
     iadesc,
@@ -875,7 +881,7 @@ async function effectivePath(
       id_registro: idRegistro,
       action: existing && estadoActivo ? "updated" : "created",
       path: "effective",
-      estado: aiEstado,
+      estado: effectiveEstado,
       buzon: false,
     },
   };

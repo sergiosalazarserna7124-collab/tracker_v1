@@ -286,6 +286,10 @@ export async function processFathomCall(
   const reglasResult = aiResult?.reglasResult ?? { matched_tags: [], matched_rules: [] };
   const tagsInternos = reglasResult.matched_tags;
 
+  // Si alguna regla tiene funnelStage, la regla explícita del cliente sobreescribe la clasificación IA
+  const funnelStageFromReglas = reglasResult.matched_rules
+    .find((r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage)?.funnelStage ?? null;
+
   // ── Fase 5: Sync final (GHL tag + DB update) ─────────────────────────────
 
   const locationId = account.locationid;
@@ -363,7 +367,7 @@ export async function processFathomCall(
               fathom_processed_at: new Date(),
               fathom_ingestion_source: ingestionSource,
               ...(classifier && {
-                categoria: classifier.categoria,
+                categoria: funnelStageFromReglas ?? classifier.categoria,
                 cash_collected: classifier.cash_collected,
                 facturacion: classifier.facturacion,
               }),
@@ -411,7 +415,7 @@ export async function processFathomCall(
             fathom_processed_at: now,
             fathom_ingestion_source: ingestionSource,
             ...(classifier && {
-              categoria: classifier.categoria,
+              categoria: funnelStageFromReglas ?? classifier.categoria,
               cash_collected: classifier.cash_collected,
               facturacion: classifier.facturacion,
             }),
