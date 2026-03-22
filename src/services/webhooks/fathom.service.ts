@@ -43,6 +43,28 @@ function categoriaToGhlTag(
   return map[categoria] ?? GHL_TAGS.noofertada;
 }
 
+/**
+ * Resuelve la fecha/hora real de la reunión desde el payload de Fathom.
+ * Prioriza la hora agendada de inicio y hace fallback a tiempos de grabación.
+ */
+function resolveMeetingDate(payload: FathomEventBody): Date | null {
+  const candidates = [
+    payload.scheduled_start_time,
+    payload.recording_start_time,
+    payload.created_at,
+  ];
+
+  for (const value of candidates) {
+    if (!value) continue;
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 // ─── Función principal ────────────────────────────────────────────────────────
 
 export async function processFathomCall(
@@ -51,6 +73,7 @@ export async function processFathomCall(
   options: ProcessFathomCallOptions = {},
 ): Promise<void> {
   const ingestionSource = options.ingestionSource ?? "webhook";
+  const meetingDate = resolveMeetingDate(payload);
 
   // ── Fase 1: Data Prep (síncrono) ──────────────────────────────────────────
 
@@ -334,6 +357,7 @@ export async function processFathomCall(
             .update(agendas)
             .set({
               link_llamada: shareUrl,
+              ...(meetingDate ? { fechaReunion: meetingDate } : {}),
               fathom_recording_id: recordingId,
               fathom_share_url: shareUrl,
               fathom_processed_at: new Date(),
@@ -372,7 +396,7 @@ export async function processFathomCall(
             id_cuenta: idCuenta,
             email_lead: emailLead,
             fecha: now,
-            fechaReunion: now,
+            fechaReunion: meetingDate ?? now,
             nombre_de_lead: contactName,
             origen: utmContent,
             ghl_contact_id: contactId,

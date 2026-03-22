@@ -58,6 +58,8 @@ export const FathomEventBodySchema = Type.Object(
     title: Type.Optional(Type.String()),
     meeting_title: Type.Optional(Type.String()),
     created_at: Type.Optional(Type.String()),
+    scheduled_start_time: Type.Optional(Type.String()),
+    scheduled_end_time: Type.Optional(Type.String()),
     recording_start_time: Type.Optional(Type.String()),
     recording_end_time: Type.Optional(Type.String()),
     recorded_by: Type.Optional(FathomRecordedBy),
