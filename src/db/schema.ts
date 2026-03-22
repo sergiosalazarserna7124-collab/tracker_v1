@@ -167,3 +167,20 @@ export const usuariosDashboard = pgTable("usuarios_dashboard", {
   id_cuenta: integer("id_cuenta").notNull(),
   fathom: text("fathom"),
 });
+
+// ── Tabla de tokens OAuth GHL Marketplace ────────────────────────────────────
+export const ghlOauthTokens = pgTable("ghl_oauth_tokens", {
+  id: serial("id").primaryKey(),
+  location_id: text("location_id").notNull().unique(),
+  id_cuenta: integer("id_cuenta").references(() => cuentas.id_cuenta, { onDelete: "set null" }),
+  access_token: text("access_token").notNull(),
+  refresh_token: text("refresh_token").notNull(),
+  token_type: text("token_type").default("Bearer"),
+  expires_in: integer("expires_in"),
+  scope: text("scope"),
+  installed_at: timestamp("installed_at", { withTimezone: true }).defaultNow(),
+  last_refreshed_at: timestamp("last_refreshed_at", { withTimezone: true }).defaultNow(),
+  expires_at: timestamp("expires_at", { withTimezone: true }),
+  user_type: text("user_type"),
+  company_id: text("company_id"),
+});

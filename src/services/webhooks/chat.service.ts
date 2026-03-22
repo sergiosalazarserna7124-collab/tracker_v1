@@ -44,6 +44,7 @@ function buildBearerAuth(rawToken: string): string {
 /**
  * Fallback: buscar cuenta por locationid con ILIKE cuando el exact match falla.
  * Replica el similarity(locationid, locationId) > 0.6 que usaba n8n.
+ * Como tercer fallback, busca en ghl_oauth_tokens para cuentas que solo tienen OAuth.
  */
 async function getAccountByLocationIdFallback(locationId: string) {
   // Primero exact match via Drizzle (la función estándar)
@@ -68,7 +69,48 @@ async function getAccountByLocationIdFallback(locationId: string) {
     { label: "getAccountByLocationIdFallback" },
   );
 
-  return rows[0] ?? null;
+  if (rows[0]) return rows[0];
+
+  // Tercer fallback: buscar en ghl_oauth_tokens (cuentas que solo tienen OAuth marketplace)
+  const { rows: oauthRows } = await withRetry(
+    () =>
+      db.query<{
+        id_cuenta: number | null;
+        location_id: string;
+      }>(
+        `SELECT id_cuenta, location_id FROM ghl_oauth_tokens WHERE location_id = $1 LIMIT 1`,
+        [locationId],
+      ),
+    { label: "getAccountByLocationIdFallback/oauth" },
+  );
+
+  if (oauthRows[0]) {
+    console.warn(
+      `[Chat] locationId="${locationId}" encontrado en ghl_oauth_tokens (solo OAuth, sin cuenta en cuentas). id_cuenta=${oauthRows[0].id_cuenta ?? "null"}`,
+    );
+    if (oauthRows[0].id_cuenta) {
+      // Traer datos de la cuenta linkeada
+      const { rows: cuentaRows } = await withRetry(
+        () =>
+          db.query<{
+            id_cuenta: number;
+            nombre_cuenta: string | null;
+            locationid: string | null;
+            token_ghl: string | null;
+          }>(
+            `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl
+             FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
+            [oauthRows[0].id_cuenta],
+          ),
+        { label: "getAccountByLocationIdFallback/oauthLinkedCuenta" },
+      );
+      if (cuentaRows[0]) return cuentaRows[0];
+    }
+    // Token OAuth existe pero sin cuenta linkeada — retornar null (se guardará como huérfano)
+    return null;
+  }
+
+  return null;
 }
 
 /**
