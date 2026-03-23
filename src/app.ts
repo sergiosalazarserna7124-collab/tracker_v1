@@ -6,6 +6,7 @@ import { fathomWebhookRoute } from "./routes/webhooks/fathom.route.js";
 import { ghlWebhookRoute } from "./routes/webhooks/ghl.route.js";
 import { twilioWebhookRoute } from "./routes/webhooks/twilio.route.js";
 import { cronDailyTasksRoute } from "./routes/cron/daily-tasks.route.js";
+import { cronSincronizarAdsRoute } from "./routes/cron/sincronizar-ads.route.js";
 import { externalDataRoute } from "./routes/webhooks/external-data.route.js";
 import { orphanRoute } from "./routes/webhooks/orphan.route.js";
 import { reasignacionRoute } from "./routes/webhooks/reasignacion.route.js";
@@ -31,6 +32,7 @@ export async function buildApp() {
   await app.register(orphanRoute, { prefix: "/webhooks" });
   await app.register(reasignacionRoute, { prefix: "/webhooks" });
   await app.register(cronDailyTasksRoute, { prefix: "/cron" });
+  await app.register(cronSincronizarAdsRoute, { prefix: "/cron" });
   await app.register(videoRecoveryRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatRecoveryRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatWebhookRoute, { prefix: "/webhooks" });
