@@ -748,6 +748,7 @@ async function effectivePath(
               estado: effectiveEstado,
               closer_mail: closerMail,
               nombre_closer: nombreCloser,
+              fecha_evento: now,
               fecha_y_hora_de_seguimiento: now,
               intentos_contacto: (existing!.intentos_contacto ?? 0) + 1,
               trancription: transcript,
