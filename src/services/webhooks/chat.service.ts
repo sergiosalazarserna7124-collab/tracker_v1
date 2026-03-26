@@ -418,8 +418,8 @@ export async function processChatWebhook(
     () =>
       db.query(
         `INSERT INTO chats_logs
-           (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat)
-         VALUES ($1, $2, $3, $4, NOW(), 'activo', $5, $6::jsonb)
+           (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, asesor_asignado)
+         VALUES ($1, $2, $3, $4, NOW(), 'activo', $5, $6::jsonb, $8)
          ON CONFLICT (chatid) DO UPDATE SET
            -- Solo append si el messageId no está ya en el array (deduplicación)
            chat = CASE
@@ -431,7 +431,11 @@ export async function processChatWebhook(
            END,
            fecha_y_hora_z = NOW(),
            notas_extra    = COALESCE(EXCLUDED.notas_extra, chats_logs.notas_extra),
-           nombre_lead    = EXCLUDED.nombre_lead`,
+           nombre_lead    = EXCLUDED.nombre_lead,
+           asesor_asignado = CASE
+             WHEN EXCLUDED.asesor_asignado IS NOT NULL THEN EXCLUDED.asesor_asignado
+             ELSE chats_logs.asesor_asignado
+           END`,
         [
           idCuenta,
           contactName,
@@ -440,6 +444,7 @@ export async function processChatWebhook(
           closerName ?? null,
           JSON.stringify([messageObj]),
           ghlMessageId ?? null,
+          closerName ?? null,
         ],
       ),
     { label: "chat/upsertChatLog" },
