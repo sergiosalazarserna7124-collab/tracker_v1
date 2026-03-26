@@ -32,6 +32,8 @@ const TwilioCustomData = Type.Object(
     locationid: Type.Optional(Type.String()),
     // ID del contacto en GHL (alternativa al email para identificar al lead)
     id_customer_ghl: Type.Optional(Type.String()),
+    // Transcripción ya generada (cuentas GHL sin Twilio — saltarse Whisper)
+    transcript: Type.Optional(Type.String()),
   },
   { additionalProperties: true },
 );

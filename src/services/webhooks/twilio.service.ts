@@ -100,15 +100,20 @@ function extractFields(body: TwilioEventBody) {
   const locationId = cd.locationid?.trim() || body.location?.id?.trim() || null;
   const nombreLead =
     cd.nombre?.trim() || body.full_name?.trim() || body.first_name?.trim() || "sin nombre";
-  const mailLead = cd.email?.trim() || null;
+  // cd.email a veces contiene el contact_id de GHL (no un email real) — priorizar body.email
+  const bodyEmail = (body as Record<string, unknown>).email as string | undefined;
+  const mailLead = bodyEmail?.trim() || (cd.email?.includes("@") ? cd.email.trim() : null);
   const phone = cd.numero?.trim() || body.phone?.trim() || null;
   const creativoOrigen = cd.utm?.trim() || null;
-  const closerMail = cd.closermail?.trim() || null;
-  const nombreCloser = cd.nombrecloser?.trim() || null;
-  const contactId = body.contact_id?.trim() || null;
+  const closerMail = cd.closermail?.trim() || body.user?.email?.trim() || null;
+  const nombreCloser = cd.nombrecloser?.trim() || `${body.user?.firstName ?? ""} ${body.user?.lastName ?? ""}`.trim() || null;
+  // contact_id: viene en body.contact_id o en cd.email cuando es un ID GHL (sin @)
+  const contactId = body.contact_id?.trim() || (!cd.email?.includes("@") ? cd.email?.trim() : null) || null;
   const idUserGhl = cd.id_customer_ghl?.trim() || null;
+  // Transcripción ya generada (cuentas GHL sin Twilio)
+  const preTranscript = cd.transcript?.trim() || null;
 
-  return { locationId, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl };
+  return { locationId, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl, preTranscript };
 }
 
 // ─── Lookup de cuenta (básico: sin Twilio) ───────────────────────────────────
@@ -500,6 +505,22 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas } =
     await resolveAccountFull(fields.locationId, "Effective");
+
+  // ── Bypass Twilio: transcripción ya viene en el payload (cuentas GHL sin Twilio) ──
+  if (fields.preTranscript) {
+    console.log("[Effective] Transcript pre-generado recibido — saltando pipeline Twilio/Whisper");
+    let classification: CallClassification;
+    try {
+      classification = await classifyCall(fields.preTranscript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas);
+    } catch (err) {
+      console.error("[Effective/GHL] Error clasificando con IA:", err);
+      return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, null, "Effective/GHL");
+    }
+    if (classification.buzon === true || classification.buzon === null) {
+      return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
+    }
+    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas);
+  }
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
 
