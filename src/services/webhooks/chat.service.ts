@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { db } from "../../config/database.js";
 import { cuentas, eventosHuerfanos } from "../../db/schema.js";
-import { getAccountByLocationId, getGhlUser } from "../ghl-api.service.js";
+import { getAccountByLocationId, getGhlUser, getContactById } from "../ghl-api.service.js";
 import { fetchWithTimeout } from "../../utils/fetch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { ChatWebhookBody } from "../../schemas/webhooks/chat.schema.js";
@@ -369,15 +369,32 @@ export async function processChatWebhook(
   }
 
   // ── 7. Obtener asesor asignado (best-effort) ──────────────────────────────
+  // Prioridad: userId del payload → assignedTo del contacto en GHL → null
   let closerName: string | null = null;
-  if (userId && tokenGhl) {
+  let resolvedUserId: string | null = userId ?? null;
+
+  // Si no hay userId en el payload (e.g. mensajes source="api" / automations),
+  // intentar obtener el assignedTo del contacto como fallback
+  if (!resolvedUserId && contactId && tokenGhl) {
     try {
-      const ghlUser = await getGhlUser(userId, tokenGhl);
+      const ghlContact = await getContactById(contactId, tokenGhl);
+      if (ghlContact?.assignedTo) {
+        resolvedUserId = ghlContact.assignedTo;
+        console.log(`[Chat] userId no encontrado en payload — usando assignedTo del contacto: ${resolvedUserId}`);
+      }
+    } catch (err) {
+      console.warn(`[Chat] No se pudo obtener assignedTo del contacto contactId="${contactId}":`, err);
+    }
+  }
+
+  if (resolvedUserId && tokenGhl) {
+    try {
+      const ghlUser = await getGhlUser(resolvedUserId, tokenGhl);
       if (ghlUser?.name) {
         closerName = ghlUser.name;
       }
     } catch (err) {
-      console.warn(`[Chat] No se pudo obtener user userId="${userId}":`, err);
+      console.warn(`[Chat] No se pudo obtener user userId="${resolvedUserId}":`, err);
     }
   }
 

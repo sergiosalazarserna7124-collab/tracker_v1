@@ -398,6 +398,33 @@ export async function safeAddContactTags(
  * Obtiene los appointments de un contacto en GHL.
  * Retorna el startTime del más cercano a la fecha dada, o null si no hay.
  */
+// ─── GHL API: obtener contacto por ID (para assignedTo) ──────────────────────
+export async function getContactById(
+  contactId: string,
+  bearerToken: string,
+): Promise<{ assignedTo: string | null } | null> {
+  try {
+    const token = bearerToken.startsWith("Bearer ") ? bearerToken : `Bearer ${bearerToken}`;
+    const res = await fetchWithTimeout(
+      `https://services.leadconnectorhq.com/contacts/${contactId}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: token,
+          Accept: "application/json",
+          Version: "2021-07-28",
+        },
+      },
+      GHL_TIMEOUT_MS,
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { contact?: { assignedTo?: string } };
+    return { assignedTo: data.contact?.assignedTo ?? null };
+  } catch {
+    return null;
+  }
+}
+
 export async function getContactAppointmentDate(
   contactId: string,
   bearerToken: string,
