@@ -212,6 +212,12 @@ Una descripción BREVE y ÚTIL de la llamada. Máximo 2-3 oraciones.
 ### Caso: Operadora dice que el número no existe
 → buzon: null, estado: "seguimiento", iadesc: "Número no existe o incorrecto."
 
+### Caso: El asesor habla solo / se presenta sin respuesta real del cliente
+Si la transcripción muestra SOLO al asesor hablando (presentándose, diciendo "buenos días, le habla X, por favor dígame su nombre") y el cliente NUNCA responde con contenido real → es buzón o sin conversación → buzon: true, estado: "seguimiento".
+
+### Caso: La transcripción es muy corta (menos de 80 caracteres)
+Casi con certeza es un buzón, una llamada cortada o sin conversación real. A menos que haya un "aló" seguido de cuelgue, clasificar como buzon: true, estado: "seguimiento".
+
 ### Caso: La persona muestra interés pero NO agenda nada ni pide info
 → Evalúa el nivel de interés. Si fue tibio sin compromiso → podría ser "seguimiento". Si mostró interés activo → "interesado"
 

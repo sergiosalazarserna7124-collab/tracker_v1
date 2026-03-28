@@ -594,6 +594,17 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     return followUpPath(fields, idCuenta, tokenGhl, callSid, null, null, "Effective");
   }
 
+  // Pre-flight: transcripción demasiado corta → buzón de voz o llamada sin
+  // conversación real (ej: "Bueno, se le quedó?" / mensaje de screening iPhone).
+  // Umbral de 80 chars: cualquier conversación real tiene al menos eso.
+  const MIN_TRANSCRIPT_CHARS = 80;
+  if (transcript.trim().length < MIN_TRANSCRIPT_CHARS) {
+    console.warn(
+      `[Effective] Transcripción muy corta (${transcript.trim().length} chars < ${MIN_TRANSCRIPT_CHARS}); clasificando como seguimiento sin consumir IA`,
+    );
+    return followUpPath(fields, idCuenta, tokenGhl, callSid, transcript, "Transcripción demasiado corta para ser una conversación real.", "Effective/short-transcript");
+  }
+
   // ── Fase 3: Clasificación IA ───────────────────────────────────────────────
 
   let classification: CallClassification;
