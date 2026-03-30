@@ -215,6 +215,9 @@ Una descripción BREVE y ÚTIL de la llamada. Máximo 2-3 oraciones.
 ### Caso: El asesor habla solo / se presenta sin respuesta real del cliente
 Si la transcripción muestra SOLO al asesor hablando (presentándose, diciendo "buenos días, le habla X, por favor dígame su nombre") y el cliente NUNCA responde con contenido real → es buzón o sin conversación → buzon: true, estado: "seguimiento".
 
+### Caso: Recepcionista / asistente que toma nota y cuelga sin pasar la llamada
+Si solo hay una recepcionista/asistente que dice cosas como "permanezca en espera", "voy a verificar si está disponible", "le dejo el recado", "¿me puede dejar su nombre?" y la llamada termina sin que el prospecto real hable directamente → el prospecto NUNCA fue contactado → buzon: false, estado: "seguimiento", iadesc explicando que fue interceptado por recepcionista sin pasar al prospecto.
+
 ### Caso: La transcripción es muy corta (menos de 80 caracteres)
 Casi con certeza es un buzón, una llamada cortada o sin conversación real. A menos que haya un "aló" seguido de cuelgue, clasificar como buzon: true, estado: "seguimiento".
 
