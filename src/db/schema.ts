@@ -118,6 +118,9 @@ export const cuentas = pgTable("cuentas", {
   reglas_etiquetas: jsonb("reglas_etiquetas"),
   // ── V5: configuración de integraciones de Ads ─────────────────────────────
   configuracion_ads: jsonb("configuracion_ads"),
+  // ── V6: métricas manuales y config ────────────────────────────────────────
+  metricas_config: jsonb("metricas_config"),
+  metricas_manual_data: jsonb("metricas_manual_data"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────
