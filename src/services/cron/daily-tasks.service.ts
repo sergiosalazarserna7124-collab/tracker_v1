@@ -302,7 +302,10 @@ interface AnalyzeChatsResult {
   costEstimate: string;
 }
 
-const MAX_CHATS_PER_ACCOUNT = 20;
+// Cuentas sin key propia: máx 20/día para no quemar la key del servidor
+// Cuentas con key propia: máx 100/día (ellos pagan su propio costo)
+const MAX_CHATS_SERVER_KEY = 20;
+const MAX_CHATS_OWN_KEY = 100;
 const DELAY_MS = 200;
 // GPT-4o-mini pricing (input: $0.15/1M tokens, output: $0.60/1M tokens)
 // Estimate ~500 tokens input + ~100 tokens output per chat
@@ -353,7 +356,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
            AND fecha_y_hora_z >= NOW() - INTERVAL '24 hours'
          ORDER BY fecha_y_hora_z DESC
          LIMIT $2`,
-        [cuenta.id_cuenta, MAX_CHATS_PER_ACCOUNT],
+        [cuenta.id_cuenta, cuenta.openai_api_key ? MAX_CHATS_OWN_KEY : MAX_CHATS_SERVER_KEY],
       ),
       { label: `analyzeChats/getChats/${cuenta.id_cuenta}` },
     );
