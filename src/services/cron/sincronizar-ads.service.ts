@@ -59,10 +59,18 @@ interface AdsTikTokConfig {
   cron_hora: number;
 }
 
+interface AdsVturbConfig {
+  activo: boolean;
+  api_token: string;
+  nombre_player: string;
+  cron_hora: number;
+}
+
 interface ConfiguracionAds {
   meta?: AdsMetaConfig;
   google?: AdsGoogleConfig;
   tiktok?: AdsTikTokConfig;
+  vturb?: AdsVturbConfig;
 }
 
 interface CuentaAdsRow {
@@ -311,6 +319,97 @@ async function sincronizarTikTokAds(idCuenta: number, config: AdsTikTokConfig, f
   }
 }
 
+// ─── Vturb Analytics sync ────────────────────────────────────────────────────
+
+async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fecha: string): Promise<void> {
+  // 1. Obtener lista de players
+  const playersRes = await fetch("https://analytics.vturb.net/players/list", {
+    headers: {
+      "X-Api-Version": "v1",
+      "Authorization": `Bearer ${config.api_token}`,
+    },
+  });
+  if (!playersRes.ok) {
+    throw new Error(`Vturb players error: ${playersRes.status} ${await playersRes.text()}`);
+  }
+  const playersJson = (await playersRes.json()) as { data?: Array<{ id: string; name: string }> };
+  const players = playersJson.data ?? (Array.isArray(playersJson) ? playersJson as Array<{ id: string; name: string }> : []);
+
+  // 2. Filtrar por nombre configurado
+  const player = players.find(
+    (p) => p.name.trim().toLowerCase() === config.nombre_player.trim().toLowerCase(),
+  );
+  if (!player) {
+    throw new Error(`Player "${config.nombre_player}" no encontrado en Vturb. Players disponibles: ${players.map((p) => p.name).join(", ")}`);
+  }
+
+  // 3. Obtener stats del día
+  const statsRes = await fetch("https://analytics.vturb.net/sessions/stats_by_day", {
+    method: "POST",
+    headers: {
+      "X-Api-Version": "v1",
+      "Authorization": `Bearer ${config.api_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      player_id: player.id,
+      start_date: `${fecha} 00:01:00`,
+      end_date: `${fecha} 23:57:00`,
+      timezone: "America/Bogota",
+    }),
+  });
+  if (!statsRes.ok) {
+    throw new Error(`Vturb stats error: ${statsRes.status} ${await statsRes.text()}`);
+  }
+  const statsJson = (await statsRes.json()) as { data?: Array<Record<string, unknown>> };
+  const data = statsJson.data ?? [];
+  if (data.length === 0) {
+    console.log(`[Vturb] Sin datos para player "${config.nombre_player}" en fecha ${fecha}`);
+    return;
+  }
+
+  // 4. Extraer métricas (misma lógica que el workflow de n8n)
+  const get = (key: string): number => {
+    const found = data.find((obj) => Object.prototype.hasOwnProperty.call(obj, key));
+    return found ? parseFloat(String(found[key] ?? "0")) || 0 : 0;
+  };
+
+  const impresiones = get("impressions");
+  const clicks = get("link_click");
+  const cpm = get("CPM");
+  const cpc = get("CPC");
+  const ctr = get("CTR");
+  const gasto = get("spend");
+  const agendamientos = get("usuarios");
+  // play_rate y engagement por fecha específica
+  const targetRow = data.find((obj) => obj.date_key === fecha);
+  const play_rate = targetRow ? parseFloat(String(targetRow.play_rate ?? "0")) || 0 : 0;
+  const engagement = targetRow ? parseFloat(String(targetRow.watched_rate ?? targetRow.engagement ?? "0")) || 0 : 0;
+
+  await pgPool.query(
+    `INSERT INTO resumenes_diarios_ads
+      (id_cuenta, fecha, plataforma, gasto_total_ad, impresiones_totales, clicks_unicos, cpm, cpc, ctr, play_rate, engagement, agendamientos, datos_extra)
+     VALUES ($1, $2, 'vturb', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     ON CONFLICT (id_cuenta, fecha)
+     DO UPDATE SET
+       gasto_total_ad = EXCLUDED.gasto_total_ad,
+       impresiones_totales = EXCLUDED.impresiones_totales,
+       clicks_unicos = EXCLUDED.clicks_unicos,
+       cpm = EXCLUDED.cpm,
+       cpc = EXCLUDED.cpc,
+       ctr = EXCLUDED.ctr,
+       play_rate = EXCLUDED.play_rate,
+       engagement = EXCLUDED.engagement,
+       agendamientos = EXCLUDED.agendamientos,
+       datos_extra = EXCLUDED.datos_extra,
+       plataforma = 'vturb'`,
+    [idCuenta, fecha, gasto, impresiones, clicks, cpm, cpc, ctr, play_rate, engagement, agendamientos,
+     JSON.stringify({ player_id: player.id, player_name: player.name, raw_data: data })],
+  );
+
+  console.log(`[Vturb] cuenta=${idCuenta} player="${config.nombre_player}" fecha=${fecha} play_rate=${play_rate} impressions=${impresiones}`);
+}
+
 // ─── Main export ─────────────────────────────────────────────────────────────
 
 export async function sincronizarAds(fechaOverride?: string): Promise<SincronizarAdsResult> {
@@ -354,6 +453,16 @@ export async function sincronizarAds(fechaOverride?: string): Promise<Sincroniza
         processed++;
       } catch (e) {
         errors.push(`[TikTok] cuenta ${cuenta.id_cuenta}: ${String(e)}`);
+      }
+    }
+
+    // Vturb
+    if (cfg.vturb?.activo && cfg.vturb.api_token && cfg.vturb.nombre_player) {
+      try {
+        await sincronizarVturbAds(cuenta.id_cuenta, cfg.vturb, fecha);
+        processed++;
+      } catch (e) {
+        errors.push(`[Vturb] cuenta ${cuenta.id_cuenta}: ${String(e)}`);
       }
     }
   }
