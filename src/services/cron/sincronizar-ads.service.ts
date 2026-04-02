@@ -62,6 +62,7 @@ interface AdsTikTokConfig {
 interface AdsVturbConfig {
   activo: boolean;
   api_token: string;
+  auth_header?: string; // Nombre del header de auth (default: 'Authorization')
   nombre_player: string;
   cron_hora: number;
 }
@@ -326,7 +327,7 @@ async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fec
   const playersRes = await fetch("https://analytics.vturb.net/players/list", {
     headers: {
       "X-Api-Version": "v1",
-      "Authorization": `Bearer ${config.api_token}`,
+      [config.auth_header || "Authorization"]: config.auth_header ? config.api_token : `Bearer ${config.api_token}`,
     },
   });
   if (!playersRes.ok) {
@@ -362,7 +363,7 @@ async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fec
     method: "POST",
     headers: {
       "X-Api-Version": "v1",
-      "Authorization": `Bearer ${config.api_token}`,
+      [config.auth_header || "Authorization"]: config.auth_header ? config.api_token : `Bearer ${config.api_token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
