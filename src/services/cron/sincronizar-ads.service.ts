@@ -2,11 +2,44 @@ import { db as pgPool } from "../../config/database.js";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
+// Todos los campos disponibles de la API de Meta Ads Insights
+export const META_ADS_FIELDS_DISPONIBLES = [
+  { key: "spend", label: "Gasto total ($)", default: true },
+  { key: "impressions", label: "Impresiones", default: true },
+  { key: "clicks", label: "Clicks", default: true },
+  { key: "cpm", label: "CPM (Costo por 1000 impresiones)", default: true },
+  { key: "cpc", label: "CPC (Costo por click)", default: true },
+  { key: "ctr", label: "CTR (%)", default: true },
+  { key: "reach", label: "Alcance único", default: false },
+  { key: "frequency", label: "Frecuencia", default: false },
+  { key: "actions", label: "Acciones (leads, compras, etc.)", default: false },
+  { key: "action_values", label: "Valor de acciones ($)", default: false },
+  { key: "cost_per_action_type", label: "Costo por acción", default: false },
+  { key: "video_play_actions", label: "Reproducciones de video", default: false },
+  { key: "video_thruplay_watched_actions", label: "Video visto al 100%", default: false },
+  { key: "video_30_sec_watched_actions", label: "Video visto 30 seg", default: false },
+  { key: "website_ctr", label: "CTR hacia sitio web", default: false },
+  { key: "outbound_clicks", label: "Clicks salientes", default: false },
+  { key: "outbound_clicks_ctr", label: "CTR saliente (%)", default: false },
+  { key: "inline_link_clicks", label: "Clicks en enlace", default: false },
+  { key: "inline_post_engagement", label: "Engagement del post", default: false },
+  { key: "post_reactions", label: "Reacciones al post", default: false },
+  { key: "post_comments", label: "Comentarios", default: false },
+  { key: "post_shares", label: "Compartidos", default: false },
+  { key: "unique_clicks", label: "Clicks únicos", default: false },
+  { key: "unique_ctr", label: "CTR único (%)", default: false },
+  { key: "cost_per_unique_click", label: "Costo por click único", default: false },
+] as const;
+
+export type MetaAdsField = typeof META_ADS_FIELDS_DISPONIBLES[number]["key"];
+
 interface AdsMetaConfig {
   activo: boolean;
   ad_account_id: string;
   access_token: string;
   cron_hora: number;
+  campos_extra?: string[]; // Campos adicionales seleccionados por el usuario
+  pixel_id?: string; // ID del Pixel de Meta para conversiones
 }
 
 interface AdsGoogleConfig {
@@ -57,7 +90,11 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
   const url = new URL(
     `https://graph.facebook.com/v19.0/act_${config.ad_account_id}/insights`,
   );
-  url.searchParams.set("fields", "spend,impressions,clicks,campaign_name,adset_name,cpm,cpc,ctr");
+  // Campos base siempre incluidos + campos extra configurados por el usuario
+  const baseFields = ["spend", "impressions", "clicks", "campaign_name", "adset_name", "cpm", "cpc", "ctr"];
+  const extraFields = (config.campos_extra ?? []).filter((f) => !baseFields.includes(f));
+  const allFields = [...baseFields, ...extraFields];
+  url.searchParams.set("fields", allFields.join(","));
   url.searchParams.set("time_range", JSON.stringify({ since: fecha, until: fecha }));
   url.searchParams.set("level", "campaign");
   url.searchParams.set("access_token", config.access_token);
@@ -71,6 +108,8 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
   const json = (await res.json()) as { data?: Array<Record<string, unknown>> };
   const rows = json.data ?? [];
 
+  const CAMPOS_BASE = new Set(["campaign_name", "adset_name", "spend", "impressions", "clicks", "cpm", "cpc", "ctr", "date_start", "date_stop"]);
+
   for (const row of rows) {
     const campana = String(row.campaign_name ?? "");
     const conjuntoAnuncios = String(row.adset_name ?? "");
@@ -81,10 +120,18 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
     const cpc = parseFloat(String(row.cpc ?? "0")) || 0;
     const ctr = parseFloat(String(row.ctr ?? "0")) || 0;
 
+    // Guardar campos extra en datos_extra (reach, actions, video_plays, etc.)
+    const datosExtra: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(row)) {
+      if (!CAMPOS_BASE.has(key)) {
+        datosExtra[key] = val;
+      }
+    }
+
     await pgPool.query(
       `INSERT INTO resumenes_diarios_ads
-        (id_cuenta, fecha, plataforma, campana, conjunto_anuncios, gasto_total_ad, impresiones_totales, clicks_unicos, cpm, cpc, ctr)
-       VALUES ($1, $2, 'meta', $3, $4, $5, $6, $7, $8, $9, $10)
+        (id_cuenta, fecha, plataforma, campana, conjunto_anuncios, gasto_total_ad, impresiones_totales, clicks_unicos, cpm, cpc, ctr, datos_extra)
+       VALUES ($1, $2, 'meta', $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (id_cuenta, fecha)
        DO UPDATE SET
          gasto_total_ad = EXCLUDED.gasto_total_ad,
@@ -95,8 +142,10 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
          ctr = EXCLUDED.ctr,
          campana = EXCLUDED.campana,
          conjunto_anuncios = EXCLUDED.conjunto_anuncios,
+         datos_extra = EXCLUDED.datos_extra,
          plataforma = 'meta'`,
-      [idCuenta, fecha, campana, conjuntoAnuncios, gasto, impresiones, clicks, cpm, cpc, ctr],
+      [idCuenta, fecha, campana, conjuntoAnuncios, gasto, impresiones, clicks, cpm, cpc, ctr,
+       Object.keys(datosExtra).length > 0 ? JSON.stringify(datosExtra) : null],
     );
   }
 }
