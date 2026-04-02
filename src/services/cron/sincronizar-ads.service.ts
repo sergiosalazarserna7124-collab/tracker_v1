@@ -327,7 +327,7 @@ async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fec
   const playersRes = await fetch("https://analytics.vturb.net/players/list", {
     headers: {
       "X-Api-Version": "v1",
-      [config.auth_header || "Authorization"]: config.auth_header ? config.api_token : `Bearer ${config.api_token}`,
+      [config.auth_header || "x-api-token"]: config.api_token,
     },
   });
   if (!playersRes.ok) {
@@ -363,7 +363,7 @@ async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fec
     method: "POST",
     headers: {
       "X-Api-Version": "v1",
-      [config.auth_header || "Authorization"]: config.auth_header ? config.api_token : `Bearer ${config.api_token}`,
+      [config.auth_header || "x-api-token"]: config.api_token,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
