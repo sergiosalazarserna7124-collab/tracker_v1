@@ -332,15 +332,29 @@ async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fec
   if (!playersRes.ok) {
     throw new Error(`Vturb players error: ${playersRes.status} ${await playersRes.text()}`);
   }
-  const playersJson = (await playersRes.json()) as { data?: Array<{ id: string; name: string }> };
-  const players = playersJson.data ?? (Array.isArray(playersJson) ? playersJson as Array<{ id: string; name: string }> : []);
+  const playersRaw = (await playersRes.json()) as unknown;
+  // Vturb puede retornar array directo O { data: [...] } O { players: [...] }
+  let players: Array<{ id: string; name: string }> = [];
+  if (Array.isArray(playersRaw)) {
+    players = playersRaw as Array<{ id: string; name: string }>;
+  } else if (playersRaw && typeof playersRaw === "object") {
+    const obj = playersRaw as Record<string, unknown>;
+    if (Array.isArray(obj.data)) players = obj.data as Array<{ id: string; name: string }>;
+    else if (Array.isArray(obj.players)) players = obj.players as Array<{ id: string; name: string }>;
+    else if (Array.isArray(obj.items)) players = obj.items as Array<{ id: string; name: string }>;
+  }
 
-  // 2. Filtrar por nombre configurado
+  console.log(`[Vturb] ${players.length} players encontrados: ${players.map((p) => p.name).join(", ")}`);
+
+  // 2. Filtrar por nombre configurado (case-insensitive, trim)
   const player = players.find(
-    (p) => p.name.trim().toLowerCase() === config.nombre_player.trim().toLowerCase(),
+    (p) => p.name?.trim().toLowerCase() === config.nombre_player.trim().toLowerCase(),
   );
   if (!player) {
-    throw new Error(`Player "${config.nombre_player}" no encontrado en Vturb. Players disponibles: ${players.map((p) => p.name).join(", ")}`);
+    throw new Error(
+      `Player "${config.nombre_player}" no encontrado. Disponibles: [${players.map((p) => `"${p.name}"`).join(", ")}]. ` +
+      `Verifica que el nombre coincida exactamente (sensible a mayúsculas NO, a espacios SÍ).`
+    );
   }
 
   // 3. Obtener stats del día
