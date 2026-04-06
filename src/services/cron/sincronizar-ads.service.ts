@@ -141,7 +141,7 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
       `INSERT INTO resumenes_diarios_ads
         (id_cuenta, fecha, plataforma, campana, conjunto_anuncios, gasto_total_ad, impresiones_totales, clicks_unicos, cpm, cpc, ctr, datos_extra)
        VALUES ($1, $2, 'meta', $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (id_cuenta, fecha)
+       ON CONFLICT (id_cuenta, fecha, COALESCE(campana, ''))
        DO UPDATE SET
          gasto_total_ad = EXCLUDED.gasto_total_ad,
          impresiones_totales = EXCLUDED.impresiones_totales,
@@ -149,7 +149,6 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
          cpm = EXCLUDED.cpm,
          cpc = EXCLUDED.cpc,
          ctr = EXCLUDED.ctr,
-         campana = EXCLUDED.campana,
          conjunto_anuncios = EXCLUDED.conjunto_anuncios,
          datos_extra = EXCLUDED.datos_extra,
          plataforma = 'meta'`,
