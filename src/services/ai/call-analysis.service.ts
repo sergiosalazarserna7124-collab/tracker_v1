@@ -223,6 +223,42 @@ const objectionsSchema = jsonSchema<{ objeciones: ObjecionItem[] }>({
   additionalProperties: false,
 });
 
+// ─── Normalización post-IA: mapea name → id en embudo personalizado ──────────
+// La IA a veces devuelve el `name` (ej: "Scheduled") en vez del `id` ("programado").
+// Esta función hace el mapeo inverso name→id para garantizar consistencia en BD.
+
+function normalizeClassifierResult(
+  result: ClassifierResult,
+  embudoPersonalizado?: unknown,
+): ClassifierResult {
+  if (!result?.categoria) return result;
+  const customIds = extractEmbudoIds(embudoPersonalizado);
+  if (!customIds) return result; // sin embudo → defaults, la IA devuelve lo correcto
+
+  // Si la categoría ya es un ID válido, no hay nada que hacer
+  if (customIds.includes(result.categoria)) return result;
+
+  // Intentar mapear por name (case-insensitive)
+  const embudoArr = Array.isArray(embudoPersonalizado) ? embudoPersonalizado : [];
+  const match = embudoArr.find(
+    (e: unknown) =>
+      typeof e === "object" &&
+      e !== null &&
+      typeof (e as Record<string, unknown>).name === "string" &&
+      (e as Record<string, string>).name.toLowerCase().trim() === result.categoria.toLowerCase().trim(),
+  ) as Record<string, string> | undefined;
+
+  if (match?.id) {
+    console.log(`[normalizeClassifierResult] Mapeando "${result.categoria}" → "${match.id}" (name→id)`);
+    return { ...result, categoria: match.id };
+  }
+
+  // Fallback: tomar el primer ID del embudo (el más "seguimiento" suele ser el último)
+  const fallbackId = customIds[customIds.length - 1] ?? customIds[0];
+  console.warn(`[normalizeClassifierResult] Categoría desconocida "${result.categoria}" → fallback "${fallbackId}"`);
+  return { ...result, categoria: fallbackId };
+}
+
 // ─── Función principal: 3 llamadas IA + evaluador de reglas en paralelo ──────
 
 export async function analyzeCall(
@@ -284,7 +320,7 @@ export async function analyzeCall(
   return {
     classifier:
       classifierSettled.status === "fulfilled"
-        ? classifierSettled.value.object
+        ? normalizeClassifierResult(classifierSettled.value.object, embudoPersonalizado)
         : null,
     analysisText:
       analysisSettled.status === "fulfilled"
