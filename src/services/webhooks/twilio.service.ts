@@ -297,6 +297,67 @@ async function followUpPath(
     }
   }
 
+  // Prioridad 3: fallback por ghl_contact_id (contact_id del payload)
+  // Esto resuelve el caso de Grupo Mexa: no-answer llega sin id_user_ghl pero sí con contact_id
+  if (!existing && contactId) {
+    try {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(selectCols)
+            .from(llamadas)
+            .where(
+              and(
+                eq(llamadas.ghl_contact_id, contactId),
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+                or(
+                  inArray(llamadas.estado, [...ESTADOS_ACTIVOS]),
+                  isNull(llamadas.estado),
+                ),
+              ),
+            )
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: `${label}/selectByContactId` },
+      );
+
+      existing = rows[0] ?? null;
+      if (existing) console.log(`[${label}] Encontrado por ghl_contact_id="${contactId}" id_registro=${existing.id_registro}`);
+    } catch (err) {
+      console.error(`[${label}] Error buscando registro por ghl_contact_id="${contactId}":`, err);
+    }
+  }
+
+  // Prioridad 4: fallback por teléfono (último recurso)
+  if (!existing && phone) {
+    try {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(selectCols)
+            .from(llamadas)
+            .where(
+              and(
+                eq(llamadas.phone_raw_format, phone),
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+                or(
+                  inArray(llamadas.estado, [...ESTADOS_ACTIVOS]),
+                  isNull(llamadas.estado),
+                ),
+              ),
+            )
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: `${label}/selectByPhone` },
+      );
+
+      existing = rows[0] ?? null;
+      if (existing) console.log(`[${label}] Encontrado por phone="${phone}" id_registro=${existing.id_registro}`);
+    } catch (err) {
+      console.error(`[${label}] Error buscando registro por phone="${phone}":`, err);
+    }
+  }
+
   let idRegistro: number | null = null;
 
   if (existing) {
@@ -318,6 +379,7 @@ async function followUpPath(
               ...(transcript && { trancription: transcript }),
               ...(iadesc && { iadescripcion: iadesc }),
               ...(idUserGhl && { id_user_ghl: idUserGhl }),
+              ...(contactId && { ghl_contact_id: contactId }),
               ...(stl !== null && { speed_to_lead: stl }),
             })
             .where(eq(llamadas.id_registro, existing!.id_registro)),
@@ -353,6 +415,7 @@ async function followUpPath(
               callsid: callSid,
               iadescripcion: iadesc,
               id_user_ghl: idUserGhl,
+              ghl_contact_id: contactId,
             })
             .returning({ id_registro: llamadas.id_registro }),
         { label: `${label}/insert` },
@@ -452,6 +515,7 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
             callsid: null,
             iadescripcion: null,
             id_user_ghl: fields.idUserGhl,
+            ghl_contact_id: fields.contactId,
           })
           .returning({ id_registro: llamadas.id_registro }),
       { label: "Twilio/insertPdte" },
@@ -797,6 +861,56 @@ async function effectivePath(
     }
   }
 
+  // Prioridad 3: fallback por ghl_contact_id
+  if (!existing && contactId) {
+    try {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(selectCols)
+            .from(llamadas)
+            .where(
+              and(
+                eq(llamadas.ghl_contact_id, contactId),
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+              ),
+            )
+            .orderBy(desc(llamadas.id_registro))
+            .limit(1),
+        { label: "effectivePath/selectByContactId" },
+      );
+
+      existing = rows[0] ?? null;
+    } catch (err) {
+      console.error(`[Effective] Error buscando registro por ghl_contact_id="${contactId}":`, err);
+    }
+  }
+
+  // Prioridad 4: fallback por teléfono
+  if (!existing && phone) {
+    try {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(selectCols)
+            .from(llamadas)
+            .where(
+              and(
+                eq(llamadas.phone_raw_format, phone),
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+              ),
+            )
+            .orderBy(desc(llamadas.id_registro))
+            .limit(1),
+        { label: "effectivePath/selectByPhone" },
+      );
+
+      existing = rows[0] ?? null;
+    } catch (err) {
+      console.error(`[Effective] Error buscando registro por phone="${phone}":`, err);
+    }
+  }
+
   // Determinar si el estado del registro existente es "activo" para decidir UPDATE vs INSERT
   const estadoActivo =
     existing &&
@@ -827,6 +941,7 @@ async function effectivePath(
               ...(leadEmbudoData && { lead_embudo_personalizado: leadEmbudoData }),
               ...(callSid && { callsid: callSid }),
               ...(idUserGhl && { id_user_ghl: idUserGhl }),
+              ...(contactId && { ghl_contact_id: contactId }),
               ...(stl !== null && { speed_to_lead: stl }),
             })
             .where(eq(llamadas.id_registro, existing!.id_registro)),
@@ -862,6 +977,7 @@ async function effectivePath(
               callsid: callSid,
               iadescripcion: iadesc,
               id_user_ghl: idUserGhl,
+              ghl_contact_id: contactId,
               tags_internos: tagsInternos,
               ...(leadEmbudoData && { lead_embudo_personalizado: leadEmbudoData }),
             })

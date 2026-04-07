@@ -57,6 +57,7 @@ export const llamadas = pgTable("registros_de_llamada", {
   callsid: text("callsid"),
   iadescripcion: text("iadescripcion"),
   id_user_ghl: text("id_user_ghl"),
+  ghl_contact_id: text("ghl_contact_id"),
   // ── V2: etiquetado interno omnicanal ──────────────────────────────────────
   tags_internos: jsonb("tags_internos"),
   // ── V4: resultado de clasificación del embudo personalizado por IA ─────────
