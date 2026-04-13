@@ -16,13 +16,17 @@ const ESTADOS_REASIGNABLES = [
 
 function extractFields(body: ReasignacionBodyPayload) {
   const cd = body.customData;
+  // Fall back to top-level body fields when customData lacks lead info
+  // (Some GHL workflows send nombre/telefono only at the top level)
+  const nombreLead = (cd.nombre ?? "").trim() || (body.full_name ?? "").trim() || (body.first_name ?? "").trim();
+  const telefonoLead = (cd.telefono ?? "").trim() || (body.phone ?? "").trim();
   return {
     idUserGhl: (cd.idusuario ?? "").trim(),
     locationId: (cd.locationid ?? "").trim(),
     closerMail: (cd.correocloser ?? "").trim(),
     nombreCloser: (cd.nombrecloser ?? "").trim(),
-    nombreLead: (cd.nombre ?? "").trim(),
-    telefonoLead: (cd.telefono ?? "").trim(),
+    nombreLead,
+    telefonoLead,
   };
 }
 

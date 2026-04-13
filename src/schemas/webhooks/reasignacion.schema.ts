@@ -15,6 +15,9 @@ const ReasignacionCustomData = Type.Object(
 export const ReasignacionBodyData = Type.Object(
   {
     customData: ReasignacionCustomData,
+    phone: Type.Optional(Type.String()),
+    full_name: Type.Optional(Type.String()),
+    first_name: Type.Optional(Type.String()),
   },
   { additionalProperties: true },
 );
