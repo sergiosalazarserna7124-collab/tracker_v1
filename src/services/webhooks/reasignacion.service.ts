@@ -120,6 +120,7 @@ export async function processReasignacion(
   }
 
   if (existing) {
+    const existingId = existing.id_registro;
     try {
       await withRetry(
         () =>
@@ -131,7 +132,7 @@ export async function processReasignacion(
               ...(fields.nombreLead && { nombre_lead: fields.nombreLead }),
               ...(fields.telefonoLead && { phone_raw_format: fields.telefonoLead }),
             })
-            .where(eq(llamadas.id_registro, existing!.id_registro)),
+            .where(eq(llamadas.id_registro, existingId)),
         { label: `${label}/update` },
       );
 
