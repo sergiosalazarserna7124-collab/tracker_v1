@@ -624,6 +624,11 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
     audioBuffer = await downloadRecording(call.accountSid, recordingSid, twilioSid, authTwilio);
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes("Recording download responded 404")) {
+      console.warn("[Effective] Recording aún no procesado por Twilio (404) — skip sin actualizar GHL ni BD");
+      return { success: true, data: { path: "skip-recording-not-ready" } };
+    }
     console.error("[Effective] Error en pipeline Twilio:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, null, null, "Effective");
   }
