@@ -31,6 +31,7 @@ export async function buildApp() {
   await app.register(externalDataRoute, { prefix: "/webhooks" });
   await app.register(orphanRoute, { prefix: "/webhooks" });
   await app.register(reasignacionRoute, { prefix: "/webhooks" });
+  await app.register(reasignacionRoute); // alias: acepta /reasignacion además de /webhooks/reasignacion
   await app.register(cronDailyTasksRoute, { prefix: "/cron" });
   await app.register(cronSincronizarAdsRoute, { prefix: "/cron" });
   await app.register(videoRecoveryRoute, { prefix: "/api/quick-triggers" });
