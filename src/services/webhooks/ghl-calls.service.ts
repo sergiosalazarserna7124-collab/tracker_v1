@@ -17,7 +17,9 @@ import { llamadas, logLlamadas, eventosHuerfanos } from "../../db/schema.js";
 import {
   addContactNote,
   getAccountByLocationId,
+  getAccountById,
   getAccountFullByLocationId,
+  getAccountFullById,
   safeAddContactTag,
   safeAddContactTags,
   GHL_TAGS,
@@ -85,8 +87,17 @@ function extractFields(body: GhlCallEventBody) {
   const idUserGhl = cd.id_customer_ghl?.trim() || null;
   const transcript = cd.transcript?.trim() || null;
 
+  const rawIdCuenta = (cd as Record<string, unknown>).idcuenta;
+  const idCuentaFromPayload =
+    typeof rawIdCuenta === "string" && rawIdCuenta.trim() !== ""
+      ? parseInt(rawIdCuenta.trim(), 10)
+      : typeof rawIdCuenta === "number"
+        ? rawIdCuenta
+        : null;
+
   return {
     locationId: locationId || null,
+    idCuentaFromPayload: Number.isFinite(idCuentaFromPayload) ? (idCuentaFromPayload as number) : null,
     nombreLead,
     mailLead,
     phone,
@@ -104,21 +115,37 @@ function extractFields(body: GhlCallEventBody) {
 async function resolveAccount(
   locationId: string | null,
   label: string,
+  idCuentaFallback?: number | null,
 ): Promise<{ idCuenta: number | null; tokenGhl: string | null }> {
-  if (!locationId) {
-    console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
-    return { idCuenta: null, tokenGhl: null };
-  }
-  try {
-    const account = await getAccountByLocationId(locationId);
-    if (!account) {
+  if (locationId) {
+    try {
+      const account = await getAccountByLocationId(locationId);
+      if (account) {
+        return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl };
+      }
       console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
+    } catch (err) {
+      console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
     }
-    return { idCuenta: account?.id_cuenta ?? null, tokenGhl: account?.token_ghl ?? null };
-  } catch (err) {
-    console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
-    return { idCuenta: null, tokenGhl: null };
   }
+
+  if (idCuentaFallback != null) {
+    console.warn(`[${label}] locationId no resolvió — usando idcuenta del payload: ${idCuentaFallback}`);
+    try {
+      const account = await getAccountById(idCuentaFallback);
+      if (account) {
+        return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl };
+      }
+      console.warn(`[${label}] No se encontró cuenta para id_cuenta=${idCuentaFallback}`);
+    } catch (err) {
+      console.error(`[${label}] Error buscando cuenta por id_cuenta=${idCuentaFallback}:`, err);
+    }
+  }
+
+  if (!locationId && idCuentaFallback == null) {
+    console.warn(`[${label}] Payload sin locationId ni idcuenta; no se puede resolver id_cuenta`);
+  }
+  return { idCuenta: null, tokenGhl: null };
 }
 
 // ─── Lookup de cuenta (completo) ─────────────────────────────────────────────
@@ -126,6 +153,7 @@ async function resolveAccount(
 async function resolveAccountFull(
   locationId: string | null,
   label: string,
+  idCuentaFallback?: number | null,
 ): Promise<{
   idCuenta: number | null;
   tokenGhl: string | null;
@@ -144,16 +172,8 @@ async function resolveAccountFull(
     promptLlamadas: null,
     reglasEtiquetas: null,
   };
-  if (!locationId) {
-    console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
-    return empty;
-  }
-  try {
-    const account: CuentaFullRow | null = await getAccountFullByLocationId(locationId);
-    if (!account) {
-      console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
-      return empty;
-    }
+
+  function mapAccount(account: CuentaFullRow) {
     return {
       idCuenta: account.id_cuenta,
       tokenGhl: account.token_ghl,
@@ -163,10 +183,33 @@ async function resolveAccountFull(
       promptLlamadas: account.prompt_llamadas,
       reglasEtiquetas: account.reglas_etiquetas,
     };
-  } catch (err) {
-    console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
-    return empty;
   }
+
+  if (locationId) {
+    try {
+      const account = await getAccountFullByLocationId(locationId);
+      if (account) return mapAccount(account);
+      console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
+    } catch (err) {
+      console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
+    }
+  }
+
+  if (idCuentaFallback != null) {
+    console.warn(`[${label}] locationId no resolvió — usando idcuenta del payload: ${idCuentaFallback}`);
+    try {
+      const account = await getAccountFullById(idCuentaFallback);
+      if (account) return mapAccount(account);
+      console.warn(`[${label}] No se encontró cuenta para id_cuenta=${idCuentaFallback}`);
+    } catch (err) {
+      console.error(`[${label}] Error buscando cuenta por id_cuenta=${idCuentaFallback}:`, err);
+    }
+  }
+
+  if (!locationId && idCuentaFallback == null) {
+    console.warn(`[${label}] Payload sin locationId ni idcuenta; no se puede resolver id_cuenta`);
+  }
+  return empty;
 }
 
 // ─── Helper: insertar evento en log_llamadas ──────────────────────────────────
@@ -648,11 +691,11 @@ export async function processGhlCallPending(body: GhlCallEventBody): Promise<Ser
   const fields = extractFields(body);
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Pending");
+    const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Pending", fields.idCuentaFromPayload);
     return saveOrphanEvent(body, idCuenta, "GhlCalls/Pending");
   }
 
-  const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Pending");
+  const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Pending", fields.idCuentaFromPayload);
 
   try {
     const [inserted] = await withRetry(
@@ -706,11 +749,11 @@ export async function processGhlCallNoAnswer(body: GhlCallEventBody): Promise<Se
   const fields = extractFields(body);
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/NoAnswer");
+    const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/NoAnswer", fields.idCuentaFromPayload);
     return saveOrphanEvent(body, idCuenta, "GhlCalls/NoAnswer");
   }
 
-  const { idCuenta, tokenGhl } = await resolveAccount(fields.locationId, "GhlCalls/NoAnswer");
+  const { idCuenta, tokenGhl } = await resolveAccount(fields.locationId, "GhlCalls/NoAnswer", fields.idCuentaFromPayload);
 
   return followUpPath(fields, idCuenta, tokenGhl, null, null, "GhlCalls/NoAnswer");
 }
@@ -723,7 +766,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
   const fields = extractFields(body);
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Effective");
+    const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Effective", fields.idCuentaFromPayload);
     return saveOrphanEvent(body, idCuenta, "GhlCalls/Effective");
   }
 
@@ -735,7 +778,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     promptVentas,
     promptLlamadas,
     reglasEtiquetas,
-  } = await resolveAccountFull(fields.locationId, "GhlCalls/Effective");
+  } = await resolveAccountFull(fields.locationId, "GhlCalls/Effective", fields.idCuentaFromPayload);
 
   const transcript = fields.transcript;
 

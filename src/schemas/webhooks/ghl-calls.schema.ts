@@ -32,6 +32,7 @@ const GhlCallCustomData = Type.Object(
     closermail: Type.Optional(Type.String()),
     nombrecloser: Type.Optional(Type.String()),
     locationid: Type.Optional(Type.String()),
+    idcuenta: Type.Optional(Type.String()),
     id_customer_ghl: Type.Optional(Type.String()),
     // Transcripción ya generada por GHL / Elto / proveedor externo
     transcript: Type.Optional(Type.String()),

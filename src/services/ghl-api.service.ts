@@ -93,6 +93,55 @@ export async function getAccountByLocationId(locationId: string): Promise<Cuenta
   return rows[0] ?? null;
 }
 
+// ─── Consulta a BD: buscar cuenta por id_cuenta ──────────────────────────────
+
+export async function getAccountById(idCuenta: number): Promise<CuentaRow | null> {
+  const rows = await withRetry(
+    () =>
+      drizzleDb
+        .select({
+          id_cuenta: cuentas.id_cuenta,
+          nombre_cuenta: cuentas.nombre_cuenta,
+          locationid: cuentas.locationid,
+          token_ghl: cuentas.token_ghl,
+        })
+        .from(cuentas)
+        .where(eq(cuentas.id_cuenta, idCuenta))
+        .limit(1),
+    { label: "getAccountById" },
+  );
+
+  return rows[0] ?? null;
+}
+
+// ─── Consulta a BD: buscar cuenta completa por id_cuenta ─────────────────────
+
+export async function getAccountFullById(idCuenta: number): Promise<CuentaFullRow | null> {
+  const rows = await withRetry(
+    () =>
+      drizzleDb
+        .select({
+          id_cuenta: cuentas.id_cuenta,
+          nombre_cuenta: cuentas.nombre_cuenta,
+          locationid: cuentas.locationid,
+          token_ghl: cuentas.token_ghl,
+          twilio_sid: cuentas.twilio_sid,
+          auth_twilio: cuentas.auth_twilio,
+          openai_api_key: cuentas.openai_api_key,
+          embudo_personalizado: cuentas.embudo_personalizado,
+          prompt_ventas: cuentas.prompt_ventas,
+          prompt_llamadas: cuentas.prompt_llamadas,
+          reglas_etiquetas: cuentas.reglas_etiquetas,
+        })
+        .from(cuentas)
+        .where(eq(cuentas.id_cuenta, idCuenta))
+        .limit(1),
+    { label: "getAccountFullById" },
+  );
+
+  return rows[0] ?? null;
+}
+
 // ─── Consulta a BD: buscar cuenta con datos de Twilio incluidos ──────────────
 
 export async function getAccountFullByLocationId(locationId: string): Promise<CuentaFullRow | null> {
