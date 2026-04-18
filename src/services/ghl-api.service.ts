@@ -281,7 +281,7 @@ export async function addContactTag(
   // ── Verbose logging para diagnosticar 401 ────────────────────────────────
   console.log("[GHL addContactTag] ── REQUEST ──────────────────────────────");
   console.log("[GHL addContactTag] URL    :", url);
-  console.log("[GHL addContactTag] Headers:", JSON.stringify(headers, null, 2));
+  console.log("[GHL addContactTag] Headers:", JSON.stringify({ ...headers, Authorization: "Bearer [REDACTED]" }, null, 2));
   console.log("[GHL addContactTag] Body   :", requestBody);
   console.log("[GHL addContactTag] ─────────────────────────────────────────");
 
