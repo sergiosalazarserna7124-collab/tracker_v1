@@ -145,7 +145,7 @@ function parseIngles(hora: string): [number, number, number, number, number] | n
  * @param zonahoraria  - Timezone IANA (cualquier capitalización)
  * @returns Date en UTC, o null si el formato no pudo ser parseado
  */
-export function parseFechaReunionToUTC(hora: string, zonahoraria: string): Date | null {
+export function parseFechaReunionToUTC(hora: string | undefined, zonahoraria: string | undefined): Date | null {
   if (!hora || !zonahoraria) return null;
 
   const tz = normalizeIANA(zonahoraria);

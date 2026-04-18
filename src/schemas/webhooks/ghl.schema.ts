@@ -8,8 +8,8 @@ const GhlCustomData = Type.Object(
   {
     categoria: Type.String(),
     idcuenta: Type.String(),
-    hora: Type.String(),
-    zonahoraria: Type.String({ description: "Timezone IANA, ej: America/Bogota" }),
+    hora: Type.Optional(Type.String()),
+    zonahoraria: Type.Optional(Type.String({ description: "Timezone IANA, ej: America/Bogota" })),
     nombre: Type.Optional(Type.String()),
     closer: Type.Optional(Type.String()),
     email: Type.Optional(Type.String()),
