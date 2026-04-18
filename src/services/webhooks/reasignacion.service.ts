@@ -20,9 +20,13 @@ function extractFields(body: ReasignacionBodyPayload) {
   // (Some GHL workflows send nombre/telefono only at the top level)
   const nombreLead = (cd.nombre ?? "").trim() || (body.full_name ?? "").trim() || (body.first_name ?? "").trim();
   const telefonoLead = (cd.telefono ?? "").trim() || (body.phone ?? "").trim();
+  // Fall back to body.location.id when customData.locationid doesn't match any account
+  // (Ferrero and others have typos in the manually-configured customData.locationid)
+  const locationId = (cd.locationid ?? "").trim() || (body.location?.id ?? "").trim();
   return {
     idUserGhl: (cd.idusuario ?? "").trim(),
-    locationId: (cd.locationid ?? "").trim(),
+    locationId,
+    locationIdFallback: (body.location?.id ?? "").trim(),
     closerMail: (cd.correocloser ?? "").trim(),
     nombreCloser: (cd.nombrecloser ?? "").trim(),
     nombreLead,
@@ -68,15 +72,28 @@ export async function processReasignacion(
       console.error(`[${label}] Error buscando cuenta para locationId="${fields.locationId}":`, err);
     }
   }
+  // Fallback: si customData.locationid no matcheó, intentar con body.location.id
+  if (!idCuenta && fields.locationIdFallback && fields.locationIdFallback !== fields.locationId) {
+    try {
+      const account = await getAccountByLocationId(fields.locationIdFallback);
+      if (account) {
+        idCuenta = account.id_cuenta;
+        console.info(`[${label}] Cuenta encontrada por fallback location.id="${fields.locationIdFallback}" (customData.locationid="${fields.locationId}" no matcheó)`);
+      }
+    } catch (err) {
+      console.error(`[${label}] Error buscando cuenta por fallback locationId="${fields.locationIdFallback}":`, err);
+    }
+  }
 
+  // Solo son requeridos los campos del closer y el nombre del lead.
+  // El teléfono es opcional: leads de Instagram/TikTok pueden no tenerlo.
   const faltanCloser = !fields.closerMail || !fields.nombreCloser;
-  const faltanLead = !fields.nombreLead || !fields.telefonoLead;
+  const faltanLead = !fields.nombreLead;
   if (faltanCloser || faltanLead) {
     const motivos: string[] = [];
     if (!fields.closerMail) motivos.push("correo del closer");
     if (!fields.nombreCloser) motivos.push("nombre del closer");
     if (!fields.nombreLead) motivos.push("nombre del lead");
-    if (!fields.telefonoLead) motivos.push("teléfono del lead");
     const motivo = `Reasignación incompleta: falta ${motivos.join(", ")}`;
     console.warn(`[${label}] ${motivo}. Guardando como huérfano.`);
     return saveReasignacionOrphan(body, idCuenta, motivo);

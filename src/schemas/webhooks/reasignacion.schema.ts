@@ -18,6 +18,9 @@ export const ReasignacionBodyData = Type.Object(
     phone: Type.Optional(Type.String()),
     full_name: Type.Optional(Type.String()),
     first_name: Type.Optional(Type.String()),
+    location: Type.Optional(
+      Type.Object({ id: Type.Optional(Type.String()) }, { additionalProperties: true }),
+    ),
   },
   { additionalProperties: true },
 );

@@ -97,7 +97,10 @@ async function insertLogEntry(entry: LogEntry): Promise<void> {
 function extractFields(body: TwilioEventBody) {
   const cd = body.customData;
 
+  // Prioridad: customData.locationid → body.location.id (fallback si customData tiene typo)
   const locationId = cd.locationid?.trim() || body.location?.id?.trim() || null;
+  // Fallback separado: usado en resolveAccount si el locationId primario no matchea ninguna cuenta
+  const locationIdFallback = body.location?.id?.trim() || null;
   const nombreLead =
     cd.nombre?.trim() || body.full_name?.trim() || body.first_name?.trim() || "sin nombre";
   // cd.email a veces contiene el contact_id de GHL (no un email real) — priorizar body.email
@@ -113,7 +116,7 @@ function extractFields(body: TwilioEventBody) {
   // Transcripción ya generada (cuentas GHL sin Twilio)
   const preTranscript = cd.transcript?.trim() || null;
 
-  return { locationId, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl, preTranscript };
+  return { locationId, locationIdFallback, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl, preTranscript };
 }
 
 // ─── Lookup de cuenta (básico: sin Twilio) ───────────────────────────────────
@@ -121,6 +124,7 @@ function extractFields(body: TwilioEventBody) {
 async function resolveAccount(
   locationId: string | null,
   label: string,
+  locationIdFallback?: string | null,
 ): Promise<{ idCuenta: number | null; tokenGhl: string | null }> {
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
@@ -128,10 +132,19 @@ async function resolveAccount(
   }
   try {
     const account = await getAccountByLocationId(locationId);
-    if (!account) {
-      console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
+    if (account) {
+      return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl ?? null };
     }
-    return { idCuenta: account?.id_cuenta ?? null, tokenGhl: account?.token_ghl ?? null };
+    // Fallback: intentar con body.location.id si customData.locationid no matcheó
+    if (locationIdFallback && locationIdFallback !== locationId) {
+      const fallbackAccount = await getAccountByLocationId(locationIdFallback);
+      if (fallbackAccount) {
+        console.info(`[${label}] Cuenta encontrada por fallback location.id="${locationIdFallback}" (customData.locationid="${locationId}" no matcheó)`);
+        return { idCuenta: fallbackAccount.id_cuenta, tokenGhl: fallbackAccount.token_ghl ?? null };
+      }
+    }
+    console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
+    return { idCuenta: null, tokenGhl: null };
   } catch (err) {
     console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
     return { idCuenta: null, tokenGhl: null };
@@ -143,6 +156,7 @@ async function resolveAccount(
 async function resolveAccountFull(
   locationId: string | null,
   label: string,
+  locationIdFallback?: string | null,
 ): Promise<{
   idCuenta: number | null;
   tokenGhl: string | null;
@@ -160,7 +174,13 @@ async function resolveAccountFull(
     return empty;
   }
   try {
-    const account: CuentaFullRow | null = await getAccountFullByLocationId(locationId);
+    let account: CuentaFullRow | null = await getAccountFullByLocationId(locationId);
+    if (!account && locationIdFallback && locationIdFallback !== locationId) {
+      account = await getAccountFullByLocationId(locationIdFallback);
+      if (account) {
+        console.info(`[${label}] Cuenta encontrada por fallback location.id="${locationIdFallback}" (customData.locationid="${locationId}" no matcheó)`);
+      }
+    }
     if (!account) {
       console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
       return empty;
@@ -486,11 +506,11 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
   const fields = extractFields(body);
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "Twilio");
+    const { idCuenta } = await resolveAccount(fields.locationId, "Twilio", fields.locationIdFallback);
     return saveOrphanEvent(body, idCuenta, "Twilio");
   }
 
-  const { idCuenta } = await resolveAccount(fields.locationId, "Twilio");
+  const { idCuenta } = await resolveAccount(fields.locationId, "Twilio", fields.locationIdFallback);
 
   try {
     const [inserted] = await withRetry(
@@ -546,11 +566,11 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
   const fields = extractFields(body);
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "NoAnswer");
+    const { idCuenta } = await resolveAccount(fields.locationId, "NoAnswer", fields.locationIdFallback);
     return saveOrphanEvent(body, idCuenta, "NoAnswer");
   }
 
-  const { idCuenta, tokenGhl } = await resolveAccount(fields.locationId, "NoAnswer");
+  const { idCuenta, tokenGhl } = await resolveAccount(fields.locationId, "NoAnswer", fields.locationIdFallback);
 
   return followUpPath(fields, idCuenta, tokenGhl, null, null, null, "NoAnswer");
 }
@@ -563,12 +583,12 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
   const fields = extractFields(body);
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "Effective");
+    const { idCuenta } = await resolveAccount(fields.locationId, "Effective", fields.locationIdFallback);
     return saveOrphanEvent(body, idCuenta, "Effective");
   }
 
   const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas } =
-    await resolveAccountFull(fields.locationId, "Effective");
+    await resolveAccountFull(fields.locationId, "Effective", fields.locationIdFallback);
 
   // ── Bypass Twilio: transcripción ya viene en el payload (cuentas GHL sin Twilio) ──
   if (fields.preTranscript) {
