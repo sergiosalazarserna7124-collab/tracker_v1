@@ -93,6 +93,15 @@ export async function processFathomCall(
     (inv) => inv.is_external === true && inv.email !== closerEmail,
   );
 
+  // Descartar reuniones Impromptu sin invitados externos — son llamadas internas, no leads de ventas
+  const meetingTitle = (payload.meeting_title ?? payload.title ?? "").toLowerCase();
+  if (externalInvitees.length === 0 && meetingTitle.includes("impromptu")) {
+    console.info(
+      `[Fathom] Skipping Impromptu internal meeting recording_id=${recordingId} for id_cuenta=${idCuenta}`,
+    );
+    return;
+  }
+
   // Evita reprocesar la misma videollamada para la misma cuenta.
   if (recordingId && !options.allowDuplicateRecordingId) {
     try {

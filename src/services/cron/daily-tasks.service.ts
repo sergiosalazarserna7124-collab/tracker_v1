@@ -303,10 +303,13 @@ interface AnalyzeChatsResult {
 }
 
 // Cuentas sin key propia: máx 20/día para no quemar la key del servidor
-// Cuentas con key propia: máx 100/día (ellos pagan su propio costo)
+// Cuentas con key propia: máx 50/día (ellos pagan su propio costo)
 const MAX_CHATS_SERVER_KEY = 20;
-const MAX_CHATS_OWN_KEY = 100;
+const MAX_CHATS_OWN_KEY = 50;
 const DELAY_MS = 200;
+// Circuit breaker: detener procesamiento si llevamos más de este tiempo (en ms)
+// Cloud Run timeout es 300s — paramos a los 240s para dejar 60s de margen
+const MAX_RUNTIME_MS = 240_000;
 // GPT-4o-mini pricing (input: $0.15/1M tokens, output: $0.60/1M tokens)
 // Estimate ~500 tokens input + ~100 tokens output per chat
 const COST_PER_CHAT_USD = (500 * 0.15 + 100 * 0.60) / 1_000_000;
@@ -319,6 +322,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
   let processed = 0;
   let updated = 0;
   let errors = 0;
+  const startTime = Date.now();
 
   // ── 1. Obtener cuentas activas con embudo configurado ─────────────────────
   const accountFilter = accountIds && accountIds.length > 0
@@ -346,6 +350,15 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
   console.info(`[analyzeChats] ${cuentas.length} cuentas con embudo para analizar`);
 
   for (const cuenta of cuentas) {
+    // Circuit breaker inter-cuenta: si ya superamos el tiempo máximo, no iniciar nueva cuenta
+    if (Date.now() - startTime > MAX_RUNTIME_MS) {
+      console.warn(
+        `[analyzeChats] Circuit breaker activado. Omitiendo cuenta=${cuenta.id_cuenta} y siguientes. ` +
+        `Tiempo transcurrido: ${Math.round((Date.now() - startTime) / 1000)}s`,
+      );
+      break;
+    }
+
     // ── 2. Buscar chats sin ia_categoria de las últimas 24h ─────────────────
     const chatsResult = await withRetry(
       () => pgPool.query<ChatLogRow>(
@@ -375,6 +388,15 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
       : [];
 
     for (const chat of chats) {
+      // Circuit breaker: si llevamos más de MAX_RUNTIME_MS, detener para no exceder timeout de Cloud Run
+      if (Date.now() - startTime > MAX_RUNTIME_MS) {
+        console.warn(
+          `[analyzeChats] Circuit breaker activado tras ${Math.round((Date.now() - startTime) / 1000)}s. ` +
+          `Chats restantes sin procesar en cuenta=${cuenta.id_cuenta}. Próxima ejecución del cron continuará.`,
+        );
+        break;
+      }
+
       processed++;
       try {
         const messages = Array.isArray(chat.chat)

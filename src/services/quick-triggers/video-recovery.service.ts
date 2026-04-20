@@ -250,15 +250,19 @@ export async function previewVideoRecovery(
     }
 
     if (!leadEmail) {
+      const titleLower = (meeting.meeting_title ?? meeting.title ?? "").toLowerCase();
+      const isImpromptu = titleLower.includes("impromptu");
       results.push({
         recording_id: meeting.recording_id,
         meeting_title: meeting.meeting_title ?? meeting.title ?? null,
         share_url: meeting.share_url ?? meeting.url ?? null,
         scheduled_start_time: meeting.scheduled_start_time ?? null,
         lead_email_detected: null,
-        estado_bd_actual: "sin_email_externo",
+        estado_bd_actual: isImpromptu ? "impromptu_interno" : "sin_email_externo",
         accion_sugerida: "skip",
-        motivo: "Sin invitado externo identificable. Se recomienda ignorar o enviar a huérfanos.",
+        motivo: isImpromptu
+          ? "Reunión impromptu sin lead externo — se descartará automáticamente (no es llamada de ventas)."
+          : "Sin invitado externo identificable. Se recomienda ignorar o enviar a huérfanos.",
         id_registro_agenda: null,
         meeting_snapshot: meeting,
       });
@@ -433,6 +437,23 @@ export async function executeVideoRecovery(
       const transcript = await callFathomTranscript(fathomKey, item.recording_id);
       const leadEmail = pickLeadEmail(item.meeting_snapshot);
       if (!leadEmail) {
+        // Reuniones Impromptu sin invitados externos son llamadas internas del equipo — no son leads de ventas
+        const meetingTitle = (item.meeting_snapshot.meeting_title ?? item.meeting_snapshot.title ?? "").toLowerCase();
+        if (meetingTitle.includes("impromptu")) {
+          console.info(
+            `[VideoRecovery] Skipping Impromptu internal meeting recording_id=${item.recording_id} for id_cuenta=${idCuenta}`,
+          );
+          results.push({
+            recording_id: item.recording_id,
+            action: item.action,
+            status: "skipped",
+            estado_anterior: estadoAnterior,
+            estado_final: estadoAnterior,
+            motivo: "Reunión impromptu sin lead externo — descartada automáticamente (no es llamada de ventas).",
+          });
+          continue;
+        }
+
         await saveFathomOrphan(
           idCuenta,
           item.meeting_snapshot,
