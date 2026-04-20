@@ -85,14 +85,10 @@ export async function processReasignacion(
     }
   }
 
-  // Solo son requeridos los campos del closer y el nombre del lead.
-  // El teléfono es opcional: leads de Instagram/TikTok pueden no tenerlo.
-  const faltanCloser = !fields.closerMail || !fields.nombreCloser;
+  // Solo se requiere el nombre del lead. Teléfono y datos del closer son opcionales.
   const faltanLead = !fields.nombreLead;
-  if (faltanCloser || faltanLead) {
+  if (faltanLead) {
     const motivos: string[] = [];
-    if (!fields.closerMail) motivos.push("correo del closer");
-    if (!fields.nombreCloser) motivos.push("nombre del closer");
     if (!fields.nombreLead) motivos.push("nombre del lead");
     const motivo = `Reasignación incompleta: falta ${motivos.join(", ")}`;
     console.warn(`[${label}] ${motivo}. Guardando como huérfano.`);
@@ -144,8 +140,8 @@ export async function processReasignacion(
           drizzleDb
             .update(llamadas)
             .set({
-              closer_mail: fields.closerMail,
-              nombre_closer: fields.nombreCloser,
+              ...(fields.closerMail && { closer_mail: fields.closerMail }),
+              ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
               ...(fields.nombreLead && { nombre_lead: fields.nombreLead }),
               ...(fields.telefonoLead && { phone_raw_format: fields.telefonoLead }),
             })
@@ -183,8 +179,8 @@ export async function processReasignacion(
             nombre_lead: nombreLead,
             phone_raw_format: fields.telefonoLead || null,
             estado: "pdte",
-            closer_mail: fields.closerMail,
-            nombre_closer: fields.nombreCloser,
+            closer_mail: fields.closerMail || null,
+            nombre_closer: fields.nombreCloser || null,
             intentos_contacto: 0,
             id_user_ghl: fields.idUserGhl,
           })
