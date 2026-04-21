@@ -85,19 +85,10 @@ export async function processReasignacion(
     }
   }
 
-  // Solo se requiere el nombre del lead. Teléfono y datos del closer son opcionales.
-  const faltanLead = !fields.nombreLead;
-  if (faltanLead) {
-    const motivos: string[] = [];
-    if (!fields.nombreLead) motivos.push("nombre del lead");
-    const motivo = `Reasignación incompleta: falta ${motivos.join(", ")}`;
-    console.warn(`[${label}] ${motivo}. Guardando como huérfano.`);
-    return saveReasignacionOrphan(body, idCuenta, motivo);
-  }
-
   type ExistingRow = {
     id_registro: number;
     estado: string | null;
+    nombre_lead: string | null;
   };
 
   let existing: ExistingRow | null = null;
@@ -109,6 +100,7 @@ export async function processReasignacion(
           .select({
             id_registro: llamadas.id_registro,
             estado: llamadas.estado,
+            nombre_lead: llamadas.nombre_lead,
           })
           .from(llamadas)
           .where(
@@ -130,6 +122,14 @@ export async function processReasignacion(
   } catch (err) {
     console.error(`[${label}] Error buscando registro para idUserGhl="${fields.idUserGhl}":`, err);
     return { success: false, error: "Database error searching for existing record" };
+  }
+
+  // Si no hay registro existente y tampoco tenemos nombre del lead, no podemos crear nada útil.
+  // Guardamos como huérfano para revisión manual.
+  if (!existing && !fields.nombreLead) {
+    const motivo = "Reasignación incompleta: falta nombre del lead";
+    console.warn(`[${label}] ${motivo} y no existe registro previo. Guardando como huérfano.`);
+    return saveReasignacionOrphan(body, idCuenta, motivo);
   }
 
   if (existing) {
