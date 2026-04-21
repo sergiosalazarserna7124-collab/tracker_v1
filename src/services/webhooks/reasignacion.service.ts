@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
-import { llamadas, eventosHuerfanos } from "../../db/schema.js";
+import { llamadas } from "../../db/schema.js";
 import { getAccountByLocationId } from "../ghl-api.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { ReasignacionBodyPayload } from "../../schemas/webhooks/reasignacion.schema.js";
@@ -32,25 +32,6 @@ function extractFields(body: ReasignacionBodyPayload) {
     nombreLead,
     telefonoLead,
   };
-}
-
-async function saveReasignacionOrphan(
-  body: ReasignacionBodyPayload,
-  idCuenta: number | null,
-  motivo: string,
-): Promise<ServiceResult> {
-  try {
-    await drizzleDb.insert(eventosHuerfanos).values({
-      id_cuenta: idCuenta,
-      origen: "reasignacion",
-      motivo,
-      payload_original: body,
-      estado: "pendiente",
-    });
-  } catch (err) {
-    console.error("[Reasignacion] Error guardando evento huérfano:", err);
-  }
-  return { success: true, data: { path: "orphan" } };
 }
 
 export async function processReasignacion(
