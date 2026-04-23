@@ -93,11 +93,14 @@ export async function processFathomCall(
     (inv) => inv.is_external === true && inv.email !== closerEmail,
   );
 
-  // Descartar reuniones Impromptu sin invitados externos — son llamadas internas, no leads de ventas
+  // Descartar reuniones sin invitados externos — son llamadas internas o reuniones donde el cliente
+  // entró por link directo de Zoom (sin invitación de calendario). Sin email externo no podemos
+  // identificar al lead ni enlazarlo con GHL. Guardar como huérfano tampoco sirve: no hay dato
+  // recuperable.
   const meetingTitle = (payload.meeting_title ?? payload.title ?? "").toLowerCase();
-  if (externalInvitees.length === 0 && meetingTitle.includes("impromptu")) {
+  if (externalInvitees.length === 0) {
     console.info(
-      `[Fathom] Skipping Impromptu internal meeting recording_id=${recordingId} for id_cuenta=${idCuenta}`,
+      `[Fathom] Skipping meeting with no external invitees recording_id=${recordingId} title="${meetingTitle}" for id_cuenta=${idCuenta} (total_invitees=${(payload.calendar_invitees ?? []).length})`,
     );
     return;
   }
