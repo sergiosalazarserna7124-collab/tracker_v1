@@ -105,14 +105,6 @@ export async function processReasignacion(
     return { success: false, error: "Database error searching for existing record" };
   }
 
-  // Si no hay registro existente y tampoco tenemos nombre del lead, no podemos crear nada útil.
-  // Guardamos como huérfano para revisión manual.
-  if (!existing && !fields.nombreLead) {
-    const motivo = "Reasignación incompleta: falta nombre del lead";
-    console.warn(`[${label}] ${motivo} y no existe registro previo. Guardando como huérfano.`);
-    return saveReasignacionOrphan(body, idCuenta, motivo);
-  }
-
   if (existing) {
     const existingId = existing.id_registro;
     try {
