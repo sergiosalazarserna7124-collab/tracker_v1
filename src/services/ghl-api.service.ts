@@ -424,19 +424,20 @@ export async function safeAddContactTags(
   tags: string[],
   locationId?: string | null,
 ): Promise<void> {
-  if (!tags.length) return;
+  const validTags = tags.filter((t) => t.trim() !== "");
+  if (!validTags.length) return;
 
   try {
-    await addContactTags(contactId, bearerToken, tags);
+    await addContactTags(contactId, bearerToken, validTags);
   } catch (err) {
     if (locationId) {
       console.warn(`[GHL safeAddContactTags] Bulk tag failed, creating tags individually first`);
-      for (const tag of tags) {
+      for (const tag of validTags) {
         try {
           await createLocationTag(locationId, bearerToken, tag);
         } catch { /* best-effort */ }
       }
-      await addContactTags(contactId, bearerToken, tags);
+      await addContactTags(contactId, bearerToken, validTags);
     } else {
       throw err;
     }

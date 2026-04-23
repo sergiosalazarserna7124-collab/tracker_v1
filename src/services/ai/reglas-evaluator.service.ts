@@ -120,7 +120,7 @@ export async function evaluateReglas(
   const matched = reglas.filter((r) => matchedIds.has(r.id));
 
   return {
-    matched_tags: matched.map((r) => r.tag),
+    matched_tags: matched.map((r) => r.tag).filter((t) => t.trim() !== ""),
     matched_rules: matched.map((r) => ({
       id: r.id,
       tag: r.tag,
