@@ -259,6 +259,58 @@ function normalizeClassifierResult(
   return { ...result, categoria: fallbackId };
 }
 
+// ─── Análisis de texto para llamadas telefónicas (Twilio/GHL) ────────────────
+
+const DEFAULT_LLAMADA_ANALYSIS_PROMPT = `Eres un Analista Senior de Ventas. Analiza la transcripción de esta llamada telefónica y genera un diagnóstico detallado en formato Markdown que incluya:
+
+1. **Resumen ejecutivo**: Qué ocurrió en la llamada en 2-3 oraciones.
+2. **Perfil del lead**: Situación actual, dolores, motivaciones detectadas.
+3. **Desarrollo de la conversación**: Puntos clave discutidos, interés mostrado, preguntas relevantes del lead.
+4. **Resultado**: Estado final de la llamada y qué quedó pendiente.
+5. **Recomendaciones para seguimiento**: Próximos pasos sugeridos.
+
+Sé directo, preciso y sin relleno. Enfócate en información accionable para el equipo de ventas.`;
+
+export async function generateLlamadaAnalysisText(
+  transcript: string,
+  promptVentas: string | null,
+  promptLlamadas: string | null,
+  openaiApiKey?: string | null,
+): Promise<string | null> {
+  if (!transcript.trim()) return null;
+
+  const model = resolveModel(openaiApiKey);
+
+  const parts: string[] = [];
+  parts.push("Estás recibiendo la transcripción de una llamada telefónica de ventas de una empresa.");
+
+  if (promptVentas) {
+    parts.push(`\nCONTEXTO DE LA EMPRESA:\n${promptVentas}`);
+  }
+
+  if (promptLlamadas) {
+    parts.push(`\nINSTRUCCIONES ESPECÍFICAS DE EVALUACIÓN:\n${promptLlamadas}`);
+    parts.push("\nAnaliza profundamente la conversación siguiendo las instrucciones anteriores. Genera un análisis detallado y accionable en formato Markdown.");
+  } else {
+    parts.push(`\n${DEFAULT_LLAMADA_ANALYSIS_PROMPT}`);
+  }
+
+  const systemPrompt = parts.join("\n");
+
+  try {
+    const result = await generateText({
+      model,
+      system: systemPrompt,
+      prompt: `Transcript:\n${transcript}`,
+      temperature: 0.3,
+    });
+    return result.text ?? null;
+  } catch (err) {
+    console.error("[generateLlamadaAnalysisText] Error generating analysis:", err);
+    return null;
+  }
+}
+
 // ─── Función principal: 3 llamadas IA + evaluador de reglas en paralelo ──────
 
 export async function analyzeCall(

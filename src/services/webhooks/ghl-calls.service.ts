@@ -30,6 +30,7 @@ import {
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
+import { generateLlamadaAnalysisText } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { GhlCallEventBody } from "../../schemas/webhooks/ghl-calls.schema.js";
@@ -463,31 +464,45 @@ async function effectivePath(
   embudoPersonalizado?: unknown,
   promptVentas?: string | null,
   reglasEtiquetas?: unknown,
+  promptLlamadas?: string | null,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
   const aiEstado = classification.estado ?? "seguimiento";
-  const iadesc = classification.iadesc ?? null;
 
-  // Evaluar reglas de etiquetas
-  let reglasMatchedTags: string[] = [];
-  let funnelStageFromReglas: string | null = null;
-  try {
-    const reglasResult = await evaluateReglas(
+  // Generar análisis enriquecido + evaluar reglas en paralelo (son independientes)
+  const [analysisText, reglasResult] = await Promise.all([
+    (promptLlamadas || promptVentas)
+      ? generateLlamadaAnalysisText(
+          transcript,
+          promptVentas ?? null,
+          promptLlamadas ?? null,
+          openaiApiKey,
+        ).catch((err) => {
+          console.error("[GhlCalls/Effective] Error generando análisis enriquecido:", err);
+          return null;
+        })
+      : Promise.resolve(null),
+    evaluateReglas(
       transcript,
       reglasEtiquetas,
       "call",
       promptVentas ?? null,
       openaiApiKey,
-    );
-    reglasMatchedTags = reglasResult.matched_tags;
-    funnelStageFromReglas =
-      reglasResult.matched_rules.find(
-        (r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage,
-      )?.funnelStage ?? null;
-  } catch (err) {
-    console.error("[GhlCalls/Effective] Error evaluando reglas de etiquetas:", err);
-  }
+    ).catch((err) => {
+      console.error("[GhlCalls/Effective] Error evaluando reglas de etiquetas:", err);
+      return { matched_tags: [], matched_rules: [] };
+    }),
+  ]);
+
+  // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador
+  const iadesc = analysisText ?? classification.iadesc ?? null;
+
+  const reglasMatchedTags: string[] = reglasResult.matched_tags;
+  const funnelStageFromReglas: string | null =
+    reglasResult.matched_rules.find(
+      (r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage,
+    )?.funnelStage ?? null;
 
   const tagsInternos = reglasMatchedTags;
   const effectiveEstado = funnelStageFromReglas ?? aiEstado;
@@ -834,5 +849,6 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     embudoPersonalizado,
     promptVentas,
     reglasEtiquetas,
+    promptLlamadas,
   );
 }

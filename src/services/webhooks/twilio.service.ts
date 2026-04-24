@@ -21,6 +21,7 @@ import {
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
+import { generateLlamadaAnalysisText } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
@@ -603,7 +604,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     if (classification.buzon === true || classification.buzon === null) {
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
     }
-    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas);
+    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas);
   }
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
@@ -731,6 +732,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     embudoPersonalizado,
     promptVentas,
     reglasEtiquetas,
+    promptLlamadas,
   );
 }
 
@@ -747,68 +749,82 @@ async function effectivePath(
   embudoPersonalizado?: unknown,
   promptVentas?: string | null,
   reglasEtiquetas?: unknown,
+  promptLlamadas?: string | null,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
   const aiEstado = classification.estado ?? "seguimiento";
-  const iadesc = classification.iadesc ?? null;
 
-  // Evaluar reglas de etiquetas en paralelo (best-effort)
-  let reglasMatchedTags: string[] = [];
-  let funnelStageFromReglas: string | null = null;
-  try {
-    const reglasResult = await evaluateReglas(
+  // Generar análisis enriquecido + evaluar reglas en paralelo (son independientes)
+  const [analysisText, reglasResult] = await Promise.all([
+    (promptLlamadas || promptVentas)
+      ? generateLlamadaAnalysisText(
+          transcript,
+          promptVentas ?? null,
+          promptLlamadas ?? null,
+          openaiApiKey,
+        ).catch((err) => {
+          console.error("[Effective] Error generando análisis enriquecido:", err);
+          return null;
+        })
+      : Promise.resolve(null),
+    evaluateReglas(
       transcript,
       reglasEtiquetas,
       "call",
       promptVentas ?? null,
       openaiApiKey,
-    );
-    reglasMatchedTags = reglasResult.matched_tags;
-    // Si alguna regla tiene funnelStage, la regla explícita del cliente sobreescribe la clasificación IA
-    funnelStageFromReglas = reglasResult.matched_rules
-      .find((r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage)?.funnelStage ?? null;
+    ).catch((err) => {
+      console.error("[Effective] Error evaluando reglas de etiquetas:", err);
+      return { matched_tags: [], matched_rules: [] };
+    }),
+  ]);
 
-    // Procesar reglas con accion=incrementar_metrica
-    if (reglasResult.matched_rules.length > 0 && idCuenta && Array.isArray(reglasEtiquetas)) {
-      type ReglaConMetrica = { id: string; metrica_id?: string; metrica_incremento?: number };
-      const reglasArr = reglasEtiquetas as ReglaConMetrica[];
-      const matchedIds = new Set(reglasResult.matched_rules.map((r) => r.id));
-      const metricaRules = reglasArr.filter(
-        (r) => matchedIds.has(r.id) && r.metrica_id
-      );
-      if (metricaRules.length > 0) {
-        try {
-          const [cuentaRow] = await drizzleDb
-            .select({ metricas_manual_data: cuentas.metricas_manual_data })
-            .from(cuentas)
-            .where(eq(cuentas.id_cuenta, idCuenta))
-            .limit(1);
-          const currentData = (cuentaRow?.metricas_manual_data ?? {}) as Record<string, unknown[]>;
-          const today = new Date().toISOString().slice(0, 10);
-          for (const rule of metricaRules) {
-            if (!rule.metrica_id) continue;
-            const entries = currentData[rule.metrica_id] ?? [];
-            const todayIdx = (entries as Array<{date?: string; valor?: number}>).findIndex((e) => e.date === today);
-            if (todayIdx >= 0) {
-              (entries as Array<{date?: string; valor?: number}>)[todayIdx].valor =
-                ((entries as Array<{date?: string; valor?: number}>)[todayIdx].valor ?? 0) + (rule.metrica_incremento ?? 1);
-            } else {
-              (entries as Array<{date?: string; valor?: number}>).push({ date: today, valor: rule.metrica_incremento ?? 1 });
-            }
-            currentData[rule.metrica_id] = entries;
+  // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador
+  const iadesc = analysisText ?? classification.iadesc ?? null;
+
+  const reglasMatchedTags: string[] = reglasResult.matched_tags;
+  // Si alguna regla tiene funnelStage, la regla explícita del cliente sobreescribe la clasificación IA
+  const funnelStageFromReglas: string | null = reglasResult.matched_rules
+    .find((r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage)?.funnelStage ?? null;
+
+  // Procesar reglas con accion=incrementar_metrica
+  if (reglasResult.matched_rules.length > 0 && idCuenta && Array.isArray(reglasEtiquetas)) {
+    type ReglaConMetrica = { id: string; metrica_id?: string; metrica_incremento?: number };
+    const reglasArr = reglasEtiquetas as ReglaConMetrica[];
+    const matchedIds = new Set(reglasResult.matched_rules.map((r) => r.id));
+    const metricaRules = reglasArr.filter(
+      (r) => matchedIds.has(r.id) && r.metrica_id
+    );
+    if (metricaRules.length > 0) {
+      try {
+        const [cuentaRow] = await drizzleDb
+          .select({ metricas_manual_data: cuentas.metricas_manual_data })
+          .from(cuentas)
+          .where(eq(cuentas.id_cuenta, idCuenta))
+          .limit(1);
+        const currentData = (cuentaRow?.metricas_manual_data ?? {}) as Record<string, unknown[]>;
+        const today = new Date().toISOString().slice(0, 10);
+        for (const rule of metricaRules) {
+          if (!rule.metrica_id) continue;
+          const entries = currentData[rule.metrica_id] ?? [];
+          const todayIdx = (entries as Array<{date?: string; valor?: number}>).findIndex((e) => e.date === today);
+          if (todayIdx >= 0) {
+            (entries as Array<{date?: string; valor?: number}>)[todayIdx].valor =
+              ((entries as Array<{date?: string; valor?: number}>)[todayIdx].valor ?? 0) + (rule.metrica_incremento ?? 1);
+          } else {
+            (entries as Array<{date?: string; valor?: number}>).push({ date: today, valor: rule.metrica_incremento ?? 1 });
           }
-          await drizzleDb
-            .update(cuentas)
-            .set({ metricas_manual_data: currentData })
-            .where(eq(cuentas.id_cuenta, idCuenta));
-        } catch (metricaErr) {
-          console.error("[Effective] Error incrementando métrica custom:", metricaErr);
+          currentData[rule.metrica_id] = entries;
         }
+        await drizzleDb
+          .update(cuentas)
+          .set({ metricas_manual_data: currentData })
+          .where(eq(cuentas.id_cuenta, idCuenta));
+      } catch (metricaErr) {
+        console.error("[Effective] Error incrementando métrica custom:", metricaErr);
       }
     }
-  } catch (err) {
-    console.error("[Effective] Error evaluando reglas de etiquetas:", err);
   }
 
   const tagsInternos = reglasMatchedTags;
