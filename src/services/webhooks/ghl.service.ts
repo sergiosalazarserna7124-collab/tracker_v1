@@ -197,7 +197,37 @@ async function handlePendiente(body: GhlBodyPayload, tokenGhl?: string): Promise
     }
   }
 
-  const id = await insertAgenda(fields, "PDTE");
+  // Deduplicar: si ya existe un registro PDTE para este lead, actualizar fecha_reunion
+  // en lugar de insertar uno nuevo. Evita duplicados cuando GHL dispara el webhook
+  // varias veces para la misma cita (confirmación, recordatorio, etc.).
+  const existingId = await findAgenda(fields.idCuenta, fields.idcliente, fields.emailLead);
+  let id: number;
+  let action: "created" | "updated";
+
+  if (existingId !== null) {
+    console.log(`[GHL handlePendiente] Registro existente encontrado (${existingId}), actualizando fecha_reunion en lugar de insertar duplicado`);
+    try {
+      await withRetry(
+        () =>
+          db.query(
+            `UPDATE resumenes_diarios_agendas
+             SET categoria = 'PDTE', fecha_reunion = $2
+             WHERE id_registro_agenda = $1`,
+            [existingId, fields.fechaReunion],
+          ),
+        { label: "handlePendiente/update" },
+      );
+      console.log("✅ Update (dedup pendiente) exitoso. id_registro_agenda:", existingId);
+    } catch (dbErr) {
+      console.error("❌ ERROR FATAL EN BASE DE DATOS (UPDATE pendiente dedup):", dbErr);
+      throw dbErr;
+    }
+    id = existingId;
+    action = "updated";
+  } else {
+    id = await insertAgenda(fields, "PDTE");
+    action = "created";
+  }
 
   const tagged = await applyGhlTag(
     fields.locationId,
@@ -206,7 +236,7 @@ async function handlePendiente(body: GhlBodyPayload, tokenGhl?: string): Promise
     "handlePendiente",
   );
 
-  return { id_registro_agenda: id, categoria: "PDTE", action: "created", tagged };
+  return { id_registro_agenda: id, categoria: "PDTE", action, tagged };
 }
 
 async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
