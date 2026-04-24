@@ -76,8 +76,21 @@ function parseReglas(raw: unknown): ReglaEtiqueta[] {
   );
 }
 
+// Normaliza alias en español (guardados por el Admin Panel) a los valores canónicos
+// que usa el evaluador: "call" y "meeting".
+const SOURCE_ALIASES: Record<string, string> = {
+  llamadas: "call",
+  videollamadas: "meeting",
+};
+
+function normalizeSource(raw: string): string {
+  const lower = raw.toLowerCase();
+  return SOURCE_ALIASES[lower] ?? lower;
+}
+
 function filterBySource(reglas: ReglaEtiqueta[], source: string): ReglaEtiqueta[] {
-  return reglas.filter((r) => r.source.toLowerCase() === source.toLowerCase());
+  const normalizedTarget = source.toLowerCase();
+  return reglas.filter((r) => normalizeSource(r.source) === normalizedTarget);
 }
 
 // ─── Función principal ───────────────────────────────────────────────────────
