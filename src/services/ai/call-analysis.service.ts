@@ -277,6 +277,8 @@ export async function generateLlamadaAnalysisText(
   promptLlamadas: string | null,
   openaiApiKey?: string | null,
 ): Promise<string | null> {
+  if (!transcript.trim()) return null;
+
   const model = resolveModel(openaiApiKey);
 
   const parts: string[] = [];

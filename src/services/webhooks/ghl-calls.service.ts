@@ -470,42 +470,39 @@ async function effectivePath(
   const now = new Date();
   const aiEstado = classification.estado ?? "seguimiento";
 
-  // Generar análisis enriquecido cuando hay prompt_llamadas configurado
-  let analysisText: string | null = null;
-  if (promptLlamadas || promptVentas) {
-    analysisText = await generateLlamadaAnalysisText(
-      transcript,
-      promptVentas ?? null,
-      promptLlamadas ?? null,
-      openaiApiKey,
-    ).catch((err) => {
-      console.error("[GhlCalls/Effective] Error generando análisis enriquecido:", err);
-      return null;
-    });
-  }
-
-  // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador
-  const iadesc = analysisText ?? classification.iadesc ?? null;
-
-  // Evaluar reglas de etiquetas
-  let reglasMatchedTags: string[] = [];
-  let funnelStageFromReglas: string | null = null;
-  try {
-    const reglasResult = await evaluateReglas(
+  // Generar análisis enriquecido + evaluar reglas en paralelo (son independientes)
+  const [analysisText, reglasResult] = await Promise.all([
+    (promptLlamadas || promptVentas)
+      ? generateLlamadaAnalysisText(
+          transcript,
+          promptVentas ?? null,
+          promptLlamadas ?? null,
+          openaiApiKey,
+        ).catch((err) => {
+          console.error("[GhlCalls/Effective] Error generando análisis enriquecido:", err);
+          return null;
+        })
+      : Promise.resolve(null),
+    evaluateReglas(
       transcript,
       reglasEtiquetas,
       "call",
       promptVentas ?? null,
       openaiApiKey,
-    );
-    reglasMatchedTags = reglasResult.matched_tags;
-    funnelStageFromReglas =
-      reglasResult.matched_rules.find(
-        (r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage,
-      )?.funnelStage ?? null;
-  } catch (err) {
-    console.error("[GhlCalls/Effective] Error evaluando reglas de etiquetas:", err);
-  }
+    ).catch((err) => {
+      console.error("[GhlCalls/Effective] Error evaluando reglas de etiquetas:", err);
+      return { matched_tags: [], matched_rules: [] };
+    }),
+  ]);
+
+  // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador
+  const iadesc = analysisText ?? classification.iadesc ?? null;
+
+  const reglasMatchedTags: string[] = reglasResult.matched_tags;
+  const funnelStageFromReglas: string | null =
+    reglasResult.matched_rules.find(
+      (r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage,
+    )?.funnelStage ?? null;
 
   const tagsInternos = reglasMatchedTags;
   const effectiveEstado = funnelStageFromReglas ?? aiEstado;
