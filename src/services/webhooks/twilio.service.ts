@@ -21,6 +21,7 @@ import {
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
+import { generateLlamadaAnalysisText } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
@@ -603,7 +604,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     if (classification.buzon === true || classification.buzon === null) {
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
     }
-    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas);
+    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas);
   }
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
@@ -731,6 +732,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     embudoPersonalizado,
     promptVentas,
     reglasEtiquetas,
+    promptLlamadas,
   );
 }
 
@@ -747,11 +749,28 @@ async function effectivePath(
   embudoPersonalizado?: unknown,
   promptVentas?: string | null,
   reglasEtiquetas?: unknown,
+  promptLlamadas?: string | null,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
   const aiEstado = classification.estado ?? "seguimiento";
-  const iadesc = classification.iadesc ?? null;
+
+  // Generar análisis enriquecido cuando hay prompt_llamadas configurado
+  let analysisText: string | null = null;
+  if (promptLlamadas || promptVentas) {
+    analysisText = await generateLlamadaAnalysisText(
+      transcript,
+      promptVentas ?? null,
+      promptLlamadas ?? null,
+      openaiApiKey,
+    ).catch((err) => {
+      console.error("[Effective] Error generando análisis enriquecido:", err);
+      return null;
+    });
+  }
+
+  // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador
+  const iadesc = analysisText ?? classification.iadesc ?? null;
 
   // Evaluar reglas de etiquetas en paralelo (best-effort)
   let reglasMatchedTags: string[] = [];
