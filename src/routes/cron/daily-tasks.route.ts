@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { CronHeaders, CronDailyTasksBody, CronAnalyzeChatsBody } from "../../schemas/cron/daily-tasks.schema.js";
-import { handleUpdateNoShows, handleAnalyzeChats } from "../../controllers/cron/daily-tasks.controller.js";
+import { handleUpdateNoShows, handleAnalyzeChats, handleExpirePdteRegistros } from "../../controllers/cron/daily-tasks.controller.js";
 
 export async function cronDailyTasksRoute(app: FastifyInstance) {
   app.post(
@@ -23,5 +23,15 @@ export async function cronDailyTasksRoute(app: FastifyInstance) {
       },
     },
     handleAnalyzeChats,
+  );
+
+  app.post(
+    "/expirar-pdte",
+    {
+      schema: {
+        headers: CronHeaders,
+      },
+    },
+    handleExpirePdteRegistros,
   );
 }

@@ -1,4 +1,4 @@
-import { eq, and, inArray, sql, lt } from "drizzle-orm";
+import { eq, and, inArray, sql, lt, isNotNull } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, llamadas } from "../../db/schema.js";
 import { addContactTag, addContactTags } from "../ghl-api.service.js";
@@ -473,4 +473,48 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
   console.info(`[analyzeChats] Finalizado: processed=${processed} updated=${updated} errors=${errors} costo=${costEstimate}`);
 
   return { processed, updated, errors, costEstimate };
+}
+
+// ─── expirePdteRegistros ──────────────────────────────────────────────────────
+
+interface ExpirePdteResult {
+  success: boolean;
+  total_expirados: number;
+  por_cuenta: Array<{ id_cuenta: number; expirados: number }>;
+}
+
+/**
+ * Marca como 'no_contestado' todos los registros_de_llamada que lleven
+ * más de 7 días en estado 'pdte' sin recibir un webhook de resolución.
+ */
+export async function expirePdteRegistros(): Promise<ExpirePdteResult> {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const rows = await drizzleDb
+    .update(llamadas)
+    .set({ estado: "no_contestado" })
+    .where(
+      and(
+        eq(llamadas.estado, "pdte"),
+        isNotNull(llamadas.fecha_evento),
+        lt(llamadas.fecha_evento, sevenDaysAgo),
+      ),
+    )
+    .returning({ id_registro: llamadas.id_registro, id_cuenta: llamadas.id_cuenta });
+
+  // Agrupa por id_cuenta para el log
+  const countMap = new Map<number, number>();
+  for (const row of rows) {
+    const cuentaId = row.id_cuenta ?? 0;
+    countMap.set(cuentaId, (countMap.get(cuentaId) ?? 0) + 1);
+  }
+  const por_cuenta = [...countMap.entries()]
+    .map(([id_cuenta, expirados]) => ({ id_cuenta, expirados }))
+    .sort((a, b) => b.expirados - a.expirados);
+
+  console.info(
+    `[expirePdteRegistros] total=${rows.length} por_cuenta=${JSON.stringify(por_cuenta)}`,
+  );
+
+  return { success: true, total_expirados: rows.length, por_cuenta };
 }
