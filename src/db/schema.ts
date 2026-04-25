@@ -1,4 +1,5 @@
-import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique, index } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 /**
  * Tabla principal de citas/agendas.
@@ -32,7 +33,15 @@ export const agendas = pgTable("resumenes_diarios_agendas", {
   fathom_share_url: text("fathom_share_url"),
   fathom_processed_at: timestamp("fathom_processed_at", { withTimezone: true }),
   fathom_ingestion_source: text("fathom_ingestion_source"),
-});
+}, (table) => [
+  // ── Índices parciales para lookup en effectivePath() (categoria = PDTE) ──
+  index("idx_agendas_cuenta_contact_pdte")
+    .on(table.id_cuenta, table.ghl_contact_id)
+    .where(sql`${table.categoria} = 'PDTE'`),
+  index("idx_agendas_cuenta_email_pdte")
+    .on(table.id_cuenta, sql`LOWER(${table.email_lead})`)
+    .where(sql`${table.categoria} = 'PDTE'`),
+]);
 
 /**
  * Tabla de registros de llamadas telefónicas.
