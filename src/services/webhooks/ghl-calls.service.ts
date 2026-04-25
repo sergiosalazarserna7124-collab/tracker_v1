@@ -13,7 +13,7 @@
 
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
-import { llamadas, logLlamadas, eventosHuerfanos } from "../../db/schema.js";
+import { llamadas, logLlamadas, eventosHuerfanos, agendas } from "../../db/schema.js";
 import {
   addContactNote,
   getAccountByLocationId,
@@ -641,6 +641,51 @@ async function effectivePath(
     } catch (err) {
       console.error(`[GhlCalls/Effective] Error insertando registro para mail="${mailLead}":`, err);
       return { success: false, error: "Database error while inserting call record" };
+    }
+  }
+
+  // ── Transicionar cita PDTE → estado clasificado (GHL calls sin Fathom) ──────
+  // Si el contacto tenía una cita agendada en PDTE, la llamada efectiva la marca
+  // con el estado de la IA. Solo se toca si está en PDTE para no pisar Fathom.
+  if (idCuenta) {
+    try {
+      const agendaWhere = contactId
+        ? and(eq(agendas.ghl_contact_id, contactId), eq(agendas.id_cuenta, idCuenta), eq(agendas.categoria, "PDTE"))
+        : mailLead
+          ? and(sql`LOWER(${agendas.email_lead}) = LOWER(${mailLead})`, eq(agendas.id_cuenta, idCuenta), eq(agendas.categoria, "PDTE"))
+          : null;
+
+      if (agendaWhere) {
+        const [existingAgenda] = await withRetry(
+          () =>
+            drizzleDb
+              .select({ id: agendas.id_registro_agenda })
+              .from(agendas)
+              .where(agendaWhere)
+              .orderBy(desc(agendas.fecha))
+              .limit(1),
+          { label: "GhlCalls/effectivePath/findAgenda" },
+        );
+
+        if (existingAgenda) {
+          await withRetry(
+            () =>
+              drizzleDb
+                .update(agendas)
+                .set({
+                  categoria: effectiveEstado,
+                  ...(iadesc ? { resumen_ia: iadesc } : {}),
+                })
+                .where(eq(agendas.id_registro_agenda, existingAgenda.id)),
+            { label: "GhlCalls/effectivePath/updateAgenda" },
+          );
+          console.info(
+            `[GhlCalls/Effective] Agenda ${existingAgenda.id} actualizada: PDTE → ${effectiveEstado} (id_cuenta=${idCuenta})`,
+          );
+        }
+      }
+    } catch (err) {
+      console.error(`[GhlCalls/Effective] Error actualizando agenda PDTE para id_cuenta=${idCuenta}:`, err);
     }
   }
 
