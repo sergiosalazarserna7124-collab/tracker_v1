@@ -7,16 +7,18 @@
 -- REQUIERE: usuario con permisos DDL (superuser o el owner de la tabla).
 -- EJECUTAR CON APROBACIÓN DE JUAN antes de correr en producción.
 --
--- Estimado: CREATE INDEX CONCURRENTLY es non-blocking en prod; las versiones
---           sin CONCURRENTLY bloquean escrituras. En tabla de ~5k filas el
---           lock es de milisegundos, pero se documenta por buena práctica.
+-- IMPORTANTE: CREATE INDEX CONCURRENTLY no puede correr dentro de una transacción.
+-- Ejecutar cada sentencia por separado si se usa dentro de un bloque BEGIN/COMMIT.
+-- En psql directo (sin transaction wrapper) se puede ejecutar el archivo tal cual.
+--
+-- CONCURRENTLY: non-blocking en producción — no bloquea escrituras durante la creación.
 
 -- Índice principal: lookup por contacto GHL (caso más frecuente)
-CREATE INDEX IF NOT EXISTS idx_agendas_cuenta_contact_pdte
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_agendas_cuenta_contact_pdte
   ON resumenes_diarios_agendas(id_cuenta, ghl_contact_id)
   WHERE categoria = 'PDTE';
 
 -- Índice fallback: lookup por email (case-insensitive)
-CREATE INDEX IF NOT EXISTS idx_agendas_cuenta_email_pdte
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_agendas_cuenta_email_pdte
   ON resumenes_diarios_agendas(id_cuenta, LOWER(email_lead))
   WHERE categoria = 'PDTE';
