@@ -340,6 +340,26 @@ export async function processGhlWebhook(
       `🔍 [GHL webhook] customData.categoria RAW → "${categoriaRaw}" | normalizado → "${categoria}"`,
     );
 
+    // Validar que id_cuenta exista en tabla cuentas (best-effort — no rechaza el webhook)
+    const idCuentaRaw = parseInt(body.customData?.idcuenta, 10);
+    if (!isNaN(idCuentaRaw) && idCuentaRaw > 0) {
+      try {
+        const { rows: cuentaRows } = await db.query<{ id_cuenta: number }>(
+          `SELECT id_cuenta FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
+          [idCuentaRaw],
+        );
+        if (cuentaRows.length === 0) {
+          console.warn(
+            `⚠️ [GHL webhook] id_cuenta=${idCuentaRaw} NO existe en tabla cuentas. ` +
+            `El webhook se procesará pero los datos quedarán huérfanos. ` +
+            `locationId="${body.locationid?.trim() || ""}" categoria="${categoria}"`,
+          );
+        }
+      } catch (validationErr) {
+        console.warn(`⚠️ [GHL webhook] No se pudo validar id_cuenta=${idCuentaRaw} contra tabla cuentas:`, validationErr);
+      }
+    }
+
     // Obtener token GHL para fallback de appointments (best-effort)
     let tokenGhl: string | undefined;
     try {
