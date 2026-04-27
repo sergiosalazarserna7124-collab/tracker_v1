@@ -89,6 +89,37 @@ async function findAgenda(
   return null;
 }
 
+// ─── Helper: buscar registro por contacto + fecha (evita duplicados de GHL) ──
+// GHL puede disparar el mismo webhook pendiente N veces para el mismo contacto
+// y fecha de reunión. Antes de insertar, verificamos si ya existe uno ese día.
+
+async function findAgendaForDate(
+  idCuenta: number,
+  ghlContactId: string | null,
+  idcliente: string | null,
+  fechaReunion: Date | null,
+): Promise<number | null> {
+  // Necesitamos al menos un identificador de contacto y una fecha para deduplicar
+  const contactKey = ghlContactId || idcliente;
+  if (!contactKey || !fechaReunion) return null;
+
+  const { rows } = await withRetry(
+    () =>
+      db.query<{ id_registro_agenda: number }>(
+        `SELECT id_registro_agenda
+         FROM resumenes_diarios_agendas
+         WHERE id_cuenta = $1
+           AND (ghl_contact_id = $2 OR idcliente = $2)
+           AND CAST(fecha_reunion AS date) = CAST($3 AS date)
+         ORDER BY fecha DESC LIMIT 1`,
+        [idCuenta, contactKey, fechaReunion],
+      ),
+    { label: "findAgendaForDate" },
+  );
+
+  return rows.length > 0 ? rows[0].id_registro_agenda : null;
+}
+
 // ─── Helper: INSERT nuevo registro ───────────────────────────────────────────
 
 async function insertAgenda(
@@ -197,27 +228,32 @@ async function handlePendiente(body: GhlBodyPayload, tokenGhl?: string): Promise
     }
   }
 
-  // Deduplicar: si ya existe un registro PDTE para este lead, actualizar fecha_reunion
-  // en lugar de insertar uno nuevo. Evita duplicados cuando GHL dispara el webhook
-  // varias veces para la misma cita (confirmación, recordatorio, etc.).
-  const existingId = await findAgenda(fields.idCuenta, fields.idcliente, fields.emailLead);
+  // Deduplicación: GHL puede disparar el webhook "pendiente" múltiples veces para la
+  // misma cita. Si tenemos fecha_reunion, buscamos por (contacto + día exacto) —
+  // más preciso que solo por contacto. Si no hay fecha, caemos al findAgenda clásico.
+  const existingId = fields.fechaReunion
+    ? await findAgendaForDate(fields.idCuenta, fields.contactId, fields.idcliente, fields.fechaReunion)
+    : await findAgenda(fields.idCuenta, fields.idcliente, fields.emailLead);
+
   let id: number;
   let action: "created" | "updated";
 
   if (existingId !== null) {
-    console.log(`[GHL handlePendiente] Registro existente encontrado (${existingId}), actualizando fecha_reunion en lugar de insertar duplicado`);
+    console.info(
+      `[GHL handlePendiente] Duplicado ignorado — ya existe id_registro_agenda=${existingId} para contacto=${fields.contactId} fecha=${fields.fechaReunion?.toISOString()}`,
+    );
+    // Actualizar fecha_reunion por si cambió (reagenda) pero mismo contacto+día
     try {
       await withRetry(
         () =>
           db.query(
             `UPDATE resumenes_diarios_agendas
-             SET categoria = 'PDTE', fecha_reunion = $2
+             SET categoria = 'PDTE', fecha_reunion = COALESCE($2, fecha_reunion)
              WHERE id_registro_agenda = $1`,
             [existingId, fields.fechaReunion],
           ),
-        { label: "handlePendiente/update" },
+        { label: "handlePendiente/update-dedup" },
       );
-      console.log("✅ Update (dedup pendiente) exitoso. id_registro_agenda:", existingId);
     } catch (dbErr) {
       console.error("❌ ERROR FATAL EN BASE DE DATOS (UPDATE pendiente dedup):", dbErr);
       throw dbErr;
