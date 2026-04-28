@@ -1,5 +1,6 @@
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
+import { db as pgPool } from "../../config/database.js";
 import { agendas, cuentas, eventosHuerfanos } from "../../db/schema.js";
 import {
   addContactNote,
@@ -139,6 +140,7 @@ export async function processFathomCall(
 
   // ── Fase 2: Obtener datos de la cuenta ────────────────────────────────────
 
+  interface GhlNotasConfig { ia?: boolean; transcripcion?: boolean }
   let account: {
     token_ghl: string | null;
     locationid: string | null;
@@ -148,6 +150,8 @@ export async function processFathomCall(
     embudo_personalizado: unknown;
     reglas_etiquetas: unknown;
   } | null = null;
+  // configuracion_ui no está en el schema Drizzle del Cerebro — se lee via pgPool
+  let ghlNotasConfig: GhlNotasConfig = { ia: true, transcripcion: false };
 
   try {
     const rows = await withRetry(
@@ -169,6 +173,23 @@ export async function processFathomCall(
     );
 
     account = rows[0] ?? null;
+
+    // Leer configuracion_ui.ghl_notas (no existe en el schema Drizzle del Cerebro)
+    try {
+      const cfgRows = await pgPool.query<{ configuracion_ui: { ghl_notas?: GhlNotasConfig } | null }>(
+        `SELECT configuracion_ui FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
+        [idCuenta],
+      );
+      const cfgUi = cfgRows.rows[0]?.configuracion_ui;
+      if (cfgUi?.ghl_notas) {
+        ghlNotasConfig = {
+          ia: cfgUi.ghl_notas.ia !== false,       // default true
+          transcripcion: cfgUi.ghl_notas.transcripcion === true, // default false
+        };
+      }
+    } catch (cfgErr) {
+      console.warn(`[Fathom] No se pudo leer ghl_notas config para cuenta ${idCuenta}:`, cfgErr);
+    }
   } catch (err) {
     console.error(`[Fathom] Error fetching account ${idCuenta}:`, err);
   }
@@ -449,35 +470,41 @@ export async function processFathomCall(
     );
   }
 
-  // ── Fase 6: Notas GHL (transcripción + análisis IA) ─────────────────────
+  // ── Fase 6: Notas GHL (controladas por configuracion_ui.ghl_notas) ────────
+  // Por defecto: nota IA = true, transcripción = false.
+  // El cliente puede cambiarlos desde Sistema → Evaluación de videollamadas.
   if (contactId && account.token_ghl) {
-    const aiSummary = [
-      classifier ? `Categoría: ${classifier.categoria}` : null,
-      classifier?.cash_collected && classifier.cash_collected !== "0"
-        ? `Cash collected: ${classifier.cash_collected}`
-        : null,
-      classifier?.facturacion && classifier.facturacion !== "0"
-        ? `Facturación: ${classifier.facturacion}`
-        : null,
-      analysisText ? `\n${analysisText}` : null,
-      tagsInternos.length > 0 ? `\nEtiquetas: ${tagsInternos.join(", ")}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    // Nota de análisis IA
+    if (ghlNotasConfig.ia !== false) {
+      const aiSummary = [
+        classifier ? `Categoría: ${classifier.categoria}` : null,
+        classifier?.cash_collected && classifier.cash_collected !== "0"
+          ? `Cash collected: ${classifier.cash_collected}`
+          : null,
+        classifier?.facturacion && classifier.facturacion !== "0"
+          ? `Facturación: ${classifier.facturacion}`
+          : null,
+        analysisText ? `\n${analysisText}` : null,
+        tagsInternos.length > 0 ? `\nEtiquetas: ${tagsInternos.join(", ")}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
 
-    if (aiSummary) {
-      try {
-        await addContactNote(
-          contactId,
-          account.token_ghl,
-          `🎥 Videollamada — Análisis IA\n\n${aiSummary}`,
-        );
-      } catch (err) {
-        console.error(`[Fathom] Error agregando nota IA en GHL:`, err);
+      if (aiSummary) {
+        try {
+          await addContactNote(
+            contactId,
+            account.token_ghl,
+            `🎥 Videollamada — Análisis IA\n\n${aiSummary}`,
+          );
+        } catch (err) {
+          console.error(`[Fathom] Error agregando nota IA en GHL:`, err);
+        }
       }
     }
 
-    if (formattedTranscript) {
+    // Nota de transcripción completa (desactivada por defecto — puede superar 65k chars)
+    if (ghlNotasConfig.transcripcion === true && formattedTranscript) {
       try {
         await addContactNote(
           contactId,
