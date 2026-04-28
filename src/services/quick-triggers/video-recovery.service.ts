@@ -234,18 +234,38 @@ export async function previewVideoRecovery(
     const leadEmail = pickLeadEmail(meeting);
 
     if (alreadyProcessed) {
-      results.push({
-        recording_id: meeting.recording_id,
-        meeting_title: meeting.meeting_title ?? meeting.title ?? null,
-        share_url: meeting.share_url ?? meeting.url ?? null,
-        scheduled_start_time: meeting.scheduled_start_time ?? null,
-        lead_email_detected: leadEmail,
-        estado_bd_actual: alreadyProcessed.categoria ?? "ya_procesada",
-        accion_sugerida: "skip",
-        motivo: "Esta videollamada ya fue procesada (recording_id existente).",
-        id_registro_agenda: alreadyProcessed.id_registro_agenda,
-        meeting_snapshot: meeting,
-      });
+      // Si el registro tiene recording_id pero sigue en no_show/PDTE, el cron lo marcó
+      // antes de que Fathom enviara el webhook. Hay que recuperarlo, no ignorarlo.
+      const categoriaActual = (alreadyProcessed.categoria ?? "").toLowerCase().trim();
+      const esRecuperableConRecording = categoriaActual === "no_show" || categoriaActual === "pdte" || categoriaActual === "pendiente";
+
+      if (esRecuperableConRecording) {
+        results.push({
+          recording_id: meeting.recording_id,
+          meeting_title: meeting.meeting_title ?? meeting.title ?? null,
+          share_url: meeting.share_url ?? meeting.url ?? null,
+          scheduled_start_time: meeting.scheduled_start_time ?? null,
+          lead_email_detected: leadEmail,
+          estado_bd_actual: alreadyProcessed.categoria ?? "no_show",
+          accion_sugerida: "recover_existing",
+          motivo: "El cron marcó esta cita como no-show antes de que Fathom procesara la grabación. La reunión SÍ ocurrió — se puede recuperar.",
+          id_registro_agenda: alreadyProcessed.id_registro_agenda,
+          meeting_snapshot: meeting,
+        });
+      } else {
+        results.push({
+          recording_id: meeting.recording_id,
+          meeting_title: meeting.meeting_title ?? meeting.title ?? null,
+          share_url: meeting.share_url ?? meeting.url ?? null,
+          scheduled_start_time: meeting.scheduled_start_time ?? null,
+          lead_email_detected: leadEmail,
+          estado_bd_actual: alreadyProcessed.categoria ?? "ya_procesada",
+          accion_sugerida: "skip",
+          motivo: "Esta videollamada ya fue procesada (recording_id existente).",
+          id_registro_agenda: alreadyProcessed.id_registro_agenda,
+          meeting_snapshot: meeting,
+        });
+      }
       continue;
     }
 
@@ -395,36 +415,54 @@ export async function executeVideoRecovery(
       .limit(1);
 
     if (alreadyProcessed) {
-      results.push({
-        recording_id: item.recording_id,
-        action: item.action,
-        status: "skipped",
-        estado_anterior: alreadyProcessed.categoria,
-        estado_final: alreadyProcessed.categoria,
-        motivo: "Ya procesada anteriormente para esta cuenta.",
-      });
-      continue;
+      // Si el registro tiene recording_id pero sigue en no_show/PDTE,
+      // el cron lo marcó antes de que llegara Fathom → permitir recuperar
+      const categoriaAlreadyProcessed = (alreadyProcessed.categoria ?? "").toLowerCase().trim();
+      const debeRecuperar = categoriaAlreadyProcessed === "no_show" || categoriaAlreadyProcessed === "pdte" || categoriaAlreadyProcessed === "pendiente";
+
+      if (!debeRecuperar) {
+        results.push({
+          recording_id: item.recording_id,
+          action: item.action,
+          status: "skipped",
+          estado_anterior: alreadyProcessed.categoria,
+          estado_final: alreadyProcessed.categoria,
+          motivo: "Ya procesada anteriormente para esta cuenta.",
+        });
+        continue;
+      }
+      // Si debe recuperar: el cron la marcó no_show antes de que llegara Fathom
+      // Forzar recover_existing con el id_registro_agenda encontrado por recording_id
+      // (continúa el flujo normal más abajo usando effectiveItem)
     }
 
+    // effectiveItem: puede ser el item original o el ajustado si alreadyProcessed debía recuperarse
+    const effectiveIdRegistro = alreadyProcessed?.id_registro_agenda ?? item.id_registro_agenda;
+    const effectiveAction: typeof item.action = alreadyProcessed && (
+      (alreadyProcessed.categoria ?? "").toLowerCase().trim() === "no_show" ||
+      (alreadyProcessed.categoria ?? "").toLowerCase().trim() === "pdte" ||
+      (alreadyProcessed.categoria ?? "").toLowerCase().trim() === "pendiente"
+    ) ? "recover_existing" : item.action;
+
     let estadoAnterior: string | null = null;
-    if (item.id_registro_agenda) {
+    if (effectiveIdRegistro) {
       const [agendaById] = await drizzleDb
         .select({ categoria: agendas.categoria })
         .from(agendas)
         .where(
           and(
             eq(agendas.id_cuenta, idCuenta),
-            eq(agendas.id_registro_agenda, item.id_registro_agenda),
+            eq(agendas.id_registro_agenda, effectiveIdRegistro),
           ),
         )
         .limit(1);
       estadoAnterior = agendaById?.categoria ?? null;
     }
 
-    if (item.action === "recover_existing" && !isRecoverableCategoria(estadoAnterior)) {
+    if (effectiveAction === "recover_existing" && !isRecoverableCategoria(estadoAnterior)) {
       results.push({
         recording_id: item.recording_id,
-        action: item.action,
+        action: effectiveAction,
         status: "skipped",
         estado_anterior: estadoAnterior,
         estado_final: estadoAnterior,
@@ -528,17 +566,19 @@ export async function executeVideoRecovery(
 
       results.push({
         recording_id: item.recording_id,
-        action: item.action,
+        action: effectiveAction,
         status: "processed",
         estado_anterior: estadoAnterior,
         estado_final: finalRow?.categoria ?? null,
-        motivo: "Videollamada recuperada y procesada.",
+        motivo: estadoAnterior === "no_show"
+          ? "Registro recuperado — el cron lo había marcado no_show antes de que Fathom procesara la grabación."
+          : "Videollamada recuperada y procesada.",
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown execute error";
       results.push({
         recording_id: item.recording_id,
-        action: item.action,
+        action: effectiveAction,
         status: "error",
         estado_anterior: estadoAnterior,
         estado_final: estadoAnterior,

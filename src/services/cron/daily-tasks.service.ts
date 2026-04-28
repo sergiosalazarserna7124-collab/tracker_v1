@@ -1,4 +1,4 @@
-import { eq, and, inArray, sql, lt, isNotNull } from "drizzle-orm";
+import { eq, and, inArray, sql, lt, isNotNull, isNull } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, llamadas } from "../../db/schema.js";
 import { addContactTag, addContactTags } from "../ghl-api.service.js";
@@ -39,6 +39,9 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
   //   - id_cuenta está en el array recibido
   //   - la fecha de la reunión (casteada a date) coincide con target_date
   //   - la categoría actual es PDTE (solo marcamos no-shows de citas pendientes)
+  //   - NO tiene fathom_recording_id (si ya fue grabado por Fathom, NO es no-show)
+  //     Fathom puede tardar 24-72h en procesar y enviar el webhook. Si ya tiene recording_id
+  //     significa que la reunión SÍ ocurrió y el sistema ya lo procesó o lo procesará pronto.
   // Acciones:
   //   - categoria → 'no_show'
   //   - tags: concatena ',noshowautoia' (o lo pone como primer tag si está vacío)
@@ -62,6 +65,8 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
             inArray(agendas.id_cuenta, account_ids),
             sql`CAST(${agendas.fechaReunion} AS date) = ${target_date}::date`,
             eq(agendas.categoria, "PDTE"),
+            // Excluir registros que ya tienen grabación de Fathom — la reunión SÍ ocurrió
+            isNull(agendas.fathom_recording_id),
           ),
         )
         .returning({
