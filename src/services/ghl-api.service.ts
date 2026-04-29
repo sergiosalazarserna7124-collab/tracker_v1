@@ -493,8 +493,9 @@ export async function getContactAppointmentDate(
       },
     );
     if (!res.ok) return null;
-    const data = (await res.json()) as { appointments?: Array<{ startTime?: string }> };
-    const appts = data.appointments ?? [];
+    // GHL API returns "events" (not "appointments") — field name mismatch was causing null returns
+    const data = (await res.json()) as { events?: Array<{ startTime?: string }>; appointments?: Array<{ startTime?: string }> };
+    const appts = data.events ?? data.appointments ?? [];
     if (!appts.length) return null;
 
     let best: Date | null = null;
