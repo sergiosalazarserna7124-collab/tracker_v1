@@ -45,8 +45,11 @@ function withBusinessContext(basePrompt: string, promptVentas: string | null): s
 
 // ─── Extracción segura de IDs desde embudo_personalizado ─────────────────────
 
-// Etapas fijas del sistema (IDs canónicos)
-const DEFAULT_CATEGORIAS = ["calificada", "no_calificada", "cerrada", "no_show", "cancelada"] as const;
+// Solo las categorías que la IA puede clasificar.
+// no_show → lo marca el cron de las 2AM (lead no se presentó)
+// cancelada → lo marca el webhook de GHL (lead canceló antes)
+// Si la IA recibe una transcripción, la llamada SÍ ocurrió → solo puede ser calificada, no_calificada o cerrada
+const DEFAULT_CATEGORIAS = ["calificada", "no_calificada", "cerrada"] as const;
 
 function extractEmbudoIds(embudo: unknown): string[] | null {
   try {
@@ -72,11 +75,11 @@ const CLASSIFIER_PROMPT = `ROLE: Analyst-Pro
 OBJECTIVE: Analizar rigurosamente una transcripción de videollamada de ventas para determinar su resultado comercial. Tu única salida debe ser un objeto JSON válido con los campos "categoria", "cash_collected" y "facturacion".
 
 CATEGORÍAS DISPONIBLES (IDs exactos que debes usar):
-- "cerrada": El lead aceptó la propuesta y se concretó la venta. Hay confirmación de pago.
+- "cerrada": El lead aceptó la propuesta y se concretó la venta. Hay confirmación de pago en la conversación.
 - "calificada": El lead cumple el perfil ideal (necesidad, autoridad, presupuesto) pero no cerró en esta llamada.
 - "no_calificada": El lead no cumple el perfil. No tiene necesidad, presupuesto o no es el decisor.
-- "no_show": El lead no se presentó (solo si la llamada está vacía o no hay interlocutor).
-- "cancelada": El lead canceló explícitamente antes de la llamada.
+
+NOTA IMPORTANTE: No_show y Cancelada NO son opciones para ti. Si recibes una transcripción, la llamada ocurrió — elige entre las 3 categorías anteriores.
 
 PROCESO DE ANÁLISIS PASO A PASO
 
@@ -94,7 +97,7 @@ Paso 2: Determinar la "categoria" — ANÁLISIS PURO DEL TEXTO
 3. ¿El lead claramente no cumple el perfil? No tiene presupuesto, no tiene necesidad, no es el decisor, rechazó explícitamente.
    Si SÍ → categoria = "no_calificada". Pasa al Paso 3.
 
-4. Si no hay conversación real (silencio, nadie contesta, error técnico) → categoria = "no_show".
+4. Si la transcripción está vacía o es ininteligible → categoria = "no_calificada" (la llamada ocurrió pero no hay información suficiente).
 
 Paso 3: Asignar Valores Monetarios
 
