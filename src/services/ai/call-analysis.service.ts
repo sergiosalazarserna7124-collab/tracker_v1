@@ -45,7 +45,8 @@ function withBusinessContext(basePrompt: string, promptVentas: string | null): s
 
 // ─── Extracción segura de IDs desde embudo_personalizado ─────────────────────
 
-const DEFAULT_CATEGORIAS = ["Cerrada", "Ofertada", "No_Ofertada"] as const;
+// Etapas fijas del sistema (IDs canónicos)
+const DEFAULT_CATEGORIAS = ["calificada", "no_calificada", "cerrada", "no_show", "cancelada"] as const;
 
 function extractEmbudoIds(embudo: unknown): string[] | null {
   try {
@@ -70,29 +71,40 @@ function extractEmbudoIds(embudo: unknown): string[] | null {
 const CLASSIFIER_PROMPT = `ROLE: Analyst-Pro
 OBJECTIVE: Analizar rigurosamente una transcripción de videollamada de ventas para determinar su resultado comercial. Tu única salida debe ser un objeto JSON válido con los campos "categoria", "cash_collected" y "facturacion".
 
+CATEGORÍAS DISPONIBLES (IDs exactos que debes usar):
+- "cerrada": El lead aceptó la propuesta y se concretó la venta. Hay confirmación de pago.
+- "calificada": El lead cumple el perfil ideal (necesidad, autoridad, presupuesto) pero no cerró en esta llamada.
+- "no_calificada": El lead no cumple el perfil. No tiene necesidad, presupuesto o no es el decisor.
+- "no_show": El lead no se presentó (solo si la llamada está vacía o no hay interlocutor).
+- "cancelada": El lead canceló explícitamente antes de la llamada.
+
 PROCESO DE ANÁLISIS PASO A PASO
 
 Paso 1: Identificar al Vendedor (Closer)
 El vendedor es la entidad con nombre corporativo. El otro es el cliente.
 
-Paso 2: Determinar la "categoria" - ANÁLISIS PURO DEL TEXTO
+Paso 2: Determinar la "categoria" — ANÁLISIS PURO DEL TEXTO
 
-1. ¿Ocurrió una transacción en la llamada? Busca evidencia de un pago que se está realizando DURANTE la conversación. Indicadores: el cliente pregunta cómo pagar ahora, se intercambian datos de pago, el cliente confirma verbalmente el envío de un monto, o menciona el envío de un comprobante.
-   Si la respuesta es SÍ → La categoría es "Cerrada". Pasa al Paso 3.
+1. ¿Ocurrió una transacción confirmada en la llamada? Busca: el cliente confirma pago, se intercambian datos de pago, menciona envío de comprobante.
+   Si SÍ → categoria = "cerrada". Pasa al Paso 3.
 
-2. Si no es "Cerrada", ¿se mencionó explícitamente un precio? Busca cualquier mención de un costo, valor o precio para un producto o servicio.
-   Si la respuesta es SÍ → La categoría es "Ofertada". Pasa al Paso 3.
+2. ¿El lead cumple el perfil de cliente ideal? Tiene la necesidad, el presupuesto y la autoridad para comprar. Mostró interés genuino y la conversación avanzó.
+   Si SÍ → categoria = "calificada". Pasa al Paso 3.
 
-3. Si no es "Cerrada" ni "Ofertada" → La categoría es "No_Ofertada". Pasa al Paso 3.
+3. ¿El lead claramente no cumple el perfil? No tiene presupuesto, no tiene necesidad, no es el decisor, rechazó explícitamente.
+   Si SÍ → categoria = "no_calificada". Pasa al Paso 3.
+
+4. Si no hay conversación real (silencio, nadie contesta, error técnico) → categoria = "no_show".
 
 Paso 3: Asignar Valores Monetarios
 
-* SI la "categoria" es "Cerrada": "cash_collected" = monto exacto que el cliente confirmó pagar; "facturacion" = valor total del acuerdo.
-* SI la "categoria" es "Ofertada" o "No_Ofertada": "cash_collected" = "0"; "facturacion" = "0". REGLA DE ORO: Si "categoria" NO es "Cerrada", ambos valores DEBEN ser "0".
+* SI categoria = "cerrada": "cash_collected" = monto exacto confirmado; "facturacion" = valor total del acuerdo.
+* CUALQUIER OTRA categoria: "cash_collected" = "0"; "facturacion" = "0".
 
 STRICT RULES
-• Todos los valores deben ser strings. Extrae únicamente los dígitos para valores monetarios (ej: "1200", no "$1,200.00").
-• REGLA DE ORO (Verificación final): Si "categoria" NO es "Cerrada", entonces "facturacion" y "cash_collected" DEBEN ser "0".`;
+• Usa EXACTAMENTE los IDs listados (minúsculas, sin acentos): cerrada, calificada, no_calificada, no_show, cancelada.
+• Todos los valores monetarios son strings de solo dígitos (ej: "1200", no "$1,200.00").
+• REGLA DE ORO: Si categoria ≠ "cerrada", facturacion y cash_collected DEBEN ser "0".`;
 
 function buildClassifierPrompt(embudoPersonalizado?: unknown): string {
   let prompt = CLASSIFIER_PROMPT;
@@ -108,7 +120,7 @@ ATENCIÓN: Este cliente tiene un embudo de ventas personalizado. Los estados per
 ${JSON.stringify(embudoPersonalizado, null, 2)}
 
 Tu obligación estricta es clasificar el resultado usando ÚNICAMENTE uno de los IDs de este embudo: [${customIds.join(", ")}].
-NO uses los estados por defecto (Cerrada, Ofertada, No_Ofertada). Usa SOLO los IDs del embudo anterior.
+NO uses los estados por defecto (calificada, no_calificada, cerrada). Usa SOLO los IDs del embudo anterior.
 Si ninguno aplica claramente, elige el más cercano de los proporcionados.
 
 IMPORTANTE: Aunque uses el embudo personalizado, SIEMPRE debes extraer cash_collected y facturacion si hubo transacción.
