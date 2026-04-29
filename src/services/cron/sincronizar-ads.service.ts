@@ -375,8 +375,16 @@ async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fec
   if (!statsRes.ok) {
     throw new Error(`Vturb stats error: ${statsRes.status} ${await statsRes.text()}`);
   }
-  const statsJson = (await statsRes.json()) as { data?: Array<Record<string, unknown>> };
-  const data = statsJson.data ?? [];
+  // Vturb API can return array directly OR { data: [...] }
+  const statsRaw = (await statsRes.json()) as unknown;
+  let data: Array<Record<string, unknown>> = [];
+  if (Array.isArray(statsRaw)) {
+    data = statsRaw as Array<Record<string, unknown>>;
+  } else if (statsRaw && typeof statsRaw === "object") {
+    const obj = statsRaw as Record<string, unknown>;
+    if (Array.isArray(obj.data)) data = obj.data as Array<Record<string, unknown>>;
+    else if (Array.isArray(obj.results)) data = obj.results as Array<Record<string, unknown>>;
+  }
   if (data.length === 0) {
     console.log(`[Vturb] Sin datos para player "${config.nombre_player}" en fecha ${fecha}`);
     return;
@@ -400,11 +408,13 @@ async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fec
   const play_rate = targetRow ? parseFloat(String(targetRow.play_rate ?? "0")) || 0 : 0;
   const engagement = targetRow ? parseFloat(String(targetRow.watched_rate ?? targetRow.engagement ?? "0")) || 0 : 0;
 
+  // Use ON CONFLICT matching the actual unique index: (id_cuenta, fecha, COALESCE(campana,''))
+  // Vturb rows have no campana → campana=NULL → COALESCE='' → conflict key matches (id_cuenta, fecha, '')
   await pgPool.query(
     `INSERT INTO resumenes_diarios_ads
-      (id_cuenta, fecha, plataforma, gasto_total_ad, impresiones_totales, clicks_unicos, cpm, cpc, ctr, play_rate, engagement, agendamientos, datos_extra)
-     VALUES ($1, $2, 'vturb', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     ON CONFLICT (id_cuenta, fecha)
+      (id_cuenta, fecha, plataforma, campana, gasto_total_ad, impresiones_totales, clicks_unicos, cpm, cpc, ctr, play_rate, engagement, agendamientos, datos_extra)
+     VALUES ($1, $2, 'vturb', 'vturb_daily', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     ON CONFLICT (id_cuenta, fecha, COALESCE(campana, ''))
      DO UPDATE SET
        gasto_total_ad = EXCLUDED.gasto_total_ad,
        impresiones_totales = EXCLUDED.impresiones_totales,
