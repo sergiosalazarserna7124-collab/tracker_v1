@@ -111,15 +111,34 @@ Tu obligación estricta es clasificar el resultado usando ÚNICAMENTE uno de los
 NO uses los estados por defecto (Cerrada, Ofertada, No_Ofertada). Usa SOLO los IDs del embudo anterior.
 Si ninguno aplica claramente, elige el más cercano de los proporcionados.
 
-IMPORTANTE: Aunque uses el embudo personalizado, SIEMPRE debes extraer cash_collected y facturacion si hubo transacción.`;
+IMPORTANTE: Aunque uses el embudo personalizado, SIEMPRE debes extraer cash_collected y facturacion si hubo transacción.
+
+## REGLA DE ORO: Etapas Cerradas (es_cerrada: true)
+
+Si el embudo personalizado tiene alguna etapa con "es_cerrada": true (además de la etapa "Cerrada" por defecto), ESAS ETAPAS TAMBIÉN SON TRANSACCIONES CONCRETADAS.
+Aplica la misma regla de extracción de cash_collected y facturacion para esas etapas, igual que para "Cerrada".`;
   }
 
   return prompt;
 }
 
 function buildClassifierSchema(embudoPersonalizado?: unknown) {
-  const customIds = extractEmbudoIds(embudoPersonalizado);
-  const categoriaEnum = customIds ?? [...DEFAULT_CATEGORIAS];
+  let categoriaEnum: string[];
+  
+  // Si hay embudo personalizado, usar IDs de etapas fijas
+  if (Array.isArray(embudoPersonalizado) && embudoPersonalizado.length > 0) {
+    const fijaIds = embudoPersonalizado
+      .filter((item: unknown) =>
+        typeof item === "object" && item !== null && 
+        (item as Record<string, unknown>).es_fija === true
+      )
+      .map((item: unknown) => String((item as Record<string, unknown>).id))
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    
+    categoriaEnum = fijaIds.length > 0 ? fijaIds : [...DEFAULT_CATEGORIAS];
+  } else {
+    categoriaEnum = [...DEFAULT_CATEGORIAS];
+  }
 
   return jsonSchema<ClassifierResult>({
     type: "object",
