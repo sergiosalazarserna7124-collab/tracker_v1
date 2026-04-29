@@ -63,7 +63,10 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
         .where(
           and(
             inArray(agendas.id_cuenta, account_ids),
-            sql`CAST(${agendas.fechaReunion} AS date) = ${target_date}::date`,
+            // Match on fecha_reunion if present, otherwise fall back to fecha (date of the record).
+            // Many GHL webhooks don't include the meeting time → fecha_reunion = NULL.
+            // In those cases, use the record date as proxy for the meeting date.
+            sql`COALESCE(CAST(${agendas.fechaReunion} AS date), ${agendas.fecha}) = ${target_date}::date`,
             eq(agendas.categoria, "PDTE"),
             // Excluir registros que ya tienen grabación de Fathom — la reunión SÍ ocurrió
             isNull(agendas.fathom_recording_id),
