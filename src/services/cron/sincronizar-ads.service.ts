@@ -406,7 +406,8 @@ async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fec
   // play_rate y engagement por fecha específica
   const targetRow = data.find((obj) => obj.date_key === fecha);
   const play_rate = targetRow ? parseFloat(String(targetRow.play_rate ?? "0")) || 0 : 0;
-  const engagement = targetRow ? parseFloat(String(targetRow.watched_rate ?? targetRow.engagement ?? "0")) || 0 : 0;
+  // Vturb field is 'engagement_rate' (not 'engagement' or 'watched_rate')
+  const engagement = targetRow ? parseFloat(String(targetRow.engagement_rate ?? targetRow.watched_rate ?? targetRow.engagement ?? "0")) || 0 : 0;
 
   // Use ON CONFLICT matching the actual unique index: (id_cuenta, fecha, COALESCE(campana,''))
   // Vturb rows have no campana → campana=NULL → COALESCE='' → conflict key matches (id_cuenta, fecha, '')
