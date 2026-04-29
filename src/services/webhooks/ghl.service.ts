@@ -317,8 +317,17 @@ async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
   return { id_registro_agenda: id, categoria: "CANCELADA", action, tagged };
 }
 
-async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
+async function handleReagenda(body: GhlBodyPayload, tokenGhl?: string): Promise<AgendaResult> {
   const fields = extractFields(body);
+
+  // Same GHL fallback as handlePendiente: fetch real appointment date if not in payload
+  if (!fields.fechaReunion && fields.contactId && tokenGhl) {
+    const apptDate = await getContactAppointmentDate(fields.contactId, tokenGhl, new Date());
+    if (apptDate) {
+      fields.fechaReunion = apptDate;
+      console.info(`[GHL handleReagenda] fechaReunion tomada de GHL appointments: ${apptDate.toISOString()}`);
+    }
+  }
 
   const existingId = await findAgenda(fields.idCuenta, fields.idcliente, fields.emailLead);
   let id: number;
@@ -330,8 +339,9 @@ async function handleReagenda(body: GhlBodyPayload): Promise<AgendaResult> {
       await withRetry(
         () =>
           db.query(
+            // Use COALESCE to never overwrite a valid fecha_reunion with NULL
             `UPDATE resumenes_diarios_agendas
-             SET categoria = 'PDTE', fecha_reunion = $2
+             SET categoria = 'PDTE', fecha_reunion = COALESCE($2, fecha_reunion)
              WHERE id_registro_agenda = $1`,
             [existingId, fields.fechaReunion],
           ),
@@ -418,7 +428,7 @@ export async function processGhlWebhook(
 
       case "reagenda":
         console.log("🔀 [GHL webhook] Entrando a handleReagenda");
-        return { success: true, data: await handleReagenda(body) };
+        return { success: true, data: await handleReagenda(body, tokenGhl) };
 
       default:
         console.warn(

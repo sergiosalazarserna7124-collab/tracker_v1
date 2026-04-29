@@ -494,15 +494,39 @@ export async function getContactAppointmentDate(
     );
     if (!res.ok) return null;
     // GHL API returns "events" (not "appointments") — field name mismatch was causing null returns
-    const data = (await res.json()) as { events?: Array<{ startTime?: string }>; appointments?: Array<{ startTime?: string }> };
-    const appts = data.events ?? data.appointments ?? [];
+    const data = (await res.json()) as {
+      events?: Array<{ startTime?: string; appointmentStatus?: string; deleted?: boolean }>;
+      appointments?: Array<{ startTime?: string; appointmentStatus?: string; deleted?: boolean }>;
+    };
+    const appts = (data.events ?? data.appointments ?? []).filter(
+      (a) => a.startTime && !a.deleted,
+    );
     if (!appts.length) return null;
 
+    // Strategy: prefer upcoming confirmed appointments first.
+    // Only fall back to nearest-to-referenceDate if no future confirmed exists.
+    // This prevents picking a past/cancelled appointment when there's a real upcoming one.
+    const TERMINAL_STATUSES = new Set(["noshow", "no-show", "cancelled", "canceled"]);
+
+    const futureConfirmed = appts.filter((a) => {
+      const d = new Date(a.startTime!);
+      const status = (a.appointmentStatus ?? "").toLowerCase();
+      return d >= referenceDate && !TERMINAL_STATUSES.has(status);
+    });
+
+    if (futureConfirmed.length > 0) {
+      // Among future confirmed, take the earliest (soonest upcoming appointment)
+      return futureConfirmed.reduce<Date>((earliest, a) => {
+        const d = new Date(a.startTime!);
+        return d < earliest ? d : earliest;
+      }, new Date(futureConfirmed[0].startTime!));
+    }
+
+    // No future confirmed — fall back to the appointment closest to referenceDate
     let best: Date | null = null;
     let bestDiff = Infinity;
     for (const a of appts) {
-      if (!a.startTime) continue;
-      const d = new Date(a.startTime);
+      const d = new Date(a.startTime!);
       const diff = Math.abs(d.getTime() - referenceDate.getTime());
       if (diff < bestDiff) { bestDiff = diff; best = d; }
     }
