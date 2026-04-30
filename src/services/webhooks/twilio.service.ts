@@ -24,7 +24,7 @@ import {
 import { generateLlamadaAnalysisText } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
-import { markTokenInvalid, savePendingNote } from "../ghl-token-guard.service.js";
+import { markTokenInvalid, savePendingNote, savePendingTag } from "../ghl-token-guard.service.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
@@ -212,6 +212,7 @@ async function applyGhlTagAndNote(
   tag: string,
   label: string,
   locationId?: string | null,
+  idCuenta?: number | null,
 ): Promise<void> {
   if (!contactId || !tokenGhl) {
     if (!contactId) console.warn(`[${label}] Sin contact_id; no se puede taggear/notar en GHL`);
@@ -222,13 +223,24 @@ async function applyGhlTagAndNote(
   try {
     await safeAddContactTag(contactId, tokenGhl, tag, locationId);
   } catch (err) {
-    console.error(`[${label}] Error aplicando tag GHL para contactId="${contactId}":`, err);
+    const isInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+    if (isInvalid && idCuenta) {
+      await markTokenInvalid(idCuenta);
+      await savePendingTag(idCuenta, contactId, tag, String(err));
+    } else {
+      console.error(`[${label}] Error aplicando tag GHL para contactId="${contactId}":`, err);
+    }
   }
 
   try {
     await addContactNote(contactId, tokenGhl, "Llamada no contestada");
   } catch (err) {
-    console.error(`[${label}] Error agregando nota GHL para contactId="${contactId}":`, err);
+    const isInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+    if (isInvalid && idCuenta) {
+      await savePendingNote(idCuenta, contactId, "Llamada no contestada", String(err));
+    } else {
+      console.error(`[${label}] Error agregando nota GHL para contactId="${contactId}":`, err);
+    }
   }
 }
 
@@ -450,7 +462,7 @@ async function followUpPath(
     }
   }
 
-  await applyGhlTagAndNote(contactId, tokenGhl, GHL_TAGS.no_contestada_llamada, label, fields.locationId);
+  await applyGhlTagAndNote(contactId, tokenGhl, GHL_TAGS.no_contestada_llamada, label, fields.locationId, idCuenta);
 
   const tipoEvento = label.includes("buzon")
     ? "buzon"

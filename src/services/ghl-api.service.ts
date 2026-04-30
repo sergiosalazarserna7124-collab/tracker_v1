@@ -292,6 +292,11 @@ export async function addContactTag(
   if (!response.ok) {
     const text = await response.text();
     console.error("[GHL addContactTag] ERROR response body:", text);
+    if (response.status === 401) {
+      const err = new Error(`GHL_TOKEN_INVALID: tag API 401`);
+      (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
+      throw err;
+    }
     throw new Error(`GHL tag API responded ${response.status}: ${text}`);
   }
 }
@@ -364,6 +369,11 @@ export async function addContactTags(
   if (!response.ok) {
     const text = await response.text();
     console.error(`[GHL addContactTags] ERROR ${response.status}:`, text);
+    if (response.status === 401) {
+      const err = new Error(`GHL_TOKEN_INVALID: tags API 401`);
+      (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
+      throw err;
+    }
     throw new Error(`GHL tag API responded ${response.status}: ${text}`);
   }
 }
