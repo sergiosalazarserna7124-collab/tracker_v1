@@ -24,6 +24,7 @@ import {
 import { generateLlamadaAnalysisText } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
+import { markTokenInvalid, savePendingNote } from "../ghl-token-guard.service.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
@@ -1110,7 +1111,14 @@ async function effectivePath(
           `📞 Llamada Telefónica — Análisis IA\n\n${iadesc}`,
         );
       } catch (err) {
-        console.error(`[Effective] Error agregando nota IA en GHL:`, err);
+        const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+        if (isTokenInvalid && idCuenta) {
+          console.warn(`[Effective] Token GHL inválido para cuenta=${idCuenta} — guardando nota pendiente`);
+          await markTokenInvalid(idCuenta);
+          await savePendingNote(idCuenta, contactId, `📞 Llamada Telefónica — Análisis IA\n\n${iadesc}`, String(err));
+        } else {
+          console.error(`[Effective] Error agregando nota IA en GHL:`, err);
+        }
       }
     }
 
@@ -1122,7 +1130,12 @@ async function effectivePath(
           `📞 Llamada Telefónica — Transcripción\n\n${transcript}`,
         );
       } catch (err) {
-        console.error(`[Effective] Error agregando nota transcripción en GHL:`, err);
+        const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+        if (isTokenInvalid && idCuenta) {
+          await savePendingNote(idCuenta, contactId, `📞 Llamada Telefónica — Transcripción\n\n${transcript}`, String(err));
+        } else {
+          console.error(`[Effective] Error agregando nota transcripción en GHL:`, err);
+        }
       }
     }
   } else {

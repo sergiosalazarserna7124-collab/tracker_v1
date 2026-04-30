@@ -324,6 +324,12 @@ export async function addContactNote(
 
   if (!response.ok) {
     const text = await response.text();
+    // Surface 401 specifically so callers can handle token-invalid scenario
+    if (response.status === 401) {
+      const err = new Error(`GHL_TOKEN_INVALID: notes API 401 for contact=${contactId}`);
+      (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
+      throw err;
+    }
     throw new Error(`GHL notes API responded ${response.status}: ${text}`);
   }
 }

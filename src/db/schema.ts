@@ -113,6 +113,7 @@ export const cuentas = pgTable("cuentas", {
   identificador_url: text("identificador_url"),
   locationid: text("locationid"),
   token_ghl: text("token_ghl"),
+  token_ghl_status: text("token_ghl_status").default("unknown"), // 'ok' | 'invalid' | 'unknown'
   prompt_ventas: text("prompt_ventas"),
   twilio_sid: text("twilio_sid"),
   auth_twilio: text("auth_twilio"),
@@ -198,4 +199,17 @@ export const ghlOauthTokens = pgTable("ghl_oauth_tokens", {
   expires_at: timestamp("expires_at", { withTimezone: true }),
   user_type: text("user_type"),
   company_id: text("company_id"),
+});
+
+// ── Tabla: acciones GHL pendientes por token inválido ─────────────────────────
+export const ghlPendingActions = pgTable("ghl_pending_actions", {
+  id: serial("id").primaryKey(),
+  id_cuenta: integer("id_cuenta").references(() => cuentas.id_cuenta, { onDelete: "cascade" }).notNull(),
+  contact_id: text("contact_id").notNull(),
+  action_type: text("action_type").notNull(), // 'note' | 'tag' | 'tags'
+  payload: jsonb("payload").notNull(),         // {body:...} para nota, {tag:...} o {tags:[...]} para tags
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  retry_count: integer("retry_count").default(0),
+  last_error: text("last_error"),
+  resolved_at: timestamp("resolved_at", { withTimezone: true }), // NULL = pendiente
 });
