@@ -33,6 +33,7 @@ export const agendas = pgTable("resumenes_diarios_agendas", {
   fathom_share_url: text("fathom_share_url"),
   fathom_processed_at: timestamp("fathom_processed_at", { withTimezone: true }),
   fathom_ingestion_source: text("fathom_ingestion_source"),
+  transcripcion_fathom: text("transcripcion_fathom"),
 }, (table) => [
   // ── Índices parciales para lookup en effectivePath() (categoria = PDTE) ──
   index("idx_agendas_cuenta_contact_pdte")
