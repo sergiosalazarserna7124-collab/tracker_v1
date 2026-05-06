@@ -21,7 +21,7 @@ import {
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
-import { generateLlamadaAnalysisText } from "../ai/call-analysis.service.js";
+import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingNote, savePendingTag } from "../ghl-token-guard.service.js";
@@ -687,6 +687,11 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
   let transcript: string;
   try {
     transcript = await transcribeAudio(audioBuffer, openaiApiKey);
+    // Post-process: diarizar si Whisper devolvió texto plano (sin speaker labels)
+    // Se hace de forma best-effort — si falla, se usa el transcript plano
+    if (transcript.trim()) {
+      transcript = await diarizarTranscripcion(transcript, openaiApiKey);
+    }
   } catch (err) {
     console.error("[Effective] Error transcribiendo audio con Whisper:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, null, null, "Effective");

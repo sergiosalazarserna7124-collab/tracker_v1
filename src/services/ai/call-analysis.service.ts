@@ -422,3 +422,71 @@ export async function analyzeCall(
         : { matched_tags: [], matched_rules: [] },
   };
 }
+
+// ─── Diarización de transcripciones planas (sin speaker labels) ───────────────
+
+/**
+ * Detecta si una transcripción ya tiene formato Speaker:texto o es texto plano.
+ * Retorna true si más del 30% de las primeras 20 líneas tienen patrón "Palabra: texto".
+ */
+function transcriptHasSpeakers(transcript: string): boolean {
+  if (!transcript?.trim()) return false;
+  const lines = transcript.trim().split('\n').slice(0, 20);
+  const speakerLines = lines.filter((line) => {
+    const colon = line.indexOf(':');
+    if (colon < 0 || colon > 30) return false;
+    const prefix = line.slice(0, colon).trim();
+    return prefix.length > 0 && !/^\d+$/.test(prefix);
+  });
+  return speakerLines.length / Math.max(lines.length, 1) > 0.3;
+}
+
+/**
+ * Diariza una transcripción plana usando GPT-4o-mini.
+ * Identifica quién es el asesor y quién es el cliente basándose en el contexto.
+ * Retorna la transcripción formateada con "Asesor: texto" / "Cliente: texto".
+ * Si falla o la transcripción ya tiene speakers, retorna el original.
+ */
+export async function diarizarTranscripcion(
+  transcript: string,
+  openaiApiKey?: string | null,
+): Promise<string> {
+  if (!transcript?.trim()) return transcript;
+
+  // Si ya tiene speakers, no procesar
+  if (transcriptHasSpeakers(transcript)) return transcript;
+
+  // Transcripciones muy cortas no vale la pena diarizar
+  if (transcript.length < 100) return transcript;
+
+  const model = resolveModel(openaiApiKey);
+
+  const DIARIZACION_PROMPT = `Eres un experto en análisis de conversaciones de ventas.
+Recibirás una transcripción de una llamada de ventas en texto plano, sin indicar quién habla cada parte.
+Tu tarea es identificar los turnos de habla y reformatear la transcripción con el formato:
+"Asesor: [texto del asesor]"
+"Cliente: [texto del cliente]"
+
+Reglas:
+- El asesor es quien inicia la llamada, presenta la empresa/producto, hace preguntas de calificación
+- El cliente es quien responde, hace preguntas sobre el producto, expresa objeciones o interés
+- Mantén el texto original exactamente como está, solo agrega el prefijo correcto
+- Si hay silencios, mensajes de buzón o texto ininteligible, ponlos como "Sistema: [texto]"
+- Una sola línea por turno de habla
+- Si no puedes determinar claramente quién habla, usa "Hablante: [texto]"
+
+Retorna SOLO la transcripción formateada, sin explicaciones adicionales.`;
+
+  try {
+    const { text } = await generateText({
+      model,
+      system: DIARIZACION_PROMPT,
+      prompt: `Transcripción a formatear:\n${transcript.slice(0, 6000)}`, // max 6k chars para control de costo
+      temperature: 0,
+    });
+    return text?.trim() || transcript;
+  } catch (err) {
+    console.warn("[diarizarTranscripcion] Error diarizando, retornando original:", err);
+    return transcript;
+  }
+}
