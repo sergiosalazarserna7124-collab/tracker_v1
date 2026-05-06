@@ -326,6 +326,39 @@ export async function previewVideoRecovery(
       continue;
     }
 
+    // Antes de marcar como sin_match, verificar si este email ya tiene
+    // cualquier registro en BD con la grabación de Fathom ya procesada
+    // (calificada, cerrada, no_calificada, cancelada, etc.)
+    // Si existe → la reunión YA fue procesada correctamente → skip silencioso
+    const [yaExiste] = await drizzleDb
+      .select({ id_registro_agenda: agendas.id_registro_agenda, categoria: agendas.categoria })
+      .from(agendas)
+      .where(
+        and(
+          eq(agendas.id_cuenta, idCuenta),
+          sql`LOWER(${agendas.email_lead}) = LOWER(${leadEmail})`,
+        ),
+      )
+      .orderBy(desc(agendas.fechaReunion))
+      .limit(1);
+
+    if (yaExiste) {
+      // El lead tiene registros en BD (procesados) → no mostrar en el panel
+      results.push({
+        recording_id: meeting.recording_id,
+        meeting_title: meeting.meeting_title ?? meeting.title ?? null,
+        share_url: meeting.share_url ?? meeting.url ?? null,
+        scheduled_start_time: meeting.scheduled_start_time ?? null,
+        lead_email_detected: leadEmail,
+        estado_bd_actual: yaExiste.categoria ?? "ya_procesada",
+        accion_sugerida: "skip",
+        motivo: `Lead ya tiene registros en BD (estado: ${yaExiste.categoria ?? "desconocido"}). No requiere acción.`,
+        id_registro_agenda: yaExiste.id_registro_agenda,
+        meeting_snapshot: meeting,
+      });
+      continue;
+    }
+
     results.push({
       recording_id: meeting.recording_id,
       meeting_title: meeting.meeting_title ?? meeting.title ?? null,
@@ -334,7 +367,7 @@ export async function previewVideoRecovery(
       lead_email_detected: leadEmail,
       estado_bd_actual: "sin_match_bd",
       accion_sugerida: "create_if_missing",
-      motivo: "No existe un registro pendiente/no_show para ese lead. Se puede crear uno nuevo.",
+      motivo: "No existe ningún registro para ese lead. Se puede crear uno nuevo.",
       id_registro_agenda: null,
       meeting_snapshot: meeting,
     });
