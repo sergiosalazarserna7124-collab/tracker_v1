@@ -411,15 +411,31 @@ export async function processFathomCall(
               ...(utmContent && { origen: utmContent }),
               ...(contactId && { ghl_contact_id: contactId }),
               ...(contactName && { nombre_de_lead: contactName }),
-              // Solo actualizar closer si el registro existente NO tiene uno asignado
-              // Evita pisar al asesor original con el nombre de la cuenta de Fathom
-              ...(!existing.closer
-                ? closerEmailFromGhl
-                  ? { closer: closerEmailFromGhl }
-                  : closerName
-                    ? { closer: closerName }
-                    : {}
-                : {}),
+              // Lógica de closer para UPDATE:
+              // 1. Si no hay closer → usar recorded_by.email > contact.assignedTo > recorded_by.name
+              // 2. Si hay closer pero es un nombre (no email) → actualizarlo con email real
+              // 3. Si hay closer email → dejar el existente (ya fue asignado correctamente)
+              // Esto evita que el contact.assignedTo (setter) pise al recorded_by real
+              ...(() => {
+                const existingIsEmail = existing.closer ? existing.closer.includes("@") : false;
+                const bestCloser = closerEmail ?? closerEmailFromGhl ?? closerName ?? null;
+                if (!existing.closer) {
+                  return bestCloser ? { closer: bestCloser } : {};
+                }
+                if (!existingIsEmail && bestCloser) {
+                  // existing.closer es un nombre, no email → actualizar con email real
+                  return { closer: bestCloser };
+                }
+                if (existingIsEmail && closerEmail && closerEmail !== existing.closer) {
+                  // Hay un recorded_by.email diferente → preferir el que realmente grabó
+                  // Solo si closerEmailFromGhl coincide con existing (fue setter quien asignó)
+                  // y el recorded_by es diferente (quien realmente grabó es otro)
+                  if (closerEmailFromGhl === existing.closer) {
+                    return { closer: closerEmail };
+                  }
+                }
+                return {};
+              })(),
             })
             .where(eq(agendas.id_registro_agenda, existing.id)),
         { label: "Fathom/updateAgenda" },
@@ -442,7 +458,9 @@ export async function processFathomCall(
             nombre_de_lead: contactName,
             origen: utmContent,
             ghl_contact_id: contactId,
-            closer: closerEmailFromGhl ?? closerName ?? null,
+            // Para INSERT: priorizar recorded_by.email (quien realmente grabó en Fathom)
+            // sobre contact.assignedTo en GHL (que puede ser el setter, no el closer)
+            closer: closerEmail ?? closerEmailFromGhl ?? closerName ?? null,
             link_llamada: shareUrl,
             fathom_recording_id: recordingId,
             fathom_share_url: shareUrl,
