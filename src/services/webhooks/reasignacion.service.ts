@@ -1,27 +1,16 @@
-import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
-import { llamadas } from "../../db/schema.js";
+import { db as pgPool } from "../../config/database.js";
+import { llamadas, logLlamadas, agendas } from "../../db/schema.js";
 import { getAccountByLocationId } from "../ghl-api.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { ReasignacionBodyPayload } from "../../schemas/webhooks/reasignacion.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
-const ESTADOS_REASIGNABLES = [
-  "pdte",
-  "seguimiento",
-  "programado",
-  "no_contestada",
-  "no_contestado",
-] as const;
-
 function extractFields(body: ReasignacionBodyPayload) {
   const cd = body.customData;
-  // Fall back to top-level body fields when customData lacks lead info
-  // (Some GHL workflows send nombre/telefono only at the top level)
   const nombreLead = (cd.nombre ?? "").trim() || (body.full_name ?? "").trim() || (body.first_name ?? "").trim();
   const telefonoLead = (cd.telefono ?? "").trim() || (body.phone ?? "").trim();
-  // Fall back to body.location.id when customData.locationid doesn't match any account
-  // (Ferrero and others have typos in the manually-configured customData.locationid)
   const locationId = (cd.locationid ?? "").trim() || (body.location?.id ?? "").trim();
   return {
     idUserGhl: (cd.idusuario ?? "").trim(),
@@ -44,139 +33,117 @@ export async function processReasignacion(
     return { success: false, error: "idusuario es requerido" };
   }
 
+  // Resolver cuenta
   let idCuenta: number | null = null;
-  if (fields.locationId) {
+  for (const locId of [fields.locationId, fields.locationIdFallback].filter(Boolean)) {
+    if (idCuenta) break;
     try {
-      const account = await getAccountByLocationId(fields.locationId);
-      idCuenta = account?.id_cuenta ?? null;
-    } catch (err) {
-      console.error(`[${label}] Error buscando cuenta para locationId="${fields.locationId}":`, err);
-    }
-  }
-  // Fallback: si customData.locationid no matcheó, intentar con body.location.id
-  if (!idCuenta && fields.locationIdFallback && fields.locationIdFallback !== fields.locationId) {
-    try {
-      const account = await getAccountByLocationId(fields.locationIdFallback);
-      if (account) {
-        idCuenta = account.id_cuenta;
-        console.info(`[${label}] Cuenta encontrada por fallback location.id="${fields.locationIdFallback}" (customData.locationid="${fields.locationId}" no matcheó)`);
-      }
-    } catch (err) {
-      console.error(`[${label}] Error buscando cuenta por fallback locationId="${fields.locationIdFallback}":`, err);
-    }
+      const account = await getAccountByLocationId(locId);
+      if (account) idCuenta = account.id_cuenta;
+    } catch { /* continuar */ }
   }
 
-  type ExistingRow = {
-    id_registro: number;
-    estado: string | null;
-    nombre_lead: string | null;
-  };
+  const contactId = fields.idUserGhl;
+  const results: Record<string, number> = {};
 
-  let existing: ExistingRow | null = null;
-
+  // ── 1. registros_de_llamada ─────────────────────────────────────────────────
   try {
-    const rows = await withRetry(
+    const res = await withRetry(
       () =>
         drizzleDb
-          .select({
-            id_registro: llamadas.id_registro,
-            estado: llamadas.estado,
-            nombre_lead: llamadas.nombre_lead,
+          .update(llamadas)
+          .set({
+            ...(fields.closerMail && { closer_mail: fields.closerMail }),
+            ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
+            ...(fields.nombreLead && { nombre_lead: fields.nombreLead }),
+            ...(fields.telefonoLead && { phone_raw_format: fields.telefonoLead }),
           })
-          .from(llamadas)
           .where(
             and(
-              eq(llamadas.id_user_ghl, fields.idUserGhl),
-              idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
-              or(
-                inArray(llamadas.estado, [...ESTADOS_REASIGNABLES]),
-                isNull(llamadas.estado),
-              ),
+              eq(llamadas.id_user_ghl, contactId),
+              ...(idCuenta ? [eq(llamadas.id_cuenta, idCuenta)] : []),
             ),
-          )
-          .orderBy(desc(llamadas.id_registro))
-          .limit(1),
-      { label: `${label}/findExisting` },
+          ),
+      { label: `${label}/llamadas` },
     );
-
-    existing = rows[0] ?? null;
+    results.registros_de_llamada = (res as unknown as { rowCount?: number })?.rowCount ?? 0;
   } catch (err) {
-    console.error(`[${label}] Error buscando registro para idUserGhl="${fields.idUserGhl}":`, err);
-    return { success: false, error: "Database error searching for existing record" };
+    console.error(`[${label}] Error actualizando registros_de_llamada:`, err);
   }
 
-  if (existing) {
-    const existingId = existing.id_registro;
-    try {
-      await withRetry(
-        () =>
-          drizzleDb
-            .update(llamadas)
-            .set({
-              ...(fields.closerMail && { closer_mail: fields.closerMail }),
-              ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
-              ...(fields.nombreLead && { nombre_lead: fields.nombreLead }),
-              ...(fields.telefonoLead && { phone_raw_format: fields.telefonoLead }),
-            })
-            .where(eq(llamadas.id_registro, existingId)),
-        { label: `${label}/update` },
-      );
-
-      console.info(
-        `[${label}] Updated record ${existing.id_registro} (estado="${existing.estado}") → closer="${fields.nombreCloser}" <${fields.closerMail}>`,
-      );
-
-      return {
-        success: true,
-        data: {
-          id_registro: existing.id_registro,
-          action: "updated",
-          estado: existing.estado,
-        },
-      };
-    } catch (err) {
-      console.error(`[${label}] Error actualizando registro id=${existing.id_registro}:`, err);
-      return { success: false, error: "Database error while updating record" };
-    }
-  }
-
-  const nombreLead = fields.nombreLead || "sin nombre";
+  // ── 2. log_llamadas ─────────────────────────────────────────────────────────
   try {
-    const [inserted] = await withRetry(
+    const res = await withRetry(
       () =>
         drizzleDb
-          .insert(llamadas)
-          .values({
-            fecha_evento: new Date(),
-            id_cuenta: idCuenta,
-            nombre_lead: nombreLead,
-            phone_raw_format: fields.telefonoLead || null,
-            estado: "pdte",
-            closer_mail: fields.closerMail || null,
-            nombre_closer: fields.nombreCloser || null,
-            intentos_contacto: 0,
-            id_user_ghl: fields.idUserGhl,
+          .update(logLlamadas)
+          .set({
+            ...(fields.closerMail && { closer_mail: fields.closerMail }),
+            ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
           })
-          .returning({ id_registro: llamadas.id_registro }),
-      { label: `${label}/insert` },
+          .where(
+            and(
+              eq(logLlamadas.contact_id_ghl, contactId),
+              ...(idCuenta ? [eq(logLlamadas.id_cuenta, idCuenta)] : []),
+            ),
+          ),
+      { label: `${label}/log_llamadas` },
     );
-
-    const idRegistro = inserted?.id_registro ?? null;
-
-    console.info(
-      `[${label}] Created record ${idRegistro} for idUserGhl="${fields.idUserGhl}" → lead="${nombreLead}" closer="${fields.nombreCloser}" <${fields.closerMail}>`,
-    );
-
-    return {
-      success: true,
-      data: {
-        id_registro: idRegistro,
-        action: "created",
-        estado: "pdte",
-      },
-    };
+    results.log_llamadas = (res as unknown as { rowCount?: number })?.rowCount ?? 0;
   } catch (err) {
-    console.error(`[${label}] Error insertando nuevo registro:`, err);
-    return { success: false, error: "Database error while inserting new record" };
+    console.error(`[${label}] Error actualizando log_llamadas:`, err);
   }
+
+  // ── 3. resumenes_diarios_agendas ────────────────────────────────────────────
+  try {
+    const closerValue = fields.closerMail || fields.nombreCloser || null;
+    if (closerValue) {
+      const res = await withRetry(
+        () =>
+          drizzleDb
+            .update(agendas)
+            .set({ closer: closerValue })
+            .where(
+              and(
+                eq(agendas.ghl_contact_id, contactId),
+                ...(idCuenta ? [eq(agendas.id_cuenta, idCuenta)] : []),
+              ),
+            ),
+        { label: `${label}/agendas` },
+      );
+      results.resumenes_diarios_agendas = (res as unknown as { rowCount?: number })?.rowCount ?? 0;
+    }
+  } catch (err) {
+    console.error(`[${label}] Error actualizando resumenes_diarios_agendas:`, err);
+  }
+
+  // ── 4. chats_logs (notas_extra = nombre del closer asignado) ────────────────
+  try {
+    const closerValue = fields.nombreCloser || fields.closerMail || null;
+    if (closerValue) {
+      const res = await pgPool.query(
+        `UPDATE chats_logs SET notas_extra = $1
+         WHERE id_lead = $2 ${idCuenta ? "AND id_cuenta = $3" : ""}`,
+        idCuenta ? [closerValue, contactId, idCuenta] : [closerValue, contactId],
+      );
+      results.chats_logs = res.rowCount ?? 0;
+    }
+  } catch (err) {
+    console.error(`[${label}] Error actualizando chats_logs:`, err);
+  }
+
+  const total = Object.values(results).reduce((s, v) => s + v, 0);
+  console.info(`[${label}] Reasignado contactId=${contactId} → closer="${fields.nombreCloser}" <${fields.closerMail}> | registros: ${JSON.stringify(results)}`);
+
+  return {
+    success: true,
+    data: {
+      contact_id: contactId,
+      id_cuenta: idCuenta,
+      closer_mail: fields.closerMail,
+      nombre_closer: fields.nombreCloser,
+      registros_actualizados: results,
+      total_actualizados: total,
+    },
+  };
 }
