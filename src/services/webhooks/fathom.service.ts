@@ -411,31 +411,17 @@ export async function processFathomCall(
               ...(utmContent && { origen: utmContent }),
               ...(contactId && { ghl_contact_id: contactId }),
               ...(contactName && { nombre_de_lead: contactName }),
-              // Lógica de closer para UPDATE:
-              // 1. Si no hay closer → usar recorded_by.email > contact.assignedTo > recorded_by.name
-              // 2. Si hay closer pero es un nombre (no email) → actualizarlo con email real
-              // 3. Si hay closer email → dejar el existente (ya fue asignado correctamente)
-              // Esto evita que el contact.assignedTo (setter) pise al recorded_by real
-              ...(() => {
-                const existingIsEmail = existing.closer ? existing.closer.includes("@") : false;
-                const bestCloser = closerEmail ?? closerEmailFromGhl ?? closerName ?? null;
-                if (!existing.closer) {
-                  return bestCloser ? { closer: bestCloser } : {};
-                }
-                if (!existingIsEmail && bestCloser) {
-                  // existing.closer es un nombre, no email → actualizar con email real
-                  return { closer: bestCloser };
-                }
-                if (existingIsEmail && closerEmail && closerEmail !== existing.closer) {
-                  // Hay un recorded_by.email diferente → preferir el que realmente grabó
-                  // Solo si closerEmailFromGhl coincide con existing (fue setter quien asignó)
-                  // y el recorded_by es diferente (quien realmente grabó es otro)
-                  if (closerEmailFromGhl === existing.closer) {
-                    return { closer: closerEmail };
-                  }
-                }
-                return {};
-              })(),
+              // Solo actualizar closer si el registro no tiene uno asignado.
+              // Si Sergio envía el closer correcto desde GHL en el PDTE, ese valor
+              // ya quedó guardado y no hay que pisarlo con el recorded_by de Fathom
+              // (Fathom puede ser un usuario compartido entre varios closers).
+              ...(!existing.closer
+                ? closerEmail ?? closerEmailFromGhl
+                  ? { closer: closerEmail ?? closerEmailFromGhl }
+                  : closerName
+                    ? { closer: closerName }
+                    : {}
+                : {}),
             })
             .where(eq(agendas.id_registro_agenda, existing.id)),
         { label: "Fathom/updateAgenda" },
