@@ -110,7 +110,15 @@ function extractFields(body: TwilioEventBody) {
   const mailLead = bodyEmail?.trim() || (cd.email?.includes("@") ? cd.email.trim() : null);
   const phone = cd.numero?.trim() || body.phone?.trim() || null;
   const creativoOrigen = cd.utm?.trim() || null;
-  const closerMail = cd.closermail?.trim() || body.user?.email?.trim() || null;
+  // Appointment owner: leer el email del closer/asesor de la CITA en orden de prioridad
+  const cdRaw = cd as Record<string, unknown>;
+  const closerMail =
+    (typeof cdRaw.appointmentowneremail === "string" ? cdRaw.appointmentowneremail.trim() : null) ||
+    (typeof cdRaw.appointment_owner_email === "string" ? cdRaw.appointment_owner_email.trim() : null) ||
+    (typeof cdRaw.appointmentowner === "string" ? cdRaw.appointmentowner.trim() : null) ||
+    cd.closermail?.trim() ||
+    body.user?.email?.trim() ||
+    null;
   const nombreCloser = cd.nombrecloser?.trim() || `${body.user?.firstName ?? ""} ${body.user?.lastName ?? ""}`.trim() || null;
   // contact_id: viene en body.contact_id o en cd.email cuando es un ID GHL (sin @)
   const contactId = body.contact_id?.trim() || (!cd.email?.includes("@") ? cd.email?.trim() : null) || null;

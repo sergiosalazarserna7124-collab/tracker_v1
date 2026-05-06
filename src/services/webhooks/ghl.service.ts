@@ -33,6 +33,24 @@ function extractFields(body: GhlBodyPayload) {
     throw new Error(`GHL webhook: idcuenta inválido → "${cd.idcuenta}"`);
   }
 
+  // Appointment owner: el email del closer/asesor asignado a la CITA (no al contacto)
+  // GHL puede mandarlo con distintos nombres de campo — leer en orden de prioridad
+  const bodyRaw = body as Record<string, unknown>;
+  const cdRaw = cd as Record<string, unknown>;
+  const appointmentOwnerEmail: string | null =
+    // Campos más específicos primero (appointment owner)
+    (typeof cdRaw.appointmentowneremail === "string" ? cdRaw.appointmentowneremail.trim() : null) ||
+    (typeof cdRaw.appointment_owner_email === "string" ? cdRaw.appointment_owner_email.trim() : null) ||
+    (typeof cdRaw.appointmentowner === "string" ? cdRaw.appointmentowner.trim() : null) ||
+    (typeof cdRaw.closermail === "string" ? cdRaw.closermail.trim() : null) ||
+    // Fallback: el campo closer genérico
+    (typeof cd.closer === "string" ? cd.closer.trim() : null) ||
+    // Fallback: user del body de GHL
+    (bodyRaw.user && typeof bodyRaw.user === "object" && typeof (bodyRaw.user as Record<string, unknown>).email === "string"
+      ? ((bodyRaw.user as Record<string, unknown>).email as string).trim()
+      : null) ||
+    null;
+
   return {
     idCuenta,
     idcliente: cd.idcliente?.trim() || null,
@@ -42,7 +60,7 @@ function extractFields(body: GhlBodyPayload) {
       cd.nombre?.trim() || body.first_name?.trim() || body.full_name?.trim() || "sin nombre",
     emailLead: body.email?.trim() || cd.email?.trim() || null,
     origen: cd.origen?.trim() || "sin especificar",
-    closer: cd.closer?.trim() ?? null,
+    closer: appointmentOwnerEmail,
     fechaReunion: parseFechaReunionToUTC(cd.hora, cd.zonahoraria),
   };
 }
