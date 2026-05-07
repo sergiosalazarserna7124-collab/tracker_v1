@@ -47,7 +47,10 @@ function calcSpeedToLead(
   fechaEvento: Date | null,
   now: Date,
 ): string | null {
-  if (estadoAnterior?.toLowerCase() !== "pdte" || !fechaEvento) return null;
+  // Calcular siempre que haya una fecha de referencia, sin importar el estado anterior.
+  // El estado "pdte" es el caso ideal pero no el único — leads en "seguimiento" u otros
+  // estados también deben mostrar speed to lead real.
+  if (!fechaEvento) return null;
   const diffMs = now.getTime() - fechaEvento.getTime();
   const minutos = Math.round(diffMs / 60_000);
   return String(Math.max(minutos, 0));
