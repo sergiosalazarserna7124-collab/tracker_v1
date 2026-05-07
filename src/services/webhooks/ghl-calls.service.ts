@@ -760,7 +760,55 @@ export async function processGhlCallPending(body: GhlCallEventBody): Promise<Ser
 
   const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Pending", fields.idCuentaFromPayload);
 
+  // Idempotency: si ya existe un registro PDTE para este lead, no crear duplicado.
+  // GHL puede disparar el mismo webhook varias veces → sin este check aparecen N filas
+  // del mismo lead en la lista del asesor.
   try {
+    let existingPdte: { id_registro: number } | null = null;
+
+    if (fields.mailLead) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select({ id_registro: llamadas.id_registro })
+            .from(llamadas)
+            .where(
+              and(
+                sql`LOWER(${llamadas.mail_lead}) = LOWER(${fields.mailLead!})`,
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+                eq(llamadas.estado, "pdte"),
+              ),
+            )
+            .limit(1),
+        { label: "GhlCalls/Pending/checkDuplicate" },
+      );
+      existingPdte = rows[0] ?? null;
+    }
+
+    if (!existingPdte && fields.idUserGhl) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select({ id_registro: llamadas.id_registro })
+            .from(llamadas)
+            .where(
+              and(
+                eq(llamadas.id_user_ghl, fields.idUserGhl!),
+                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
+                eq(llamadas.estado, "pdte"),
+              ),
+            )
+            .limit(1),
+        { label: "GhlCalls/Pending/checkDuplicateByGhlId" },
+      );
+      existingPdte = rows[0] ?? null;
+    }
+
+    if (existingPdte) {
+      console.info(`[GhlCalls/Pending] Registro PDTE ya existe (id=${existingPdte.id_registro}), ignorando duplicado.`);
+      return { success: true, data: { id_registro: existingPdte.id_registro, action: "already_exists" } };
+    }
+
     const [inserted] = await withRetry(
       () =>
         drizzleDb
