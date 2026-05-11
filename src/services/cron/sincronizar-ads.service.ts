@@ -77,6 +77,7 @@ interface ConfiguracionAds {
 interface CuentaAdsRow {
   id_cuenta: number;
   configuracion_ads: ConfiguracionAds | null;
+  zona_horaria_iana: string | null;
 }
 
 interface SincronizarAdsResult {
@@ -85,7 +86,7 @@ interface SincronizarAdsResult {
   errors: string[];
 }
 
-// ─── Helper: yesterday date string ───────────────────────────────────────────
+// ─── Helpers de fecha ────────────────────────────────────────────────────────
 
 function getYesterday(): string {
   const d = new Date();
@@ -93,9 +94,60 @@ function getYesterday(): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Retorna "YYYY-MM-DD" del día de ayer en la zona horaria de la cuenta.
+ * Si la zona no es válida, cae a UTC.
+ */
+function getYesterdayInTz(tz: string): string {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    return fmt.format(yesterday); // "YYYY-MM-DD" por en-CA
+  } catch {
+    // timezone inválida → UTC
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * Genera un array de fechas "YYYY-MM-DD" para los últimos N días en la zona horaria dada.
+ * Incluye ayer y los N-1 días anteriores (para backfill de datos aún en movimiento).
+ */
+function getBackfillDatesInTz(tz: string, days: number): string[] {
+  const dates: string[] = [];
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    for (let i = 1; i <= days; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dates.push(fmt.format(d));
+    }
+  } catch {
+    for (let i = 1; i <= days; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dates.push(d.toISOString().slice(0, 10));
+    }
+  }
+  return dates; // [ayer, antier, hace3días, ...]
+}
+
 // ─── Meta Ads sync ────────────────────────────────────────────────────────────
 
-async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha: string): Promise<void> {
+async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha: string, timezone?: string | null): Promise<void> {
   const url = new URL(
     `https://graph.facebook.com/v19.0/act_${config.ad_account_id}/insights`,
   );
@@ -106,6 +158,11 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
   url.searchParams.set("fields", allFields.join(","));
   url.searchParams.set("time_range", JSON.stringify({ since: fecha, until: fecha }));
   url.searchParams.set("level", "campaign");
+  // Pasar timezone de la cuenta para que Meta devuelva los datos en el huso correcto.
+  // Sin esto, Meta usa la timezone configurada en la ad account, que puede no coincidir.
+  if (timezone) {
+    url.searchParams.set("time_increment", "1");
+  }
   url.searchParams.set("access_token", config.access_token);
 
   const res = await fetch(url.toString());
@@ -438,53 +495,69 @@ async function sincronizarVturbAds(idCuenta: number, config: AdsVturbConfig, fec
 // ─── Main export ─────────────────────────────────────────────────────────────
 
 export async function sincronizarAds(fechaOverride?: string): Promise<SincronizarAdsResult> {
-  const fecha = fechaOverride ?? getYesterday();
   const errors: string[] = [];
   let processed = 0;
 
-  // Load all accounts with active ads config
+  // Load all accounts with active ads config (incluye zona_horaria_iana para fechas correctas)
   const { rows } = await pgPool.query<CuentaAdsRow>(
-    `SELECT id_cuenta, configuracion_ads FROM cuentas WHERE configuracion_ads IS NOT NULL AND configuracion_ads != '{}'::jsonb`,
+    `SELECT id_cuenta, configuracion_ads, zona_horaria_iana
+     FROM cuentas
+     WHERE configuracion_ads IS NOT NULL AND configuracion_ads != '{}'::jsonb`,
   );
 
   for (const cuenta of rows) {
     const cfg = cuenta.configuracion_ads;
     if (!cfg) continue;
 
-    // Meta
+    const tz = cuenta.zona_horaria_iana ?? "UTC";
+
+    // Meta — backfill de los últimos 3 días en la zona horaria de la cuenta.
+    // Meta no cierra los datos de un día hasta ~48-72h después; sin backfill el gasto
+    // queda subestimado porque se leyó cuando los datos aún estaban en movimiento.
     if (cfg.meta?.activo && cfg.meta.ad_account_id && cfg.meta.access_token) {
-      try {
-        await sincronizarMetaAds(cuenta.id_cuenta, cfg.meta, fecha);
-        processed++;
-      } catch (e) {
-        errors.push(`[Meta] cuenta ${cuenta.id_cuenta}: ${String(e)}`);
+      // Si hay fechaOverride (backfill manual) → solo esa fecha; si no → últimos 3 días
+      const fechasMeta = fechaOverride
+        ? [fechaOverride]
+        : getBackfillDatesInTz(tz, 3);
+
+      for (const fecha of fechasMeta) {
+        try {
+          await sincronizarMetaAds(cuenta.id_cuenta, cfg.meta, fecha, tz);
+          processed++;
+          console.log(`[Meta] cuenta=${cuenta.id_cuenta} tz=${tz} fecha=${fecha} ✓`);
+        } catch (e) {
+          errors.push(`[Meta] cuenta ${cuenta.id_cuenta} fecha ${fecha}: ${String(e)}`);
+        }
       }
     }
 
-    // Google
+    // Google — sin backfill por ahora (Google cierra datos el mismo día)
     if (cfg.google?.activo && cfg.google.customer_id && cfg.google.developer_token) {
+      const fechaGoogle = fechaOverride ?? getYesterdayInTz(tz);
       try {
-        await sincronizarGoogleAds(cuenta.id_cuenta, cfg.google, fecha);
+        await sincronizarGoogleAds(cuenta.id_cuenta, cfg.google, fechaGoogle);
         processed++;
       } catch (e) {
         errors.push(`[Google] cuenta ${cuenta.id_cuenta}: ${String(e)}`);
       }
     }
 
-    // TikTok
+    // TikTok — sin backfill por ahora
     if (cfg.tiktok?.activo && cfg.tiktok.advertiser_id && cfg.tiktok.access_token) {
+      const fechaTikTok = fechaOverride ?? getYesterdayInTz(tz);
       try {
-        await sincronizarTikTokAds(cuenta.id_cuenta, cfg.tiktok, fecha);
+        await sincronizarTikTokAds(cuenta.id_cuenta, cfg.tiktok, fechaTikTok);
         processed++;
       } catch (e) {
         errors.push(`[TikTok] cuenta ${cuenta.id_cuenta}: ${String(e)}`);
       }
     }
 
-    // Vturb
+    // Vturb — sin backfill (datos en tiempo real)
     if (cfg.vturb?.activo && cfg.vturb.api_token && cfg.vturb.nombre_player) {
+      const fechaVturb = fechaOverride ?? getYesterdayInTz(tz);
       try {
-        await sincronizarVturbAds(cuenta.id_cuenta, cfg.vturb, fecha);
+        await sincronizarVturbAds(cuenta.id_cuenta, cfg.vturb, fechaVturb);
         processed++;
       } catch (e) {
         errors.push(`[Vturb] cuenta ${cuenta.id_cuenta}: ${String(e)}`);
@@ -497,4 +570,43 @@ export async function sincronizarAds(fechaOverride?: string): Promise<Sincroniza
     processed,
     errors,
   };
+}
+
+/**
+ * Backfill histórico de Meta Ads para todas las cuentas activas.
+ * Útil para corregir datos históricos que se jalaron con datos preliminares.
+ * @param daysBack — cuántos días hacia atrás sincronizar (default: 30)
+ */
+export async function backfillMetaAds(daysBack = 30): Promise<SincronizarAdsResult> {
+  const errors: string[] = [];
+  let processed = 0;
+
+  const { rows } = await pgPool.query<CuentaAdsRow>(
+    `SELECT id_cuenta, configuracion_ads, zona_horaria_iana
+     FROM cuentas
+     WHERE configuracion_ads IS NOT NULL AND configuracion_ads != '{}'::jsonb`,
+  );
+
+  for (const cuenta of rows) {
+    const cfg = cuenta.configuracion_ads;
+    if (!cfg?.meta?.activo || !cfg.meta.ad_account_id || !cfg.meta.access_token) continue;
+
+    const tz = cuenta.zona_horaria_iana ?? "UTC";
+    const fechas = getBackfillDatesInTz(tz, daysBack);
+
+    console.log(`[Meta Backfill] cuenta=${cuenta.id_cuenta} tz=${tz} días=${daysBack}`);
+
+    for (const fecha of fechas) {
+      try {
+        await sincronizarMetaAds(cuenta.id_cuenta, cfg.meta, fecha, tz);
+        processed++;
+      } catch (e) {
+        errors.push(`[Meta Backfill] cuenta ${cuenta.id_cuenta} fecha ${fecha}: ${String(e)}`);
+      }
+      // Pequeño delay para no martillar la API de Meta
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  return { success: errors.length === 0, processed, errors };
 }
