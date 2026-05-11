@@ -1,7 +1,7 @@
 import { eq, and, inArray, sql, lt, isNotNull, isNull } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, llamadas } from "../../db/schema.js";
-import { addContactTag, addContactTags } from "../ghl-api.service.js";
+import { addContactTag, addContactTags, getContactAppointmentDate } from "../ghl-api.service.js";
 import { processInChunks } from "../../utils/batch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { db as pgPool } from "../../config/database.js";
@@ -82,7 +82,90 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
     { label: "updateNoShows/batchUpdate" },
   );
 
-  if (updated.length === 0) {
+  // ── 2. Fallback GHL para citas sin fecha_reunion explícita ───────────────────
+  // Para cuentas tipo Fathom donde GHL no envía fecha_reunion en el webhook,
+  // consultamos la API de GHL para obtener la fecha real del appointment del contacto.
+  // Si la fecha ya pasó (= target_date) → marcar no_show.
+  // Si no tiene appointment o la fecha es futura → dejar en PDTE.
+  const targetDateObj = new Date(`${target_date}T12:00:00Z`);
+
+  // Citas PDTE sin fecha_reunion que tienen ghl_contact_id
+  const pdteSinFechaRows = await withRetry(
+    () =>
+      drizzleDb
+        .select({
+          id_registro_agenda: agendas.id_registro_agenda,
+          id_cuenta: agendas.id_cuenta,
+          ghl_contact_id: agendas.ghl_contact_id,
+        })
+        .from(agendas)
+        .where(
+          and(
+            inArray(agendas.id_cuenta, account_ids),
+            isNull(agendas.fechaReunion),
+            isNotNull(agendas.ghl_contact_id),
+            eq(agendas.categoria, "PDTE"),
+            isNull(agendas.fathom_recording_id),
+          ),
+        )
+        .limit(100), // limitar por seguridad — evitar flood a la API de GHL
+    { label: "updateNoShows/pdteSinFecha" },
+  );
+
+  // Obtener tokens por cuenta para hacer las llamadas a GHL
+  const accountIdsParaFallback = [...new Set([
+    ...pdteSinFechaRows.map((r) => r.id_cuenta),
+    ...(updated.length > 0 ? updated.map((r) => r.id_cuenta) : []),
+  ])];
+
+  const tokenRows = await withRetry(
+    () =>
+      drizzleDb
+        .select({ id_cuenta: cuentas.id_cuenta, token_ghl: cuentas.token_ghl })
+        .from(cuentas)
+        .where(inArray(cuentas.id_cuenta, accountIdsParaFallback)),
+    { label: "updateNoShows/tokensParaFallback" },
+  );
+  const tokenMapEarly = new Map(
+    tokenRows.filter((r) => r.token_ghl).map((r) => [r.id_cuenta, r.token_ghl as string]),
+  );
+
+  const noShowsViaGhl: number[] = [];
+  for (const row of pdteSinFechaRows) {
+    const token = tokenMapEarly.get(row.id_cuenta);
+    if (!token || !row.ghl_contact_id) continue;
+    try {
+      const apptDate = await getContactAppointmentDate(row.ghl_contact_id, token, targetDateObj);
+      if (!apptDate) continue; // sin appointment en GHL → dejar en PDTE
+      const apptDay = apptDate.toISOString().slice(0, 10);
+      if (apptDay !== target_date) continue; // la reunión no era hoy → dejar en PDTE
+      // La reunión era target_date y está en PDTE → marcar no_show
+      await withRetry(
+        () =>
+          drizzleDb
+            .update(agendas)
+            .set({
+              categoria: "no_show",
+              fechaReunion: apptDate, // guardar la fecha obtenida de GHL para futuros checks
+              tags: sql<string>`
+                CASE
+                  WHEN ${agendas.tags} IS NULL OR ${agendas.tags} = ''
+                  THEN 'noshowautoia'
+                  ELSE ${agendas.tags} || ',noshowautoia'
+                END
+              `,
+            })
+            .where(eq(agendas.id_registro_agenda, row.id_registro_agenda)),
+        { label: "updateNoShows/markNoShowViaGhl" },
+      );
+      noShowsViaGhl.push(row.id_registro_agenda);
+      console.info(`[NoShows/GHL] id=${row.id_registro_agenda} contactId=${row.ghl_contact_id} → no_show (fecha GHL: ${apptDay})`);
+    } catch (err) {
+      console.warn(`[NoShows/GHL] Error consultando appointment contactId=${row.ghl_contact_id}:`, err);
+    }
+  }
+
+  if (updated.length === 0 && noShowsViaGhl.length === 0) {
     // Aun si no hay nuevos no-shows, aplicar reglas automáticas en las cuentas
     const reglasCount = await applyReglaAutomaticaAllAccounts(account_ids);
     return {
@@ -95,9 +178,9 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
     };
   }
 
-  // ── 2. Obtener tokens GHL de las cuentas afectadas ───────────────────────────
+  // ── 3. Obtener tokens GHL de las cuentas afectadas ───────────────────────────
 
-  const uniqueAccountIds = [...new Set(updated.map((r) => r.id_cuenta))];
+  const uniqueAccountIds = [...new Set([...updated.map((r) => r.id_cuenta), ...noShowsViaGhl.map(() => 0).filter(Boolean)])];
 
   const accountRows = await withRetry(
     () =>
