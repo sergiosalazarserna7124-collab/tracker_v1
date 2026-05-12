@@ -9,8 +9,12 @@ export async function processExternalData(
 ): Promise<{ processed: number }> {
   let processed = 0;
 
+  // Fecha de hoy en UTC como fallback si el payload no incluye fecha
+  const todayUtc = new Date().toISOString().slice(0, 10);
+
   for (const item of data) {
     const origen = item.origen ?? "api_externa";
+    const fecha = item.fecha ?? todayUtc;
 
     const [existing] = await drizzleDb
       .select({ id_registro: kpisExternos.id_registro })
@@ -18,7 +22,7 @@ export async function processExternalData(
       .where(
         and(
           eq(kpisExternos.id_cuenta, idCuenta),
-          eq(kpisExternos.fecha, item.fecha),
+          eq(kpisExternos.fecha, fecha),
         ),
       )
       .limit(1);
@@ -31,7 +35,7 @@ export async function processExternalData(
     } else {
       await drizzleDb.insert(kpisExternos).values({
         id_cuenta: idCuenta,
-        fecha: item.fecha,
+        fecha,
         origen,
         metricas: item.metricas,
       });
