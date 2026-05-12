@@ -760,46 +760,66 @@ export async function processGhlCallPending(body: GhlCallEventBody): Promise<Ser
 
   const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Pending", fields.idCuentaFromPayload);
 
-  // Idempotency: si ya existe un registro PDTE para este lead, no crear duplicado.
-  // GHL puede disparar el mismo webhook varias veces → sin este check aparecen N filas
-  // del mismo lead en la lista del asesor.
+  // Idempotency: buscar en 4 niveles antes de crear un registro nuevo.
+  // GHL puede enviar el mismo lead con distintos id_user_ghl (contact IDs) en webhooks
+  // separados con milisegundos de diferencia, y a veces sin email ni phone.
+  // Orden de prioridad: email → phone → GHL contact_id → GHL user_id
   try {
     let existingPdte: { id_registro: number } | null = null;
+    const accountCond = idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined;
 
+    // 1. Por email (más confiable)
     if (fields.mailLead) {
       const rows = await withRetry(
         () =>
           drizzleDb
             .select({ id_registro: llamadas.id_registro })
             .from(llamadas)
-            .where(
-              and(
-                sql`LOWER(${llamadas.mail_lead}) = LOWER(${fields.mailLead!})`,
-                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
-                eq(llamadas.estado, "pdte"),
-              ),
-            )
+            .where(and(sql`LOWER(${llamadas.mail_lead}) = LOWER(${fields.mailLead!})`, accountCond, eq(llamadas.estado, "pdte")))
             .limit(1),
-        { label: "GhlCalls/Pending/checkDuplicate" },
+        { label: "GhlCalls/Pending/checkByEmail" },
       );
       existingPdte = rows[0] ?? null;
     }
 
+    // 2. Por teléfono
+    if (!existingPdte && fields.phone) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select({ id_registro: llamadas.id_registro })
+            .from(llamadas)
+            .where(and(eq(llamadas.phone_raw_format, fields.phone!), accountCond, eq(llamadas.estado, "pdte")))
+            .limit(1),
+        { label: "GhlCalls/Pending/checkByPhone" },
+      );
+      existingPdte = rows[0] ?? null;
+    }
+
+    // 3. Por GHL contact_id (distinto del user_id — identifica al contacto en GHL)
+    if (!existingPdte && fields.contactId) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select({ id_registro: llamadas.id_registro })
+            .from(llamadas)
+            .where(and(eq(llamadas.ghl_contact_id, fields.contactId!), accountCond, eq(llamadas.estado, "pdte")))
+            .limit(1),
+        { label: "GhlCalls/Pending/checkByContactId" },
+      );
+      existingPdte = rows[0] ?? null;
+    }
+
+    // 4. Por GHL user_id (último recurso)
     if (!existingPdte && fields.idUserGhl) {
       const rows = await withRetry(
         () =>
           drizzleDb
             .select({ id_registro: llamadas.id_registro })
             .from(llamadas)
-            .where(
-              and(
-                eq(llamadas.id_user_ghl, fields.idUserGhl!),
-                idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
-                eq(llamadas.estado, "pdte"),
-              ),
-            )
+            .where(and(eq(llamadas.id_user_ghl, fields.idUserGhl!), accountCond, eq(llamadas.estado, "pdte")))
             .limit(1),
-        { label: "GhlCalls/Pending/checkDuplicateByGhlId" },
+        { label: "GhlCalls/Pending/checkByGhlUserId" },
       );
       existingPdte = rows[0] ?? null;
     }
