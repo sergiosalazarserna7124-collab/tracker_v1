@@ -407,7 +407,19 @@ export async function processChatWebhook(
     senderName = contactFirstName || contactName || "Cliente";
   } else {
     senderRole = "agent";
-    senderName = closerName ?? "Agente";
+    // Si no hay closerName (userId vacío + sin assignedTo), inferir por source:
+    // workflow/api sin usuario = mensaje de automatización GHL, no de un humano
+    if (closerName) {
+      senderName = closerName;
+    } else if (source === "workflow") {
+      senderName = "Workflow";
+    } else if (source === "api") {
+      senderName = "API/Bot";
+    } else if (source === "campaign") {
+      senderName = "Campaña";
+    } else {
+      senderName = "Agente";
+    }
   }
 
   console.log(`[Chat] role="${senderRole}" | name="${senderName}" | canal="${channelType}" | conversationId="${conversationId}"`);
