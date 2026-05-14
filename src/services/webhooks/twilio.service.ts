@@ -527,14 +527,85 @@ async function saveOrphanEvent(
 export async function processTwilioWebhook(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
-  if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
+  if (!fields.mailLead && !fields.contactId && !fields.idUserGhl && !fields.phone) {
     const { idCuenta } = await resolveAccount(fields.locationId, "Twilio", fields.locationIdFallback);
     return saveOrphanEvent(body, idCuenta, "Twilio");
   }
 
   const { idCuenta } = await resolveAccount(fields.locationId, "Twilio", fields.locationIdFallback);
 
+  // Idempotency: buscar registro PDTE existente antes de crear uno nuevo.
+  // GHL puede enviar el mismo webhook Twilio múltiples veces para la misma llamada
+  // (reintentos, eventos duplicados). Sin este check, cada disparo crea un pdte
+  // separado que luego se convierte en un seguimiento independiente — eso es lo que
+  // genera los "leads duplicados" que ve el cliente.
+  // Buscamos solo en estado "pdte": si ya pasó el ciclo (seguimiento, no_contestado…),
+  // la siguiente llamada real debe crear un nuevo pdte para el nuevo ciclo.
   try {
+    let existingPdte: { id_registro: number } | null = null;
+    const accountCond = idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined;
+
+    // 1. Por email (más confiable)
+    if (fields.mailLead) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select({ id_registro: llamadas.id_registro })
+            .from(llamadas)
+            .where(and(sql`LOWER(${llamadas.mail_lead}) = LOWER(${fields.mailLead!})`, accountCond, eq(llamadas.estado, "pdte")))
+            .limit(1),
+        { label: "Twilio/Pending/checkByEmail" },
+      );
+      existingPdte = rows[0] ?? null;
+    }
+
+    // 2. Por teléfono
+    if (!existingPdte && fields.phone) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select({ id_registro: llamadas.id_registro })
+            .from(llamadas)
+            .where(and(eq(llamadas.phone_raw_format, fields.phone!), accountCond, eq(llamadas.estado, "pdte")))
+            .limit(1),
+        { label: "Twilio/Pending/checkByPhone" },
+      );
+      existingPdte = rows[0] ?? null;
+    }
+
+    // 3. Por GHL contact_id
+    if (!existingPdte && fields.contactId) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select({ id_registro: llamadas.id_registro })
+            .from(llamadas)
+            .where(and(eq(llamadas.ghl_contact_id, fields.contactId!), accountCond, eq(llamadas.estado, "pdte")))
+            .limit(1),
+        { label: "Twilio/Pending/checkByContactId" },
+      );
+      existingPdte = rows[0] ?? null;
+    }
+
+    // 4. Por GHL user_id (último recurso)
+    if (!existingPdte && fields.idUserGhl) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select({ id_registro: llamadas.id_registro })
+            .from(llamadas)
+            .where(and(eq(llamadas.id_user_ghl, fields.idUserGhl!), accountCond, eq(llamadas.estado, "pdte")))
+            .limit(1),
+        { label: "Twilio/Pending/checkByGhlUserId" },
+      );
+      existingPdte = rows[0] ?? null;
+    }
+
+    if (existingPdte) {
+      console.info(`[Twilio] Registro PDTE ya existe (id=${existingPdte.id_registro}), ignorando webhook duplicado.`);
+      return { success: true, data: { id_registro: existingPdte.id_registro, action: "already_exists" } };
+    }
+
     const [inserted] = await withRetry(
       () =>
         drizzleDb
