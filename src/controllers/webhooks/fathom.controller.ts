@@ -6,6 +6,7 @@ import type {
 } from "../../schemas/webhooks/fathom.schema.js";
 import { processFathomCall } from "../../services/webhooks/fathom.service.js";
 import { extractWebhookBody } from "../../utils/payload.utils.js";
+import { logWebhookReceived, logWebhookResult } from "../../utils/webhook-logger.js";
 
 export async function handleFathomWebhook(
   request: FastifyRequest<{
@@ -33,14 +34,21 @@ export async function handleFathomWebhook(
     });
   }
 
-  // Procesamiento asíncrono — siempre respondemos 200 para que Fathom
-  // no reintente el webhook aunque algún paso interno falle.
-  processFathomCall(idCuenta, eventBody).catch((err: unknown) => {
-    request.log.error(
-      { err, idCuenta },
-      "[Fathom] Unhandled error in processFathomCall",
-    );
+  const logId = await logWebhookReceived({
+    fuente: "fathom",
+    tipo_evento: (eventBody as Record<string, unknown>).eventType as string ?? null,
+    id_cuenta: idCuenta,
+    payload_raw: request.body,
   });
+
+  const t0 = Date.now();
+  processFathomCall(idCuenta, eventBody)
+    .then((res) => logWebhookResult(logId, res ?? null, null, Date.now() - t0))
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logWebhookResult(logId, null, msg, Date.now() - t0).catch(() => {});
+      request.log.error({ err, idCuenta }, "[Fathom] Unhandled error in processFathomCall");
+    });
 
   return reply.status(200).send({
     success: true,

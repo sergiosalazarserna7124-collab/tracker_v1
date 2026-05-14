@@ -2,6 +2,7 @@ import type { FastifyRequest, FastifyReply } from "fastify";
 import type { GhlWebhookPayload, GhlBodyPayload } from "../../schemas/webhooks/ghl.schema.js";
 import { processGhlWebhook } from "../../services/webhooks/ghl.service.js";
 import { extractWebhookBody } from "../../utils/payload.utils.js";
+import { logWebhookReceived, logWebhookResult } from "../../utils/webhook-logger.js";
 import type { WebhookResponse } from "../../types/index.js";
 
 export async function handleGhlWebhook(
@@ -17,7 +18,20 @@ export async function handleGhlWebhook(
     });
   }
 
+  const cd = (body as Record<string, unknown>).customData as Record<string, unknown> | undefined;
+  const locationId = (cd?.locationid as string) ?? (body as Record<string, unknown>).locationId as string ?? null;
+  const tipoEvento = (body as Record<string, unknown>).type as string ?? "ghl_agenda";
+
+  const logId = await logWebhookReceived({
+    fuente: "ghl_agenda",
+    tipo_evento: tipoEvento,
+    location_id: locationId,
+    payload_raw: request.body,
+  });
+
+  const t0 = Date.now();
   const result = await processGhlWebhook(body);
+  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0);
 
   if (!result.success) {
     return reply.status(422).send({
@@ -26,7 +40,6 @@ export async function handleGhlWebhook(
     });
   }
 
-  // Si el evento fue ignorado (categoria distinta a "pendiente" / "cancelada" / "reagenda")
   if (!result.data) {
     return { success: true, message: "GHL event acknowledged (no action required)" };
   }

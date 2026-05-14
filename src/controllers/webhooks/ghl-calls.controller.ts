@@ -9,6 +9,7 @@ import {
   processGhlCallEffective,
 } from "../../services/webhooks/ghl-calls.service.js";
 import { extractWebhookBody } from "../../utils/payload.utils.js";
+import { logWebhookReceived, logWebhookResult } from "../../utils/webhook-logger.js";
 
 // ─── POST /webhooks/ghl/calls/pending ────────────────────────────────────────
 // Nueva llamada pendiente: crea registro con estado "pdte"
@@ -21,8 +22,11 @@ export async function handleGhlCallPending(
   if (!body) {
     return reply.status(400).send({ success: false, message: "Missing or invalid GHL call payload" });
   }
-
+  const cd = (body as Record<string, unknown>).customData as Record<string, unknown> | undefined;
+  const logId = await logWebhookReceived({ fuente: "ghl_calls", tipo_evento: "pdte", location_id: cd?.locationid as string ?? null, payload_raw: request.body });
+  const t0 = Date.now();
   const result = await processGhlCallPending(body);
+  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0);
   if (!result.success) {
     return reply.status(422).send({ success: false, message: result.error ?? "Failed to process GHL call pending" });
   }
@@ -40,8 +44,11 @@ export async function handleGhlCallNoAnswer(
   if (!body) {
     return reply.status(400).send({ success: false, message: "Missing or invalid GHL no-answer payload" });
   }
-
+  const cd = (body as Record<string, unknown>).customData as Record<string, unknown> | undefined;
+  const logId = await logWebhookReceived({ fuente: "ghl_calls", tipo_evento: "no_contesto", location_id: cd?.locationid as string ?? null, payload_raw: request.body });
+  const t0 = Date.now();
   const result = await processGhlCallNoAnswer(body);
+  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0);
   if (!result.success) {
     return reply.status(422).send({ success: false, message: result.error ?? "Failed to process GHL no-answer" });
   }
@@ -61,10 +68,18 @@ export async function handleGhlCallEffective(
     return reply.status(400).send({ success: false, message: "Missing or invalid GHL effective call payload" });
   }
 
+  const cd = (body as Record<string, unknown>).customData as Record<string, unknown> | undefined;
+  const logId = await logWebhookReceived({ fuente: "ghl_calls", tipo_evento: "efectiva", location_id: cd?.locationid as string ?? null, payload_raw: request.body });
+  const t0 = Date.now();
+
   // Procesar async: el pipeline IA puede tardar varios segundos
-  processGhlCallEffective(body).catch((err: unknown) => {
-    request.log.error({ err }, "[GhlCalls/Effective] Error no capturado en processGhlCallEffective");
-  });
+  processGhlCallEffective(body)
+    .then((res) => logWebhookResult(logId, res.data ?? null, res.success ? null : (res.error ?? "error"), Date.now() - t0))
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logWebhookResult(logId, null, msg, Date.now() - t0).catch(() => {});
+      request.log.error({ err }, "[GhlCalls/Effective] Error no capturado en processGhlCallEffective");
+    });
 
   return reply.status(200).send({
     success: true,
