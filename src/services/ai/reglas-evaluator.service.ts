@@ -2,6 +2,7 @@ import { generateObject, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
+import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
 
 // ─── Clientes IA ─────────────────────────────────────────────────────────────
 
@@ -101,6 +102,7 @@ export async function evaluateReglas(
   source: "call" | "meeting",
   promptVentas: string | null,
   openaiApiKey?: string | null,
+  idCuenta?: number | null,
 ): Promise<ReglasEvalResult> {
   const allReglas = parseReglas(reglasRaw);
   const reglas = filterBySource(allReglas, source);
@@ -121,13 +123,15 @@ export async function evaluateReglas(
     systemPrompt = `Contexto de la empresa: ${promptVentas}\n\n${systemPrompt}`;
   }
 
-  const { object } = await generateObject({
+  const { object, usage } = await generateObject({
     model,
     schema: evaluatorSchema,
     system: systemPrompt,
     prompt: `REGLAS A EVALUAR:\n${JSON.stringify(reglasForPrompt, null, 2)}\n\nTRANSCRIPCIÓN:\n${transcript}`,
     temperature: 0,
   });
+
+  void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, usage.totalTokens ?? 0);
 
   const matchedIds = new Set(object.matched_rule_ids);
   const matched = reglas.filter((r) => matchedIds.has(r.id));

@@ -617,7 +617,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     console.log("[Effective] Transcript pre-generado recibido — saltando pipeline Twilio/Whisper");
     let classification: CallClassification;
     try {
-      classification = await classifyCall(fields.preTranscript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas);
+      classification = await classifyCall(fields.preTranscript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, idCuenta);
     } catch (err) {
       console.error("[Effective/GHL] Error clasificando con IA:", err);
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, null, "Effective/GHL");
@@ -694,11 +694,11 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   let transcript: string;
   try {
-    transcript = await transcribeAudio(audioBuffer, openaiApiKey);
+    transcript = await transcribeAudio(audioBuffer, openaiApiKey, idCuenta);
     // Post-process: diarizar si Whisper devolvió texto plano (sin speaker labels)
     // Se hace de forma best-effort — si falla, se usa el transcript plano
     if (transcript.trim()) {
-      transcript = await diarizarTranscripcion(transcript, openaiApiKey);
+      transcript = await diarizarTranscripcion(transcript, openaiApiKey, idCuenta);
     }
   } catch (err) {
     console.error("[Effective] Error transcribiendo audio con Whisper:", err);
@@ -725,7 +725,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   let classification: CallClassification;
   try {
-    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas);
+    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, idCuenta);
   } catch (err) {
     console.error("[Effective] Error clasificando llamada con IA:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, transcript, null, "Effective");

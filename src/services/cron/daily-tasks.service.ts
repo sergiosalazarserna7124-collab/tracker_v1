@@ -512,6 +512,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
           reglas_etiquetas,
           prompt_empresa: cuenta.prompt_ventas ?? undefined,
           openai_api_key: cuenta.openai_api_key ?? undefined,
+          id_cuenta: cuenta.id_cuenta,
         });
 
         // ── 4. Actualizar chats_logs ────────────────────────────────────────

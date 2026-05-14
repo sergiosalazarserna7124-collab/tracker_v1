@@ -937,6 +937,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
       embudoPersonalizado,
       promptVentas,
       promptLlamadas,
+      idCuenta,
     );
   } catch (err) {
     console.error("[GhlCalls/Effective] Error clasificando con IA:", err);

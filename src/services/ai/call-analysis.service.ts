@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { evaluateReglas, type ReglasEvalResult } from "./reglas-evaluator.service.js";
+import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
 
 // ─── Clientes IA (singleton global — fallback) ──────────────────────────────
 
@@ -310,6 +311,7 @@ export async function generateLlamadaAnalysisText(
   promptVentas: string | null,
   promptLlamadas: string | null,
   openaiApiKey?: string | null,
+  idCuenta?: number | null,
 ): Promise<string | null> {
   if (!transcript.trim()) return null;
 
@@ -338,6 +340,7 @@ export async function generateLlamadaAnalysisText(
       prompt: `Transcript:\n${transcript}`,
       temperature: 0.3,
     });
+    void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, result.usage.totalTokens ?? 0);
     return result.text ?? null;
   } catch (err) {
     console.error("[generateLlamadaAnalysisText] Error generating analysis:", err);
@@ -354,6 +357,7 @@ export async function analyzeCall(
   openaiApiKey?: string | null,
   embudoPersonalizado?: unknown,
   reglasEtiquetas?: unknown,
+  idCuenta?: number | null,
 ): Promise<CallAnalysisResult> {
   const model = resolveModel(openaiApiKey);
 
@@ -400,8 +404,16 @@ export async function analyzeCall(
         "meeting",
         promptVentas,
         openaiApiKey,
+        idCuenta,
       ),
     ]);
+
+  // Acumular tokens de los 3 llamados GPT propios de este scope
+  let totalTokens = 0;
+  if (classifierSettled.status === "fulfilled") totalTokens += classifierSettled.value.usage.totalTokens ?? 0;
+  if (analysisSettled.status === "fulfilled") totalTokens += analysisSettled.value.usage.totalTokens ?? 0;
+  if (objectionsSettled.status === "fulfilled") totalTokens += objectionsSettled.value.usage.totalTokens ?? 0;
+  void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, totalTokens);
 
   return {
     classifier:
@@ -450,6 +462,7 @@ function transcriptHasSpeakers(transcript: string): boolean {
 export async function diarizarTranscripcion(
   transcript: string,
   openaiApiKey?: string | null,
+  idCuenta?: number | null,
 ): Promise<string> {
   if (!transcript?.trim()) return transcript;
 
@@ -478,13 +491,14 @@ Reglas:
 Retorna SOLO la transcripción formateada, sin explicaciones adicionales.`;
 
   try {
-    const { text } = await generateText({
+    const result = await generateText({
       model,
       system: DIARIZACION_PROMPT,
       prompt: `Transcripción a formatear:\n${transcript.slice(0, 6000)}`, // max 6k chars para control de costo
       temperature: 0,
     });
-    return text?.trim() || transcript;
+    void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, result.usage.totalTokens ?? 0);
+    return result.text?.trim() || transcript;
   } catch (err) {
     console.warn("[diarizarTranscripcion] Error diarizando, retornando original:", err);
     return transcript;

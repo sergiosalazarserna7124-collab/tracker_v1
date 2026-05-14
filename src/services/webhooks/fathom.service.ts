@@ -305,6 +305,7 @@ export async function processFathomCall(
         account.openai_api_key,
         account.embudo_personalizado,
         account.reglas_etiquetas,
+        idCuenta,
       );
     } else {
       console.warn(`[Fathom] Empty transcript for call ${shareUrl}. Skipping AI analysis.`);

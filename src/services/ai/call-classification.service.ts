@@ -4,6 +4,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { GHL_TAGS } from "../ghl-api.service.js";
+import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
 
 // ─── Clientes IA (singletons globales — fallback) ────────────────────────────
 
@@ -39,6 +40,7 @@ export interface CallClassification {
 export async function transcribeAudio(
   audioBuffer: Buffer,
   openaiApiKey?: string | null,
+  idCuenta?: number | null,
 ): Promise<string> {
   const { whisper } = resolveClients(openaiApiKey);
   const file = await toFile(audioBuffer, "recording.mp3", { type: "audio/mpeg" });
@@ -47,6 +49,8 @@ export async function transcribeAudio(
     file,
     model: "whisper-1",
   });
+
+  void trackApiUsage(idCuenta, TIPO_CONSUMO.WHISPER, 1);
 
   return transcription.text;
 }
@@ -350,6 +354,7 @@ export async function classifyCall(
   embudoPersonalizado?: unknown,
   promptVentas?: string | null,
   promptLlamadas?: string | null,
+  idCuenta?: number | null,
 ): Promise<CallClassification> {
   const { model } = resolveClients(openaiApiKey);
 
@@ -364,13 +369,15 @@ export async function classifyCall(
     promptLlamadas,
   );
 
-  const { object } = await generateObject({
+  const { object, usage } = await generateObject({
     model,
     schema,
     system: systemPrompt,
     prompt: `Analiza la siguiente transcripción y devuelve ÚNICAMENTE el JSON:\n\n${transcript}`,
     temperature: 0,
   });
+
+  void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, usage.totalTokens ?? 0);
 
   return {
     ...object,

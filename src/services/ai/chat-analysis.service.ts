@@ -2,6 +2,7 @@ import { generateObject, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
+import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
 
 // ─── Clientes IA (singleton global — fallback) ──────────────────────────────
 
@@ -164,8 +165,9 @@ export async function analyzeChatWithAI(params: {
   reglas_etiquetas: ReglaEtiqueta[];
   prompt_empresa?: string;
   openai_api_key?: string;
+  id_cuenta?: number | null;
 }): Promise<ChatAnalysisResult> {
-  const { messages, embudo, reglas_etiquetas, prompt_empresa, openai_api_key } = params;
+  const { messages, embudo, reglas_etiquetas, prompt_empresa, openai_api_key, id_cuenta } = params;
 
   const model = resolveModel(openai_api_key);
   const embudoIds = embudo.map((e) => e.id);
@@ -180,13 +182,15 @@ export async function analyzeChatWithAI(params: {
     return { categoria: null, tags_internos: [], confianza: 0 };
   }
 
-  const { object } = await generateObject({
+  const { object, usage } = await generateObject({
     model,
     schema,
     system: systemPrompt,
     prompt: `Analiza la siguiente conversación de chat y clasifica el lead:\n\n${conversationText}`,
     temperature: 0,
   });
+
+  void trackApiUsage(id_cuenta, TIPO_CONSUMO.GPT4O_MINI, usage.totalTokens ?? 0);
 
   return {
     categoria: object.categoria ?? null,
