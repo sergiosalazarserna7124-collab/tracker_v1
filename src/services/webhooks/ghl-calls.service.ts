@@ -30,7 +30,7 @@ import {
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
-import { generateLlamadaAnalysisText } from "../ai/call-analysis.service.js";
+import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { GhlCallEventBody } from "../../schemas/webhooks/ghl-calls.schema.js";
@@ -712,8 +712,11 @@ async function effectivePath(
     }
 
     if (transcript) {
-      try { await addContactNote(contactId, tokenGhl, `📞 Llamada GHL — Transcripción\n\n${transcript}`); }
-      catch (err) { console.error(`[GhlCalls/Effective] Error agregando nota transcripción:`, err); }
+      try {
+        // Diarizar si la transcripción llegó como texto plano sin speaker labels
+        const diarizedTranscript = await diarizarTranscripcion(transcript, openaiApiKey, idCuenta);
+        await addContactNote(contactId, tokenGhl, `📞 Llamada GHL — Transcripción\n\n${diarizedTranscript}`);
+      } catch (err) { console.error(`[GhlCalls/Effective] Error agregando nota transcripción:`, err); }
     }
   }
 
