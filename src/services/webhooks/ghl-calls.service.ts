@@ -716,7 +716,15 @@ async function effectivePath(
         // Diarizar si la transcripción llegó como texto plano sin speaker labels
         const diarizedTranscript = await diarizarTranscripcion(transcript, openaiApiKey, idCuenta);
         await addContactNote(contactId, tokenGhl, `📞 Llamada GHL — Transcripción\n\n${diarizedTranscript}`);
-      } catch (err) { console.error(`[GhlCalls/Effective] Error agregando nota transcripción:`, err); }
+      } catch (err) {
+        console.error(`[GhlCalls/Effective] Error diarizando transcript, guardando versión original:`, err);
+        // Fallback: guardar transcript original sin diarizar para no perder el dato
+        try {
+          await addContactNote(contactId, tokenGhl, `📞 Llamada GHL — Transcripción\n\n${transcript}`);
+        } catch (e2) {
+          console.error(`[GhlCalls/Effective] Error agregando nota de transcripción original:`, e2);
+        }
+      }
     }
   }
 
