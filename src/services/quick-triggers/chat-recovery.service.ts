@@ -410,7 +410,14 @@ export async function executeChatRecovery(
       const bdInfo = await queryChatBdInfo([conv.conversationId]);
       const existente = bdInfo.get(conv.conversationId);
 
-      // 4. Upsert en chats_logs con deduplicación por _ghl_message_id
+      // 4. Calcular primer_msg_lead_at: timestamp mínimo de mensajes inbound (lead)
+      const leadTimestamps = chatMessages
+        .filter((m) => m.role === "lead" && m.timestamp)
+        .map((m) => m.timestamp)
+        .sort();
+      const primerMsgLeadAt = leadTimestamps[0] ?? null;
+
+      // 5. Upsert en chats_logs con deduplicación por _ghl_message_id
       // Insertamos todos los mensajes nuevos usando un CASE WHEN que comprueba
       // si cada _ghl_message_id ya existe en el array existente
       const messagesJson = JSON.stringify(chatMessages);
@@ -419,8 +426,8 @@ export async function executeChatRecovery(
         () =>
           db.query(
             `INSERT INTO chats_logs
-               (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat)
-             VALUES ($1, $2, $3, $4, NOW(), 'activo', NULL, $5::jsonb)
+               (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, primer_msg_lead_at)
+             VALUES ($1, $2, $3, $4, NOW(), 'activo', NULL, $5::jsonb, $6::timestamptz)
              ON CONFLICT (chatid) DO UPDATE SET
                chat = (
                  SELECT jsonb_agg(msg ORDER BY (msg->>'timestamp') ASC NULLS LAST)
@@ -437,13 +444,16 @@ export async function executeChatRecovery(
                  ) AS combined(msg)
                ),
                fecha_y_hora_z = NOW(),
-               nombre_lead    = EXCLUDED.nombre_lead`,
+               nombre_lead    = EXCLUDED.nombre_lead,
+               -- Inmutable: solo se escribe si aún no existe (primer mensaje lead)
+               primer_msg_lead_at = COALESCE(chats_logs.primer_msg_lead_at, EXCLUDED.primer_msg_lead_at)`,
             [
               idCuenta,
               conv.contactName,
               conv.contactId,
               conv.conversationId,
               messagesJson,
+              primerMsgLeadAt,
             ],
           ),
         { label: `chatRecovery/upsert/${conv.conversationId}` },

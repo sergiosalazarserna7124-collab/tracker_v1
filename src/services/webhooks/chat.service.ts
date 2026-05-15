@@ -443,12 +443,19 @@ export async function processChatWebhook(
   // Solo append si el messageId no existe ya en el array para evitar duplicados.
   const ghlMessageId = messageObj._ghl_message_id;
 
+  // primer_msg_lead_at: timestamp del primer mensaje inbound (lead) de esta conversación.
+  // Se pasa solo cuando el mensaje actual es del lead; en caso contrario NULL.
+  // En el ON CONFLICT usamos COALESCE para preservar el valor existente (inmutable).
+  const primerMsgLeadAt = senderRole === "lead"
+    ? (dateAdded ? new Date(dateAdded).toISOString() : new Date().toISOString())
+    : null;
+
   await withRetry(
     () =>
       db.query(
         `INSERT INTO chats_logs
-           (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, asesor_asignado, origen)
-         VALUES ($1, $2, $3, $4, NOW(), 'activo', $5, $6::jsonb, $8, $9)
+           (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, asesor_asignado, origen, primer_msg_lead_at)
+         VALUES ($1, $2, $3, $4, NOW(), 'activo', $5, $6::jsonb, $8, $9, $10::timestamptz)
          ON CONFLICT (chatid) DO UPDATE SET
            -- Solo append si el messageId no está ya en el array (deduplicación)
            chat = CASE
@@ -464,7 +471,9 @@ export async function processChatWebhook(
            asesor_asignado = CASE
              WHEN EXCLUDED.asesor_asignado IS NOT NULL THEN EXCLUDED.asesor_asignado
              ELSE chats_logs.asesor_asignado
-           END`,
+           END,
+           -- Inmutable: solo se escribe si aún no existe (primer mensaje lead)
+           primer_msg_lead_at = COALESCE(chats_logs.primer_msg_lead_at, EXCLUDED.primer_msg_lead_at)`,
         [
           idCuenta,
           contactName,
@@ -475,6 +484,7 @@ export async function processChatWebhook(
           ghlMessageId ?? null,
           closerName ?? null,
           channelType,
+          primerMsgLeadAt,
         ],
       ),
     { label: "chat/upsertChatLog" },
