@@ -141,17 +141,24 @@ Aplica la misma regla de extracción de cash_collected y facturacion para esas e
 function buildClassifierSchema(embudoPersonalizado?: unknown) {
   let categoriaEnum: string[];
   
-  // Si hay embudo personalizado, usar IDs de etapas fijas
+  // Si hay embudo personalizado, usar IDs de etapas fijas (es_fija=true).
+  // Si ninguna etapa tiene es_fija, usar todos los IDs del embudo personalizado
+  // (el cliente configuró el embudo para clasificación IA pero no marcó es_fija).
+  // Fallback a defaults solo cuando no hay embudo personalizado.
   if (Array.isArray(embudoPersonalizado) && embudoPersonalizado.length > 0) {
     const fijaIds = embudoPersonalizado
       .filter((item: unknown) =>
-        typeof item === "object" && item !== null && 
+        typeof item === "object" && item !== null &&
         (item as Record<string, unknown>).es_fija === true
       )
       .map((item: unknown) => String((item as Record<string, unknown>).id))
       .filter((id): id is string => typeof id === "string" && id.length > 0);
-    
-    categoriaEnum = fijaIds.length > 0 ? fijaIds : [...DEFAULT_CATEGORIAS];
+
+    // Si hay etapas marcadas como fijas, usarlas; si no, usar todos los IDs
+    // del embudo personalizado para evitar caer en defaults que no coinciden
+    // con los IDs del embudo (bug: AI output "cerrada" != stage ID "Cerrada")
+    const allCustomIds = extractEmbudoIds(embudoPersonalizado);
+    categoriaEnum = fijaIds.length > 0 ? fijaIds : (allCustomIds ?? [...DEFAULT_CATEGORIAS]);
   } else {
     categoriaEnum = [...DEFAULT_CATEGORIAS];
   }
