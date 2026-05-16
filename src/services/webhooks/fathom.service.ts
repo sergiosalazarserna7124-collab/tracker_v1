@@ -81,9 +81,52 @@ export async function processFathomCall(
   const recordingId = payload.recording_id != null
     ? String(payload.recording_id)
     : null;
-  const closerName = payload.recorded_by?.name ?? null;
-  const closerEmail = payload.recorded_by?.email ?? null;
-  // closerName se usa como fallback si GHL no tiene un assignedUserId
+  const recordedByEmail = payload.recorded_by?.email ?? null;
+  const recordedByName = payload.recorded_by?.name ?? null;
+
+  // Resolver el closer real: buscar si el recorded_by.email está registrado como usuario
+  // de la cuenta. Si no → puede ser un setter externo (ej: miguel@bluepointrs.com que en
+  // la cuenta figura como miguel@serenthys.com). En ese caso buscar en calendar_invitees
+  // algún invitado interno que sí esté registrado.
+  let closerEmail: string | null = recordedByEmail;
+  let closerName: string | null = recordedByName;
+
+  if (recordedByEmail) {
+    try {
+      const { rows: userRows } = await pgPool.query<{ email: string; nombre_closer: string | null }>(
+        `SELECT email, nombre_closer FROM usuarios_dashboard
+         WHERE id_cuenta = $1 AND LOWER(TRIM(email)) = LOWER(TRIM($2))
+         LIMIT 1`,
+        [idCuenta, recordedByEmail],
+      );
+      if (userRows.length === 0) {
+        // recorded_by no es usuario de esta cuenta — puede ser setter externo
+        // Buscar en calendar_invitees un invitado interno que sí esté registrado
+        const internalInvitees = (payload.calendar_invitees ?? []).filter(i => i.is_external === false);
+        for (const inv of internalInvitees) {
+          if (!inv.email || inv.email === recordedByEmail) continue;
+          const { rows: invUserRows } = await pgPool.query<{ email: string; nombre_closer: string | null }>(
+            `SELECT email, nombre_closer FROM usuarios_dashboard
+             WHERE id_cuenta = $1 AND LOWER(TRIM(email)) = LOWER(TRIM($2))
+             LIMIT 1`,
+            [idCuenta, inv.email],
+          );
+          if (invUserRows.length > 0) {
+            closerEmail = invUserRows[0].email;
+            closerName = invUserRows[0].nombre_closer ?? inv.name ?? closerName;
+            console.info(`[Fathom] recorded_by "${recordedByEmail}" no es usuario de cuenta ${idCuenta} — resuelto como "${closerEmail}" vía calendar_invitees`);
+            break;
+          }
+        }
+        if (closerEmail === recordedByEmail) {
+          console.warn(`[Fathom] recorded_by "${recordedByEmail}" no es usuario de cuenta ${idCuenta} y no se encontró match en calendar_invitees`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[Fathom] Error resolviendo closer para cuenta ${idCuenta}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
   const shareUrl = payload.share_url ?? payload.url ?? null;
 
   // Formatear transcripción para el prompt de IA
