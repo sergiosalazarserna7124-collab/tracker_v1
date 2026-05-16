@@ -446,8 +446,12 @@ export async function processChatWebhook(
   // primer_msg_lead_at: timestamp del primer mensaje inbound (lead) de esta conversación.
   // Se pasa solo cuando el mensaje actual es del lead; en caso contrario NULL.
   // En el ON CONFLICT usamos COALESCE para preservar el valor existente (inmutable).
-  const primerMsgLeadAt = senderRole === "lead"
-    ? (dateAdded ? new Date(dateAdded).toISOString() : new Date().toISOString())
+  // Solo guardar primer_msg_lead_at si tenemos un timestamp real de la fuente.
+  // Si dateAdded está ausente (webhook sin timestamp), pasar null: excluir del
+  // speed-to-lead en lugar de usar NOW() como proxy, lo cual produce diffs ~0s
+  // cuando el bot responde casi en el mismo tick que el webhook llega. (AUT-181)
+  const primerMsgLeadAt = senderRole === "lead" && dateAdded
+    ? new Date(dateAdded).toISOString()
     : null;
 
   await withRetry(
