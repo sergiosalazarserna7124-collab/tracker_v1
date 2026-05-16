@@ -521,13 +521,15 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
            SET estado = COALESCE($1, estado),
                tags_internos = COALESCE($2::jsonb, tags_internos),
                ia_categoria = $3,
-               ia_analizado_at = NOW()
+               ia_analizado_at = NOW(),
+               ia_objeciones = COALESCE($5::jsonb, ia_objeciones)
            WHERE id_evento = $4`,
           [
             result.categoria,
             result.tags_internos.length > 0 ? JSON.stringify(result.tags_internos) : null,
             result.categoria ?? "analizado_sin_categoria",
             chat.id_evento,
+            result.objeciones.length > 0 ? JSON.stringify(result.objeciones) : null,
           ],
         );
 

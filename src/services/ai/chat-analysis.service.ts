@@ -38,10 +38,16 @@ export interface ReglaEtiqueta {
   source: string;
 }
 
+export interface ObjecionDetectada {
+  objecion: string;
+  categoria: string;
+}
+
 export interface ChatAnalysisResult {
   categoria: string | null;
   tags_internos: string[];
   confianza: number;
+  objeciones: ObjecionDetectada[];
 }
 
 // ─── Limitar tokens de la conversación (~2000 tokens ≈ 8000 chars) ──────────
@@ -70,7 +76,7 @@ function truncateConversation(messages: ChatMessage[]): string {
 // ─── Schema de salida ────────────────────────────────────────────────────────
 
 function buildChatClassificationSchema(estadosEnum: string[]) {
-  return jsonSchema<{ categoria: string | null; tags: string[]; confianza: number }>({
+  return jsonSchema<{ categoria: string | null; tags: string[]; confianza: number; objeciones: Array<{ objecion: string; categoria: string }> }>({
     type: "object",
     properties: {
       categoria: {
@@ -91,8 +97,28 @@ function buildChatClassificationSchema(estadosEnum: string[]) {
         maximum: 1,
         description: "Nivel de confianza en la clasificación (0-1)",
       },
+      objeciones: {
+        type: "array",
+        description: "Objeciones de venta detectadas en la conversación",
+        items: {
+          type: "object",
+          properties: {
+            objecion: {
+              type: "string",
+              description: "Texto literal o parafraseo de la objeción planteada por el lead",
+            },
+            categoria: {
+              type: "string",
+              enum: ["precio", "tiempo", "confianza", "competencia", "necesidad", "autoridad", "otra"],
+              description: "Categoría de la objeción",
+            },
+          },
+          required: ["objecion", "categoria"],
+          additionalProperties: false,
+        },
+      },
     },
-    required: ["categoria", "tags", "confianza"],
+    required: ["categoria", "tags", "confianza", "objeciones"],
     additionalProperties: false,
   });
 }
@@ -115,6 +141,7 @@ Eres un sistema especializado en clasificar conversaciones de chat de ventas. De
 1. En qué etapa del embudo de ventas se encuentra el lead
 2. Qué etiquetas internas aplican según las reglas definidas
 3. Tu nivel de confianza en la clasificación
+4. Qué objeciones de venta expresó el lead (precio, tiempo, confianza, competencia, necesidad, autoridad u otra)
 
 Responde ÚNICAMENTE con el JSON solicitado. Sin explicaciones adicionales.`);
 
@@ -146,12 +173,24 @@ Devuelve solo los tags que EFECTIVAMENTE aplican. Si ninguno aplica, devuelve []
     }
   }
 
+  parts.push(`## OBJECIONES DE VENTA
+Detecta todas las objeciones que el lead haya expresado. Usa estas categorías:
+- "precio": "es muy caro", "no tengo presupuesto", "¿puedes hacer un descuento?"
+- "tiempo": "no tengo tiempo", "llámame en otro momento", "estoy muy ocupado"
+- "confianza": "no te conozco", "necesito investigar más", "¿cómo sé que funciona?"
+- "competencia": "ya lo tengo con otra empresa", "estoy viendo otras opciones"
+- "necesidad": "no lo necesito ahora", "ya lo hacemos internamente"
+- "autoridad": "no soy quien decide", "tengo que consultarlo"
+- "otra": cualquier otra objeción que no encaje en las anteriores
+Si no hay objeciones detectadas, devuelve [].`);
+
   parts.push(`## FORMATO DE RESPUESTA
 Devuelve ÚNICAMENTE este JSON (sin markdown, sin texto adicional):
 {
   "categoria": "id_etapa_o_null",
   "tags": ["tag1", "tag2"],
-  "confianza": 0.85
+  "confianza": 0.85,
+  "objeciones": [{"objecion": "texto de la objeción", "categoria": "precio"}]
 }`);
 
   return parts.join("\n\n");
@@ -179,7 +218,7 @@ export async function analyzeChatWithAI(params: {
   const conversationText = truncateConversation(messages);
 
   if (!conversationText) {
-    return { categoria: null, tags_internos: [], confianza: 0 };
+    return { categoria: null, tags_internos: [], confianza: 0, objeciones: [] };
   }
 
   const { object, usage } = await generateObject({
@@ -196,5 +235,13 @@ export async function analyzeChatWithAI(params: {
     categoria: object.categoria ?? null,
     tags_internos: Array.isArray(object.tags) ? object.tags : [],
     confianza: typeof object.confianza === "number" ? object.confianza : 0,
+    objeciones: Array.isArray(object.objeciones)
+      ? object.objeciones.filter(
+          (o): o is ObjecionDetectada =>
+            typeof o === "object" && o !== null &&
+            typeof (o as ObjecionDetectada).objecion === "string" &&
+            typeof (o as ObjecionDetectada).categoria === "string",
+        )
+      : [],
   };
 }
