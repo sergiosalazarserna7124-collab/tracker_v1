@@ -496,6 +496,20 @@ export async function getContactAppointmentDate(
   bearerToken: string,
   referenceDate: Date,
 ): Promise<Date | null> {
+  const result = await getContactAppointmentInfo(contactId, bearerToken, referenceDate);
+  return result?.date ?? null;
+}
+
+/**
+ * Obtiene fecha Y dueño (assignedUserId) de la cita más relevante de un contacto.
+ * GHL distingue entre el dueño del CONTACTO (contact.assignedTo) y el dueño de la CITA
+ * (appointment.assignedUserId) — pueden ser personas distintas (ej: setter vs closer).
+ */
+export async function getContactAppointmentInfo(
+  contactId: string,
+  bearerToken: string,
+  referenceDate: Date,
+): Promise<{ date: Date; assignedUserId: string | null } | null> {
   try {
     const token = bearerToken.startsWith("Bearer ") ? bearerToken : `Bearer ${bearerToken}`;
     const res = await fetch(
@@ -511,8 +525,8 @@ export async function getContactAppointmentDate(
     if (!res.ok) return null;
     // GHL API returns "events" (not "appointments") — field name mismatch was causing null returns
     const data = (await res.json()) as {
-      events?: Array<{ startTime?: string; appointmentStatus?: string; deleted?: boolean }>;
-      appointments?: Array<{ startTime?: string; appointmentStatus?: string; deleted?: boolean }>;
+      events?: Array<{ startTime?: string; appointmentStatus?: string; deleted?: boolean; assignedUserId?: string }>;
+      appointments?: Array<{ startTime?: string; appointmentStatus?: string; deleted?: boolean; assignedUserId?: string }>;
     };
     const appts = (data.events ?? data.appointments ?? []).filter(
       (a) => a.startTime && !a.deleted,
@@ -531,22 +545,23 @@ export async function getContactAppointmentDate(
     });
 
     if (futureConfirmed.length > 0) {
-      // Among future confirmed, take the earliest (soonest upcoming appointment)
-      return futureConfirmed.reduce<Date>((earliest, a) => {
+      const best = futureConfirmed.reduce((earliest, a) => {
         const d = new Date(a.startTime!);
-        return d < earliest ? d : earliest;
-      }, new Date(futureConfirmed[0].startTime!));
+        return d < new Date(earliest.startTime!) ? a : earliest;
+      }, futureConfirmed[0]);
+      return { date: new Date(best.startTime!), assignedUserId: best.assignedUserId ?? null };
     }
 
     // No future confirmed — fall back to the appointment closest to referenceDate
-    let best: Date | null = null;
+    let bestAppt: typeof appts[0] | null = null;
     let bestDiff = Infinity;
     for (const a of appts) {
       const d = new Date(a.startTime!);
       const diff = Math.abs(d.getTime() - referenceDate.getTime());
-      if (diff < bestDiff) { bestDiff = diff; best = d; }
+      if (diff < bestDiff) { bestDiff = diff; bestAppt = a; }
     }
-    return best;
+    if (!bestAppt) return null;
+    return { date: new Date(bestAppt.startTime!), assignedUserId: bestAppt.assignedUserId ?? null };
   } catch {
     return null;
   }

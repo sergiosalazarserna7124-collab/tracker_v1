@@ -6,6 +6,7 @@ import {
   addContactNote,
   searchContactByEmail,
   getGhlUser,
+  getContactAppointmentInfo,
   safeAddContactTag,
   safeAddContactTags,
   GHL_TAGS,
@@ -285,19 +286,37 @@ export async function processFathomCall(
             .join(" ") || null;
           utmContent = contact.utmContent;
 
-          // Obtener email del closer asignado si existe
-          if (contact.assignedTo) {
+          // Obtener el closer: primero intentar el dueño de la CITA (assignedUserId),
+          // que puede ser distinto al dueño del CONTACTO (assignedTo).
+          // Sergio confirma que en Serenthys el setter agendó el contacto pero el closer
+          // tiene asignada la cita → siempre priorizar appointmentInfo.assignedUserId.
+          try {
+            const apptInfo = await getContactAppointmentInfo(
+              contact.id,
+              account.token_ghl,
+              new Date(),
+            );
+            if (apptInfo?.assignedUserId) {
+              const apptOwner = await getGhlUser(apptInfo.assignedUserId, account.token_ghl);
+              if (apptOwner?.email) {
+                closerEmailFromGhl = apptOwner.email;
+                console.info(`[Fathom] Closer resuelto desde dueño de CITA: ${closerEmailFromGhl} (contactId=${contact.id})`);
+              }
+            }
+          } catch (err) {
+            console.warn(`[Fathom] No se pudo obtener dueño de cita para contactId=${contact.id}:`, err instanceof Error ? err.message : err);
+          }
+
+          // Fallback al dueño del contacto si no se obtuvo el de la cita
+          if (!closerEmailFromGhl && contact.assignedTo) {
             try {
-              const ghlUser = await getGhlUser(
-                contact.assignedTo,
-                account.token_ghl,
-              );
+              const ghlUser = await getGhlUser(contact.assignedTo, account.token_ghl);
               closerEmailFromGhl = ghlUser?.email ?? null;
+              if (closerEmailFromGhl) {
+                console.info(`[Fathom] Closer resuelto desde dueño de CONTACTO (fallback): ${closerEmailFromGhl}`);
+              }
             } catch (err) {
-              console.warn(
-                `[Fathom] Could not fetch GHL user ${contact.assignedTo}:`,
-                err,
-              );
+              console.warn(`[Fathom] Could not fetch GHL user ${contact.assignedTo}:`, err);
             }
           }
           break; // Encontrado → salir del loop
