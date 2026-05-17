@@ -442,17 +442,21 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
   const cuentas = cuentasResult.rows;
   console.info(`[analyzeChats] ${cuentas.length} cuentas con embudo para analizar`);
 
-  for (const cuenta of cuentas) {
-    // Circuit breaker inter-cuenta: si ya superamos el tiempo máximo, no iniciar nueva cuenta
-    if (Date.now() - startTime > MAX_RUNTIME_MS) {
-      console.warn(
-        `[analyzeChats] Circuit breaker activado. Omitiendo cuenta=${cuenta.id_cuenta} y siguientes. ` +
-        `Tiempo transcurrido: ${Math.round((Date.now() - startTime) / 1000)}s`,
-      );
-      break;
-    }
+  // ── 2. Pre-cargar chats pendientes de TODAS las cuentas ───────────────────
+  // Estrategia round-robin: dar a cada cuenta un slot equitativo de tiempo,
+  // independientemente del id_cuenta. Evita que cuentas con id alto queden
+  // sin procesar cuando el circuit breaker corta el tiempo disponible.
 
-    // ── 2. Buscar chats sin ia_categoria de las últimas 24h ─────────────────
+  interface CuentaConChats {
+    cuenta: CuentaAnalisisRow;
+    chats: ChatLogRow[];
+    embudo: Array<{ id: string; nombre: string; condition?: string }>;
+    reglas_etiquetas: Array<{ id: string; tag: string; condition: string; source: string }>;
+  }
+
+  const cuentasConChats: CuentaConChats[] = [];
+
+  for (const cuenta of cuentas) {
     const chatsResult = await withRetry(
       () => pgPool.query<ChatLogRow>(
         `SELECT id_evento, id_cuenta, chat, id_lead, nombre_lead
@@ -467,37 +471,54 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
       { label: `analyzeChats/getChats/${cuenta.id_cuenta}` },
     );
 
-    const chats = chatsResult.rows;
-    if (chats.length === 0) continue;
+    if (chatsResult.rows.length === 0) continue;
 
-    console.info(`[analyzeChats] cuenta=${cuenta.id_cuenta}: ${chats.length} chats a analizar`);
+    console.info(`[analyzeChats] cuenta=${cuenta.id_cuenta}: ${chatsResult.rows.length} chats pendientes`);
 
-    const embudo = Array.isArray(cuenta.embudo_personalizado)
-      ? (cuenta.embudo_personalizado as Array<{ id: string; nombre: string; condition?: string }>)
-      : [];
+    cuentasConChats.push({
+      cuenta,
+      chats: chatsResult.rows,
+      embudo: Array.isArray(cuenta.embudo_personalizado)
+        ? (cuenta.embudo_personalizado as Array<{ id: string; nombre: string; condition?: string }>)
+        : [],
+      reglas_etiquetas: Array.isArray(cuenta.reglas_etiquetas)
+        ? (cuenta.reglas_etiquetas as Array<{ id: string; tag: string; condition: string; source: string }>)
+        : [],
+    });
+  }
 
-    const reglas_etiquetas = Array.isArray(cuenta.reglas_etiquetas)
-      ? (cuenta.reglas_etiquetas as Array<{ id: string; tag: string; condition: string; source: string }>)
-      : [];
+  // ── 3. Procesar en round-robin ─────────────────────────────────────────────
+  // En cada vuelta se toma el siguiente chat de cada cuenta (ronda 0 = primer
+  // chat de todas, ronda 1 = segundo chat de todas, etc.). Si el circuit
+  // breaker corta, todas las cuentas habrán tenido rondas equitativas.
 
-    for (const chat of chats) {
-      // Circuit breaker: si llevamos más de MAX_RUNTIME_MS, detener para no exceder timeout de Cloud Run
+  const maxChatsPerAccount = Math.max(
+    ...cuentasConChats.map((c) => c.chats.length),
+    0,
+  );
+
+  outer: for (let round = 0; round < maxChatsPerAccount; round++) {
+    for (const { cuenta, chats, embudo, reglas_etiquetas } of cuentasConChats) {
+      if (round >= chats.length) continue; // esta cuenta ya terminó sus chats
+
+      // Circuit breaker: detener si superamos el tiempo máximo
       if (Date.now() - startTime > MAX_RUNTIME_MS) {
         console.warn(
-          `[analyzeChats] Circuit breaker activado tras ${Math.round((Date.now() - startTime) / 1000)}s. ` +
-          `Chats restantes sin procesar en cuenta=${cuenta.id_cuenta}. Próxima ejecución del cron continuará.`,
+          `[analyzeChats] Circuit breaker activado tras ${Math.round((Date.now() - startTime) / 1000)}s ` +
+          `(ronda ${round}). Todas las cuentas recibieron al menos ${round} chats procesados.`,
         );
-        break;
+        break outer;
       }
 
+      const chat = chats[round];
       processed++;
+
       try {
         const messages = Array.isArray(chat.chat)
           ? (chat.chat as Array<{ role: string; message: string; timestamp: string; name?: string }>)
           : [];
 
         if (messages.length === 0) {
-          // Marcar como analizado sin categoría
           await pgPool.query(
             `UPDATE chats_logs SET ia_categoria = 'sin_mensajes', ia_analizado_at = NOW() WHERE id_evento = $1`,
             [chat.id_evento],
@@ -505,7 +526,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
           continue;
         }
 
-        // ── 3. Analizar con IA ──────────────────────────────────────────────
+        // ── 3a. Analizar con IA ─────────────────────────────────────────────
         const result = await analyzeChatWithAI({
           messages,
           embudo,
@@ -515,7 +536,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
           id_cuenta: cuenta.id_cuenta,
         });
 
-        // ── 4. Actualizar chats_logs ────────────────────────────────────────
+        // ── 3b. Actualizar chats_logs ───────────────────────────────────────
         await pgPool.query(
           `UPDATE chats_logs
            SET estado = COALESCE($1, estado),
@@ -533,7 +554,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
           ],
         );
 
-        // ── 5. Aplicar tags en GHL ──────────────────────────────────────────
+        // ── 3c. Aplicar tags en GHL ─────────────────────────────────────────
         if (result.tags_internos.length > 0 && chat.id_lead && cuenta.token_ghl) {
           try {
             await addContactTags(chat.id_lead, cuenta.token_ghl, result.tags_internos);
@@ -547,19 +568,19 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
 
         updated++;
         console.info(
-          `[analyzeChats] chat=${chat.id_evento} → categoria="${result.categoria}" tags=${result.tags_internos.join(",")} confianza=${result.confianza}`,
+          `[analyzeChats] chat=${chat.id_evento} cuenta=${cuenta.id_cuenta} ronda=${round} → ` +
+          `categoria="${result.categoria}" tags=${result.tags_internos.join(",")} confianza=${result.confianza}`,
         );
       } catch (err) {
         errors++;
-        console.error(`[analyzeChats] Error en chat=${chat.id_evento}:`, err);
-        // Marcar como intentado para no reintentar indefinidamente
+        console.error(`[analyzeChats] Error en chat=${chat.id_evento} cuenta=${cuenta.id_cuenta}:`, err);
         await pgPool.query(
           `UPDATE chats_logs SET ia_categoria = 'error_analisis', ia_analizado_at = NOW() WHERE id_evento = $1`,
           [chat.id_evento],
         ).catch(() => {});
       }
 
-      // ── 6. Rate limit: 200ms entre llamadas ─────────────────────────────
+      // ── Rate limit: 200ms entre llamadas ───────────────────────────────────
       await sleep(DELAY_MS);
     }
   }

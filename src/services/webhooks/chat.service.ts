@@ -59,8 +59,9 @@ async function getAccountByLocationIdFallback(locationId: string) {
         nombre_cuenta: string | null;
         locationid: string | null;
         token_ghl: string | null;
+        estado_cuenta: string | null;
       }>(
-        `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl
+        `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta
          FROM cuentas
          WHERE locationid ILIKE $1
          LIMIT 1`,
@@ -97,8 +98,9 @@ async function getAccountByLocationIdFallback(locationId: string) {
             nombre_cuenta: string | null;
             locationid: string | null;
             token_ghl: string | null;
+            estado_cuenta: string | null;
           }>(
-            `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl
+            `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta
              FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
             [oauthRows[0].id_cuenta],
           ),
@@ -344,6 +346,15 @@ export async function processChatWebhook(
 
   const idCuenta = account.id_cuenta;
   const tokenGhl = account.token_ghl ?? "";
+
+  // ── 5b. Rechazar silenciosamente si la cuenta está cancelada ─────────────
+  // Responde 200 a GHL pero no persiste nada — evita DB bloat por webhooks
+  // de clientes que ya no pagan. Usar skip_reason="account_cancelled" en raw.
+  if (account.estado_cuenta === "cancelado") {
+    console.info(`[Chat] Cuenta cancelada id=${idCuenta} (${account.nombre_cuenta ?? locationId}) — webhook descartado silenciosamente`);
+    void saveRawWebhook(body, locationId, false, "account_cancelled");
+    return { success: true, data: { skipped: true, reason: "account_cancelled", idCuenta } };
+  }
 
   // ── 6. Obtener nombre del contacto ────────────────────────────────────────
   let contactName = "Cliente";

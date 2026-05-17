@@ -133,6 +133,8 @@ export const cuentas = pgTable("cuentas", {
   // ── V6: métricas manuales y config ────────────────────────────────────────
   metricas_config: jsonb("metricas_config"),
   metricas_manual_data: jsonb("metricas_manual_data"),
+  // ── Estado de la cuenta (activo | cancelado | trial | etc.) ───────────────
+  estado_cuenta: text("estado_cuenta"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

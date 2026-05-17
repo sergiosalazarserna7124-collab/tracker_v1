@@ -27,6 +27,7 @@ export interface CuentaRow {
   nombre_cuenta: string | null;
   locationid: string | null;
   token_ghl: string | null;
+  estado_cuenta: string | null;
 }
 
 export interface CuentaFullRow extends CuentaRow {
@@ -83,6 +84,7 @@ export async function getAccountByLocationId(locationId: string): Promise<Cuenta
           nombre_cuenta: cuentas.nombre_cuenta,
           locationid: cuentas.locationid,
           token_ghl: cuentas.token_ghl,
+          estado_cuenta: cuentas.estado_cuenta,
         })
         .from(cuentas)
         .where(eq(cuentas.locationid, locationId))
@@ -104,6 +106,7 @@ export async function getAccountById(idCuenta: number): Promise<CuentaRow | null
           nombre_cuenta: cuentas.nombre_cuenta,
           locationid: cuentas.locationid,
           token_ghl: cuentas.token_ghl,
+          estado_cuenta: cuentas.estado_cuenta,
         })
         .from(cuentas)
         .where(eq(cuentas.id_cuenta, idCuenta))
@@ -125,6 +128,7 @@ export async function getAccountFullById(idCuenta: number): Promise<CuentaFullRo
           nombre_cuenta: cuentas.nombre_cuenta,
           locationid: cuentas.locationid,
           token_ghl: cuentas.token_ghl,
+          estado_cuenta: cuentas.estado_cuenta,
           twilio_sid: cuentas.twilio_sid,
           auth_twilio: cuentas.auth_twilio,
           openai_api_key: cuentas.openai_api_key,
@@ -153,6 +157,7 @@ export async function getAccountFullByLocationId(locationId: string): Promise<Cu
           nombre_cuenta: cuentas.nombre_cuenta,
           locationid: cuentas.locationid,
           token_ghl: cuentas.token_ghl,
+          estado_cuenta: cuentas.estado_cuenta,
           twilio_sid: cuentas.twilio_sid,
           auth_twilio: cuentas.auth_twilio,
           openai_api_key: cuentas.openai_api_key,
