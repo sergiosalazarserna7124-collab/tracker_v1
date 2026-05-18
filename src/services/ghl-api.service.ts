@@ -571,3 +571,90 @@ export async function getContactAppointmentInfo(
     return null;
   }
 }
+
+// ─── GHL API: buscar opportunity de un contacto ───────────────────────────────
+
+export async function searchOpportunityByContact(
+  contactId: string,
+  locationId: string,
+  bearerToken: string,
+): Promise<string | null> {
+  try {
+    const url = new URL("https://services.leadconnectorhq.com/opportunities/search");
+    url.searchParams.set("contact_id", contactId);
+    url.searchParams.set("location_id", locationId);
+
+    const response = await fetchWithTimeout(
+      url.toString(),
+      {
+        method: "GET",
+        headers: {
+          Authorization: buildBearerAuth(bearerToken),
+          Accept: "application/json",
+          Version: "2021-07-28",
+        },
+      },
+      GHL_TIMEOUT_MS,
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.warn(`[GHL searchOpportunityByContact] ${response.status}: ${text}`);
+      return null;
+    }
+
+    const data = (await response.json()) as {
+      opportunities?: Array<{ id: string }>;
+    };
+
+    return data.opportunities?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── GHL API: actualizar stage de un opportunity ─────────────────────────────
+
+export async function updateOpportunityStage(
+  opportunityId: string,
+  stageId: string,
+  bearerToken: string,
+): Promise<void> {
+  const response = await fetchWithTimeout(
+    `https://services.leadconnectorhq.com/opportunities/${opportunityId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+      body: JSON.stringify({ stageId }),
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`GHL opportunity update responded ${response.status}: ${text}`);
+  }
+}
+
+// ─── Helper: extraer mapa funnelStage → stageId de embudo_personalizado ──────
+// El Admin Panel configura embudo_personalizado.funnel_stage_map como un objeto
+// { "nombre_funnelStage": "stageId_ghl" } para cada cuenta.
+
+export function parseFunnelStageMap(embudoPersonalizado: unknown): Record<string, string> {
+  if (typeof embudoPersonalizado !== "object" || embudoPersonalizado === null) {
+    return {};
+  }
+  const obj = embudoPersonalizado as Record<string, unknown>;
+  const raw = obj["funnel_stage_map"];
+  if (typeof raw !== "object" || raw === null) return {};
+  const result: Record<string, string> = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (typeof val === "string") result[key] = val;
+  }
+  return result;
+}

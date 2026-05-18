@@ -22,6 +22,9 @@ import {
   getAccountFullById,
   safeAddContactTag,
   safeAddContactTags,
+  searchOpportunityByContact,
+  updateOpportunityStage,
+  parseFunnelStageMap,
   GHL_TAGS,
   type CuentaFullRow,
 } from "../ghl-api.service.js";
@@ -724,6 +727,27 @@ async function effectivePath(
         } catch (e2) {
           console.error(`[GhlCalls/Effective] Error agregando nota de transcripción original:`, e2);
         }
+      }
+    }
+  }
+
+  // ── Actualizar pipeline GHL si la regla tiene funnelStage configurado ────────
+  if (funnelStageFromReglas && contactId && tokenGhl && fields.locationId) {
+    const stageMap = parseFunnelStageMap(embudoPersonalizado);
+    const stageId = stageMap[funnelStageFromReglas];
+    if (stageId) {
+      try {
+        const oppId = await searchOpportunityByContact(contactId, fields.locationId, tokenGhl);
+        if (oppId) {
+          await updateOpportunityStage(oppId, stageId, tokenGhl);
+          console.info(
+            `[GhlCalls/Effective] Opportunity ${oppId} movida a stage "${funnelStageFromReglas}" (stageId=${stageId}) para contact=${contactId}`,
+          );
+        } else {
+          console.info(`[GhlCalls/Effective] Sin opportunity para contact=${contactId}, se omite stage update`);
+        }
+      } catch (err) {
+        console.error(`[GhlCalls/Effective] Error actualizando pipeline GHL para contact=${contactId}:`, err);
       }
     }
   }

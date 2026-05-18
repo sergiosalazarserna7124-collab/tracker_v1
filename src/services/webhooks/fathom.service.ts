@@ -9,6 +9,9 @@ import {
   getContactAppointmentInfo,
   safeAddContactTag,
   safeAddContactTags,
+  searchOpportunityByContact,
+  updateOpportunityStage,
+  parseFunnelStageMap,
   GHL_TAGS,
 } from "../ghl-api.service.js";
 import { analyzeCall } from "../ai/call-analysis.service.js";
@@ -424,6 +427,27 @@ export async function processFathomCall(
         `[Fathom] GHL reglas tags error for contact ${contactId}:`,
         err,
       );
+    }
+  }
+
+  // 5a-quater. Actualizar pipeline GHL si la regla tiene funnelStage configurado
+  if (funnelStageFromReglas && contactId && account.token_ghl && account.locationid) {
+    const stageMap = parseFunnelStageMap(account.embudo_personalizado);
+    const stageId = stageMap[funnelStageFromReglas];
+    if (stageId) {
+      try {
+        const oppId = await searchOpportunityByContact(contactId, account.locationid, account.token_ghl);
+        if (oppId) {
+          await updateOpportunityStage(oppId, stageId, account.token_ghl);
+          console.info(
+            `[Fathom] Opportunity ${oppId} movida a stage "${funnelStageFromReglas}" (stageId=${stageId}) para contact=${contactId}`,
+          );
+        } else {
+          console.info(`[Fathom] Sin opportunity para contact=${contactId}, se omite stage update`);
+        }
+      } catch (err) {
+        console.error(`[Fathom] Error actualizando pipeline GHL para contact=${contactId}:`, err);
+      }
     }
   }
 
