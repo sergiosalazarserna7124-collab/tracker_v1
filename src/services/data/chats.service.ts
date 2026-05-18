@@ -146,11 +146,11 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
 
   if (desde) {
     values.push(desde);
-    conditions.push(`fecha_y_hora_z >= $${values.length}::date`);
+    conditions.push(`primer_msg_lead_at >= $${values.length}::date`);
   }
   if (hasta) {
     values.push(hasta);
-    conditions.push(`fecha_y_hora_z < ($${values.length}::date + INTERVAL '1 day')`);
+    conditions.push(`primer_msg_lead_at < ($${values.length}::date + INTERVAL '1 day')`);
   }
 
   const where = conditions.join(" AND ");
@@ -162,7 +162,7 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
        primer_msg_lead_at
      FROM chats_logs
      WHERE ${where}
-     ORDER BY fecha_y_hora_z DESC`,
+     ORDER BY primer_msg_lead_at DESC`,
     values,
   );
 
