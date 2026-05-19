@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { CronHeaders, CronDailyTasksBody, CronAnalyzeChatsBody } from "../../schemas/cron/daily-tasks.schema.js";
-import { handleUpdateNoShows, handleAnalyzeChats, handleExpirePdteRegistros } from "../../controllers/cron/daily-tasks.controller.js";
+import { handleUpdateNoShows, handleAnalyzeChats, handleExpirePdteRegistros, handleBackfillPrimerMsgLeadAt } from "../../controllers/cron/daily-tasks.controller.js";
 
 export async function cronDailyTasksRoute(app: FastifyInstance) {
   app.post(
@@ -33,5 +33,15 @@ export async function cronDailyTasksRoute(app: FastifyInstance) {
       },
     },
     handleExpirePdteRegistros,
+  );
+
+  app.post(
+    "/backfill-primer-msg-lead-at",
+    {
+      schema: {
+        headers: CronHeaders,
+      },
+    },
+    handleBackfillPrimerMsgLeadAt,
   );
 }

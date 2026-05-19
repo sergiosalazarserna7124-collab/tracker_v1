@@ -600,6 +600,58 @@ interface ExpirePdteResult {
   por_cuenta: Array<{ id_cuenta: number; expirados: number }>;
 }
 
+// ─── backfillPrimerMsgLeadAt ──────────────────────────────────────────────────
+
+interface BackfillPrimerMsgResult {
+  success: boolean;
+  actualizados: number;
+  sin_mensajes_lead: number;
+}
+
+/**
+ * Backfill diario de primer_msg_lead_at en chats_logs.
+ *
+ * Para cada fila con primer_msg_lead_at NULL, extrae el timestamp mínimo
+ * del primer mensaje de role="lead" dentro del JSONB chat[].
+ * Operación idempotente: solo escribe en filas con valor NULL.
+ *
+ * Ejecutar una vez al día como safety net para cubrir cualquier webhook
+ * que llegue sin dateAdded o que sea insertado por fuentes externas (n8n, etc.).
+ */
+export async function backfillPrimerMsgLeadAt(): Promise<BackfillPrimerMsgResult> {
+  // Filas con NULL que tienen al menos un mensaje lead con timestamp
+  const updateResult = await pgPool.query<{ count: string }>(
+    `UPDATE chats_logs
+     SET primer_msg_lead_at = (
+       SELECT MIN((m->>'timestamp')::timestamptz)
+       FROM jsonb_array_elements(chat) m
+       WHERE m->>'role' = 'lead'
+         AND m->>'timestamp' IS NOT NULL
+     )
+     WHERE primer_msg_lead_at IS NULL
+       AND chat IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(chat) m
+         WHERE m->>'role' = 'lead'
+           AND m->>'timestamp' IS NOT NULL
+       )
+     RETURNING id_evento`,
+  );
+  const actualizados = updateResult.rowCount ?? 0;
+
+  // Contar filas que aún quedan NULL (sin mensajes lead — correcto por diseño)
+  const pendingResult = await pgPool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM chats_logs WHERE primer_msg_lead_at IS NULL`,
+  );
+  const sin_mensajes_lead = parseInt(pendingResult.rows[0]?.count ?? "0", 10);
+
+  console.info(
+    `[backfillPrimerMsgLeadAt] actualizados=${actualizados} | sin_mensajes_lead=${sin_mensajes_lead}`,
+  );
+
+  return { success: true, actualizados, sin_mensajes_lead };
+}
+
 /**
  * Marca como 'no_contestado' todos los registros_de_llamada que lleven
  * más de 7 días en estado 'pdte' sin recibir un webhook de resolución.
