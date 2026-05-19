@@ -138,29 +138,37 @@ async function resolveAccount(
   locationId: string | null,
   label: string,
   locationIdFallback?: string | null,
-): Promise<{ idCuenta: number | null; tokenGhl: string | null }> {
+): Promise<{ idCuenta: number | null; tokenGhl: string | null; isCancelled: boolean }> {
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
-    return { idCuenta: null, tokenGhl: null };
+    return { idCuenta: null, tokenGhl: null, isCancelled: false };
   }
   try {
     const account = await getAccountByLocationId(locationId);
     if (account) {
-      return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl ?? null };
+      if (account.estado_cuenta === "cancelado") {
+        console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
+        return { idCuenta: null, tokenGhl: null, isCancelled: true };
+      }
+      return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl ?? null, isCancelled: false };
     }
     // Fallback: intentar con body.location.id si customData.locationid no matcheó
     if (locationIdFallback && locationIdFallback !== locationId) {
       const fallbackAccount = await getAccountByLocationId(locationIdFallback);
       if (fallbackAccount) {
+        if (fallbackAccount.estado_cuenta === "cancelado") {
+          console.info(`[${label}] Cuenta cancelada (id=${fallbackAccount.id_cuenta}) — webhook descartado silenciosamente`);
+          return { idCuenta: null, tokenGhl: null, isCancelled: true };
+        }
         console.info(`[${label}] Cuenta encontrada por fallback location.id="${locationIdFallback}" (customData.locationid="${locationId}" no matcheó)`);
-        return { idCuenta: fallbackAccount.id_cuenta, tokenGhl: fallbackAccount.token_ghl ?? null };
+        return { idCuenta: fallbackAccount.id_cuenta, tokenGhl: fallbackAccount.token_ghl ?? null, isCancelled: false };
       }
     }
     console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
-    return { idCuenta: null, tokenGhl: null };
+    return { idCuenta: null, tokenGhl: null, isCancelled: false };
   } catch (err) {
     console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
-    return { idCuenta: null, tokenGhl: null };
+    return { idCuenta: null, tokenGhl: null, isCancelled: false };
   }
 }
 
@@ -180,8 +188,9 @@ async function resolveAccountFull(
   promptVentas: string | null;
   promptLlamadas: string | null;
   reglasEtiquetas: unknown;
+  isCancelled: boolean;
 }> {
-  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null };
+  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, isCancelled: false };
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
     return empty;
@@ -198,6 +207,10 @@ async function resolveAccountFull(
       console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
       return empty;
     }
+    if (account.estado_cuenta === "cancelado") {
+      console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
+      return { ...empty, isCancelled: true };
+    }
     return {
       idCuenta: account.id_cuenta,
       tokenGhl: account.token_ghl,
@@ -208,6 +221,7 @@ async function resolveAccountFull(
       promptVentas: account.prompt_ventas,
       promptLlamadas: account.prompt_llamadas,
       reglasEtiquetas: account.reglas_etiquetas,
+      isCancelled: false,
     };
   } catch (err) {
     console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
@@ -531,12 +545,12 @@ async function saveOrphanEvent(
 export async function processTwilioWebhook(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
+  const { idCuenta, isCancelled } = await resolveAccount(fields.locationId, "Twilio", fields.locationIdFallback);
+  if (isCancelled) return { success: true };
+
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl && !fields.phone) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "Twilio", fields.locationIdFallback);
     return saveOrphanEvent(body, idCuenta, "Twilio");
   }
-
-  const { idCuenta } = await resolveAccount(fields.locationId, "Twilio", fields.locationIdFallback);
 
   // Idempotency: buscar registro PDTE existente antes de crear uno nuevo.
   // GHL puede enviar el mismo webhook Twilio múltiples veces para la misma llamada
@@ -662,12 +676,12 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
 export async function processNoAnswerCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
+  const { idCuenta, tokenGhl, isCancelled } = await resolveAccount(fields.locationId, "NoAnswer", fields.locationIdFallback);
+  if (isCancelled) return { success: true };
+
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "NoAnswer", fields.locationIdFallback);
     return saveOrphanEvent(body, idCuenta, "NoAnswer");
   }
-
-  const { idCuenta, tokenGhl } = await resolveAccount(fields.locationId, "NoAnswer", fields.locationIdFallback);
 
   return followUpPath(fields, idCuenta, tokenGhl, null, null, null, "NoAnswer");
 }
@@ -679,13 +693,13 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
 export async function processEffectiveCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
+  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, isCancelled } =
+    await resolveAccountFull(fields.locationId, "Effective", fields.locationIdFallback);
+  if (isCancelled) return { success: true };
+
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "Effective", fields.locationIdFallback);
     return saveOrphanEvent(body, idCuenta, "Effective");
   }
-
-  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas } =
-    await resolveAccountFull(fields.locationId, "Effective", fields.locationIdFallback);
 
   // ── Bypass Twilio: transcripción ya viene en el payload (cuentas GHL sin Twilio) ──
   if (fields.preTranscript) {

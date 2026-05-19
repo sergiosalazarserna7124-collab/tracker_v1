@@ -123,12 +123,16 @@ async function resolveAccount(
   locationId: string | null,
   label: string,
   idCuentaFallback?: number | null,
-): Promise<{ idCuenta: number | null; tokenGhl: string | null }> {
+): Promise<{ idCuenta: number | null; tokenGhl: string | null; isCancelled: boolean }> {
   if (locationId) {
     try {
       const account = await getAccountByLocationId(locationId);
       if (account) {
-        return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl };
+        if (account.estado_cuenta === "cancelado") {
+          console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
+          return { idCuenta: null, tokenGhl: null, isCancelled: true };
+        }
+        return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl, isCancelled: false };
       }
       console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
     } catch (err) {
@@ -141,7 +145,11 @@ async function resolveAccount(
     try {
       const account = await getAccountById(idCuentaFallback);
       if (account) {
-        return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl };
+        if (account.estado_cuenta === "cancelado") {
+          console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
+          return { idCuenta: null, tokenGhl: null, isCancelled: true };
+        }
+        return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl, isCancelled: false };
       }
       console.warn(`[${label}] No se encontró cuenta para id_cuenta=${idCuentaFallback}`);
     } catch (err) {
@@ -152,7 +160,7 @@ async function resolveAccount(
   if (!locationId && idCuentaFallback == null) {
     console.warn(`[${label}] Payload sin locationId ni idcuenta; no se puede resolver id_cuenta`);
   }
-  return { idCuenta: null, tokenGhl: null };
+  return { idCuenta: null, tokenGhl: null, isCancelled: false };
 }
 
 // ─── Lookup de cuenta (completo) ─────────────────────────────────────────────
@@ -169,6 +177,7 @@ async function resolveAccountFull(
   promptVentas: string | null;
   promptLlamadas: string | null;
   reglasEtiquetas: unknown;
+  isCancelled: boolean;
 }> {
   const empty = {
     idCuenta: null,
@@ -178,6 +187,7 @@ async function resolveAccountFull(
     promptVentas: null,
     promptLlamadas: null,
     reglasEtiquetas: null,
+    isCancelled: false,
   };
 
   function mapAccount(account: CuentaFullRow) {
@@ -189,13 +199,20 @@ async function resolveAccountFull(
       promptVentas: account.prompt_ventas,
       promptLlamadas: account.prompt_llamadas,
       reglasEtiquetas: account.reglas_etiquetas,
+      isCancelled: false,
     };
   }
 
   if (locationId) {
     try {
       const account = await getAccountFullByLocationId(locationId);
-      if (account) return mapAccount(account);
+      if (account) {
+        if (account.estado_cuenta === "cancelado") {
+          console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
+          return { ...empty, isCancelled: true };
+        }
+        return mapAccount(account);
+      }
       console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
     } catch (err) {
       console.error(`[${label}] Error buscando cuenta para locationId="${locationId}":`, err);
@@ -206,7 +223,13 @@ async function resolveAccountFull(
     console.warn(`[${label}] locationId no resolvió — usando idcuenta del payload: ${idCuentaFallback}`);
     try {
       const account = await getAccountFullById(idCuentaFallback);
-      if (account) return mapAccount(account);
+      if (account) {
+        if (account.estado_cuenta === "cancelado") {
+          console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
+          return { ...empty, isCancelled: true };
+        }
+        return mapAccount(account);
+      }
       console.warn(`[${label}] No se encontró cuenta para id_cuenta=${idCuentaFallback}`);
     } catch (err) {
       console.error(`[${label}] Error buscando cuenta por id_cuenta=${idCuentaFallback}:`, err);
@@ -790,12 +813,12 @@ async function effectivePath(
 export async function processGhlCallPending(body: GhlCallEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
+  const { idCuenta, isCancelled } = await resolveAccount(fields.locationId, "GhlCalls/Pending", fields.idCuentaFromPayload);
+  if (isCancelled) return { success: true };
+
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Pending", fields.idCuentaFromPayload);
     return saveOrphanEvent(body, idCuenta, "GhlCalls/Pending");
   }
-
-  const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Pending", fields.idCuentaFromPayload);
 
   // Idempotency: buscar en 4 niveles antes de crear un registro nuevo.
   // GHL puede enviar el mismo lead con distintos id_user_ghl (contact IDs) en webhooks
@@ -916,12 +939,12 @@ export async function processGhlCallPending(body: GhlCallEventBody): Promise<Ser
 export async function processGhlCallNoAnswer(body: GhlCallEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
+  const { idCuenta, tokenGhl, isCancelled } = await resolveAccount(fields.locationId, "GhlCalls/NoAnswer", fields.idCuentaFromPayload);
+  if (isCancelled) return { success: true };
+
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/NoAnswer", fields.idCuentaFromPayload);
     return saveOrphanEvent(body, idCuenta, "GhlCalls/NoAnswer");
   }
-
-  const { idCuenta, tokenGhl } = await resolveAccount(fields.locationId, "GhlCalls/NoAnswer", fields.idCuentaFromPayload);
 
   return followUpPath(fields, idCuenta, tokenGhl, null, null, "GhlCalls/NoAnswer");
 }
@@ -933,11 +956,6 @@ export async function processGhlCallNoAnswer(body: GhlCallEventBody): Promise<Se
 export async function processGhlCallEffective(body: GhlCallEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
-  if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
-    const { idCuenta } = await resolveAccount(fields.locationId, "GhlCalls/Effective", fields.idCuentaFromPayload);
-    return saveOrphanEvent(body, idCuenta, "GhlCalls/Effective");
-  }
-
   const {
     idCuenta,
     tokenGhl,
@@ -946,7 +964,13 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     promptVentas,
     promptLlamadas,
     reglasEtiquetas,
+    isCancelled,
   } = await resolveAccountFull(fields.locationId, "GhlCalls/Effective", fields.idCuentaFromPayload);
+  if (isCancelled) return { success: true };
+
+  if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
+    return saveOrphanEvent(body, idCuenta, "GhlCalls/Effective");
+  }
 
   const transcript = fields.transcript;
 
