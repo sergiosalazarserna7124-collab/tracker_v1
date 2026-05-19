@@ -429,7 +429,7 @@ async function followUpPath(
             .update(llamadas)
             .set({
               nombre_lead: nombreLead,
-              estado: "seguimiento",
+              estado: "no_contestada",
               closer_mail: closerMail,
               nombre_closer: nombreCloser,
               fecha_y_hora_de_seguimiento: now,
@@ -461,7 +461,7 @@ async function followUpPath(
               fecha_evento: now,
               id_cuenta: idCuenta,
               nombre_lead: nombreLead,
-              estado: "seguimiento",
+              estado: "no_contestada",
               mail_lead: mailLead,
               phone_raw_format: phone,
               creativo_origen: creativoOrigen,
@@ -499,7 +499,7 @@ async function followUpPath(
     idCuenta,
     fields,
     tipoEvento,
-    estadoResultado: "seguimiento",
+    estadoResultado: "no_contestada",
     callSid,
     transcript,
     iadesc,
