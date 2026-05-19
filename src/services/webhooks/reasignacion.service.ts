@@ -3,6 +3,7 @@ import { drizzleDb } from "../../config/drizzle.js";
 import { db as pgPool } from "../../config/database.js";
 import { llamadas, logLlamadas, agendas } from "../../db/schema.js";
 import { getAccountByLocationId } from "../ghl-api.service.js";
+import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { ReasignacionBodyPayload } from "../../schemas/webhooks/reasignacion.schema.js";
 import type { ServiceResult } from "../../types/index.js";
@@ -41,6 +42,17 @@ export async function processReasignacion(
       const account = await getAccountByLocationId(locId);
       if (account) idCuenta = account.id_cuenta;
     } catch { /* continuar */ }
+  }
+
+  // Normalizar closer con merge rules (AUT-273) — graceful: nunca bloquea ingesta
+  if (idCuenta) {
+    try {
+      const norm = await applyMergeRules(idCuenta, fields.closerMail || null, fields.nombreCloser || null);
+      if (norm.email != null) fields.closerMail = norm.email;
+      if (norm.nombre != null) fields.nombreCloser = norm.nombre;
+    } catch (err) {
+      console.error("[Reasignacion] Error aplicando merge rules de closer:", err);
+    }
   }
 
   const contactId = fields.idUserGhl;
