@@ -404,12 +404,12 @@ export async function processGhlWebhook(
       `🔍 [GHL webhook] customData.categoria RAW → "${categoriaRaw}" | normalizado → "${categoria}"`,
     );
 
-    // Validar que id_cuenta exista en tabla cuentas (best-effort — no rechaza el webhook)
+    // Validar que id_cuenta exista en tabla cuentas y no esté cancelada
     const idCuentaRaw = parseInt(body.customData?.idcuenta, 10);
     if (!isNaN(idCuentaRaw) && idCuentaRaw > 0) {
       try {
-        const { rows: cuentaRows } = await db.query<{ id_cuenta: number }>(
-          `SELECT id_cuenta FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
+        const { rows: cuentaRows } = await db.query<{ id_cuenta: number; estado_cuenta: string | null }>(
+          `SELECT id_cuenta, estado_cuenta FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
           [idCuentaRaw],
         );
         if (cuentaRows.length === 0) {
@@ -418,6 +418,12 @@ export async function processGhlWebhook(
             `El webhook se procesará pero los datos quedarán huérfanos. ` +
             `locationId="${body.locationid?.trim() || ""}" categoria="${categoria}"`,
           );
+        } else if (cuentaRows[0].estado_cuenta === "cancelado") {
+          console.info(
+            `[GHL webhook] Cuenta cancelada id=${idCuentaRaw} — webhook descartado silenciosamente. ` +
+            `locationId="${body.locationid?.trim() || ""}" categoria="${categoria}"`,
+          );
+          return { success: true };
         }
       } catch (validationErr) {
         console.warn(`⚠️ [GHL webhook] No se pudo validar id_cuenta=${idCuentaRaw} contra tabla cuentas:`, validationErr);
