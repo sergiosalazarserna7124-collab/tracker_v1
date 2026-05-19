@@ -15,6 +15,7 @@ import {
   GHL_TAGS,
 } from "../ghl-api.service.js";
 import { analyzeCall } from "../ai/call-analysis.service.js";
+import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { FathomEventBody } from "../../schemas/webhooks/fathom.schema.js";
 
@@ -129,6 +130,15 @@ export async function processFathomCall(
     } catch (err) {
       console.warn(`[Fathom] Error resolviendo closer para cuenta ${idCuenta}:`, err instanceof Error ? err.message : err);
     }
+  }
+
+  // Normalizar closer con merge rules (AUT-273) — graceful: nunca bloquea ingesta
+  try {
+    const norm = await applyMergeRules(idCuenta, closerEmail, closerName);
+    closerEmail = norm.email ?? closerEmail;
+    closerName = norm.nombre ?? closerName;
+  } catch (err) {
+    console.error(`[Fathom] Error aplicando merge rules de closer para cuenta ${idCuenta}:`, err);
   }
 
   const shareUrl = payload.share_url ?? payload.url ?? null;

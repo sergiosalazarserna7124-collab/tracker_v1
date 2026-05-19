@@ -28,6 +28,7 @@ import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-a
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingNote, savePendingTag } from "../ghl-token-guard.service.js";
+import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
@@ -552,6 +553,17 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
     return saveOrphanEvent(body, idCuenta, "Twilio");
   }
 
+  // Normalizar closer con merge rules (AUT-273) — graceful: nunca bloquea ingesta
+  if (idCuenta) {
+    try {
+      const norm = await applyMergeRules(idCuenta, fields.closerMail, fields.nombreCloser);
+      fields.closerMail = norm.email ?? fields.closerMail;
+      fields.nombreCloser = norm.nombre ?? fields.nombreCloser;
+    } catch (err) {
+      console.error("[Twilio] Error aplicando merge rules de closer:", err);
+    }
+  }
+
   // Idempotency: buscar registro PDTE existente antes de crear uno nuevo.
   // GHL puede enviar el mismo webhook Twilio múltiples veces para la misma llamada
   // (reintentos, eventos duplicados). Sin este check, cada disparo crea un pdte
@@ -683,6 +695,17 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
     return saveOrphanEvent(body, idCuenta, "NoAnswer");
   }
 
+  // Normalizar closer con merge rules (AUT-273) — graceful: nunca bloquea ingesta
+  if (idCuenta) {
+    try {
+      const norm = await applyMergeRules(idCuenta, fields.closerMail, fields.nombreCloser);
+      fields.closerMail = norm.email ?? fields.closerMail;
+      fields.nombreCloser = norm.nombre ?? fields.nombreCloser;
+    } catch (err) {
+      console.error("[NoAnswer] Error aplicando merge rules de closer:", err);
+    }
+  }
+
   return followUpPath(fields, idCuenta, tokenGhl, null, null, null, "NoAnswer");
 }
 
@@ -699,6 +722,17 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
     return saveOrphanEvent(body, idCuenta, "Effective");
+  }
+
+  // Normalizar closer con merge rules (AUT-273) — graceful: nunca bloquea ingesta
+  if (idCuenta) {
+    try {
+      const norm = await applyMergeRules(idCuenta, fields.closerMail, fields.nombreCloser);
+      fields.closerMail = norm.email ?? fields.closerMail;
+      fields.nombreCloser = norm.nombre ?? fields.nombreCloser;
+    } catch (err) {
+      console.error("[Effective] Error aplicando merge rules de closer:", err);
+    }
   }
 
   // ── Bypass Twilio: transcripción ya viene en el payload (cuentas GHL sin Twilio) ──

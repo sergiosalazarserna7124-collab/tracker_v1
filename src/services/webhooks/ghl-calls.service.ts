@@ -36,6 +36,7 @@ import {
 import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
+import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import type { GhlCallEventBody } from "../../schemas/webhooks/ghl-calls.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
@@ -820,6 +821,17 @@ export async function processGhlCallPending(body: GhlCallEventBody): Promise<Ser
     return saveOrphanEvent(body, idCuenta, "GhlCalls/Pending");
   }
 
+  // Normalizar closer con merge rules (AUT-273) — graceful: nunca bloquea ingesta
+  if (idCuenta) {
+    try {
+      const norm = await applyMergeRules(idCuenta, fields.closerMail, fields.nombreCloser);
+      fields.closerMail = norm.email ?? fields.closerMail;
+      fields.nombreCloser = norm.nombre ?? fields.nombreCloser;
+    } catch (err) {
+      console.error("[GhlCalls/Pending] Error aplicando merge rules de closer:", err);
+    }
+  }
+
   // Idempotency: buscar en 4 niveles antes de crear un registro nuevo.
   // GHL puede enviar el mismo lead con distintos id_user_ghl (contact IDs) en webhooks
   // separados con milisegundos de diferencia, y a veces sin email ni phone.
@@ -946,6 +958,17 @@ export async function processGhlCallNoAnswer(body: GhlCallEventBody): Promise<Se
     return saveOrphanEvent(body, idCuenta, "GhlCalls/NoAnswer");
   }
 
+  // Normalizar closer con merge rules (AUT-273) — graceful: nunca bloquea ingesta
+  if (idCuenta) {
+    try {
+      const norm = await applyMergeRules(idCuenta, fields.closerMail, fields.nombreCloser);
+      fields.closerMail = norm.email ?? fields.closerMail;
+      fields.nombreCloser = norm.nombre ?? fields.nombreCloser;
+    } catch (err) {
+      console.error("[GhlCalls/NoAnswer] Error aplicando merge rules de closer:", err);
+    }
+  }
+
   return followUpPath(fields, idCuenta, tokenGhl, null, null, "GhlCalls/NoAnswer");
 }
 
@@ -970,6 +993,17 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
     return saveOrphanEvent(body, idCuenta, "GhlCalls/Effective");
+  }
+
+  // Normalizar closer con merge rules (AUT-273) — graceful: nunca bloquea ingesta
+  if (idCuenta) {
+    try {
+      const norm = await applyMergeRules(idCuenta, fields.closerMail, fields.nombreCloser);
+      fields.closerMail = norm.email ?? fields.closerMail;
+      fields.nombreCloser = norm.nombre ?? fields.nombreCloser;
+    } catch (err) {
+      console.error("[GhlCalls/Effective] Error aplicando merge rules de closer:", err);
+    }
   }
 
   const transcript = fields.transcript;
