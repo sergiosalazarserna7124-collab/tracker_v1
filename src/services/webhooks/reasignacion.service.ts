@@ -48,48 +48,58 @@ export async function processReasignacion(
 
   // ── 1. registros_de_llamada ─────────────────────────────────────────────────
   try {
-    const res = await withRetry(
-      () =>
-        drizzleDb
-          .update(llamadas)
-          .set({
-            ...(fields.closerMail && { closer_mail: fields.closerMail }),
-            ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
-            ...(fields.nombreLead && { nombre_lead: fields.nombreLead }),
-            ...(fields.telefonoLead && { phone_raw_format: fields.telefonoLead }),
-          })
-          .where(
-            and(
-              eq(llamadas.id_user_ghl, contactId),
-              ...(idCuenta ? [eq(llamadas.id_cuenta, idCuenta)] : []),
+    const llamadasPayload = {
+      ...(fields.closerMail && { closer_mail: fields.closerMail }),
+      ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
+      ...(fields.nombreLead && { nombre_lead: fields.nombreLead }),
+      ...(fields.telefonoLead && { phone_raw_format: fields.telefonoLead }),
+    };
+    if (Object.keys(llamadasPayload).length === 0) {
+      console.warn(`[${label}] registros_de_llamada: sin campos a actualizar, omitiendo UPDATE`);
+    } else {
+      const res = await withRetry(
+        () =>
+          drizzleDb
+            .update(llamadas)
+            .set(llamadasPayload)
+            .where(
+              and(
+                eq(llamadas.id_user_ghl, contactId),
+                ...(idCuenta ? [eq(llamadas.id_cuenta, idCuenta)] : []),
+              ),
             ),
-          ),
-      { label: `${label}/llamadas` },
-    );
-    results.registros_de_llamada = (res as unknown as { rowCount?: number })?.rowCount ?? 0;
+        { label: `${label}/llamadas` },
+      );
+      results.registros_de_llamada = (res as unknown as { rowCount?: number })?.rowCount ?? 0;
+    }
   } catch (err) {
     console.error(`[${label}] Error actualizando registros_de_llamada:`, err);
   }
 
   // ── 2. log_llamadas ─────────────────────────────────────────────────────────
   try {
-    const res = await withRetry(
-      () =>
-        drizzleDb
-          .update(logLlamadas)
-          .set({
-            ...(fields.closerMail && { closer_mail: fields.closerMail }),
-            ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
-          })
-          .where(
-            and(
-              eq(logLlamadas.contact_id_ghl, contactId),
-              ...(idCuenta ? [eq(logLlamadas.id_cuenta, idCuenta)] : []),
+    const logLlamadasPayload = {
+      ...(fields.closerMail && { closer_mail: fields.closerMail }),
+      ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
+    };
+    if (Object.keys(logLlamadasPayload).length === 0) {
+      console.warn(`[${label}] log_llamadas: sin campos a actualizar, omitiendo UPDATE`);
+    } else {
+      const res = await withRetry(
+        () =>
+          drizzleDb
+            .update(logLlamadas)
+            .set(logLlamadasPayload)
+            .where(
+              and(
+                eq(logLlamadas.contact_id_ghl, contactId),
+                ...(idCuenta ? [eq(logLlamadas.id_cuenta, idCuenta)] : []),
+              ),
             ),
-          ),
-      { label: `${label}/log_llamadas` },
-    );
-    results.log_llamadas = (res as unknown as { rowCount?: number })?.rowCount ?? 0;
+        { label: `${label}/log_llamadas` },
+      );
+      results.log_llamadas = (res as unknown as { rowCount?: number })?.rowCount ?? 0;
+    }
   } catch (err) {
     console.error(`[${label}] Error actualizando log_llamadas:`, err);
   }
