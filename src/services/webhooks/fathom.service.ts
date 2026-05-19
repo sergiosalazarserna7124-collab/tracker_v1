@@ -458,7 +458,7 @@ export async function processFathomCall(
     const [existing] = await withRetry(
       () =>
         drizzleDb
-          .select({ id: agendas.id_registro_agenda, closer: agendas.closer })
+          .select({ id: agendas.id_registro_agenda, closer: agendas.closer, categoria: agendas.categoria })
           .from(agendas)
           .where(
             and(
@@ -475,6 +475,9 @@ export async function processFathomCall(
       // ── UPDATE: registro previo encontrado ───────────────────────────────
       // link_llamada siempre se incluye para garantizar que el objeto .set()
       // nunca quede vacío (Drizzle lanza error con {}).
+      const nuevaCategoria = classifier ? (funnelStageFromReglas ?? classifier.categoria) : null;
+      const categoriaChanged = nuevaCategoria !== null && nuevaCategoria !== existing.categoria;
+
       await withRetry(
         () =>
           drizzleDb
@@ -486,8 +489,13 @@ export async function processFathomCall(
               fathom_share_url: shareUrl,
               fathom_processed_at: new Date(),
               fathom_ingestion_source: ingestionSource,
+              // AUT-270: registrar re-ingesta solo cuando la categoría cambia en un UPDATE
+              ...(categoriaChanged && {
+                fathom_reingest_at: new Date(),
+                categoria_previa: existing.categoria,
+              }),
               ...(classifier && {
-                categoria: funnelStageFromReglas ?? classifier.categoria,
+                categoria: nuevaCategoria,
                 cash_collected: classifier.cash_collected,
                 facturacion: classifier.facturacion,
               }),

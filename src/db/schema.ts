@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique, index, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 /**
@@ -34,6 +34,10 @@ export const agendas = pgTable("resumenes_diarios_agendas", {
   fathom_processed_at: timestamp("fathom_processed_at", { withTimezone: true }),
   fathom_ingestion_source: text("fathom_ingestion_source"),
   transcripcion_fathom: text("transcripcion_fathom"),
+  // ── AUT-270: re-ingesta Fathom — corrección de categoría ─────────────────
+  // Solo se escribe cuando Fathom actualiza un registro existente Y cambia la categoría.
+  fathom_reingest_at: timestamp("fathom_reingest_at", { withTimezone: true }),
+  categoria_previa: text("categoria_previa"),
 }, (table) => [
   // ── Índices parciales para lookup en effectivePath() (categoria = PDTE) ──
   index("idx_agendas_cuenta_contact_pdte")
@@ -139,6 +143,8 @@ export const cuentas = pgTable("cuentas", {
   // NULL = cuenta sin chatbot (usa primer mensaje lead absoluto).
   // Valor ej: '🤝', '✅' — texto/emoji que aparece en el mensaje de transferencia.
   chatbot_transfer_marker: text("chatbot_transfer_marker"),
+  // ── V8: reglas de deduplicación inteligente de closers ────────────────────
+  closer_merge_rules: jsonb("closer_merge_rules"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────
@@ -220,3 +226,19 @@ export const ghlPendingActions = pgTable("ghl_pending_actions", {
   last_error: text("last_error"),
   resolved_at: timestamp("resolved_at", { withTimezone: true }), // NULL = pendiente
 });
+
+// ── Tabla: sugerencias de deduplicación de closers ────────────────────────────
+// 'pending' | 'accepted' | 'rejected'
+export const closerMergeSuggestions = pgTable("closer_merge_suggestions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  id_cuenta: integer("id_cuenta").notNull().references(() => cuentas.id_cuenta, { onDelete: "cascade" }),
+  candidatos: jsonb("candidatos").notNull(),
+  // [{email?: string, nombre: string, conteo: number}]
+  canonical_email: text("canonical_email"),
+  canonical_nombre: text("canonical_nombre").notNull(),
+  status: text("status").notNull().default("pending"),
+  resuelto_at: timestamp("resuelto_at", { withTimezone: true }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index("idx_cms_cuenta_status").on(table.id_cuenta, table.status),
+]);
