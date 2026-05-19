@@ -135,6 +135,10 @@ export const cuentas = pgTable("cuentas", {
   metricas_manual_data: jsonb("metricas_manual_data"),
   // ── Estado de la cuenta (activo | cancelado | trial | etc.) ───────────────
   estado_cuenta: text("estado_cuenta"),
+  // ── V7: detección de transferencia chatbot→humano para primer_msg_lead_at ──
+  // NULL = cuenta sin chatbot (usa primer mensaje lead absoluto).
+  // Valor ej: '🤝', '✅' — texto/emoji que aparece en el mensaje de transferencia.
+  chatbot_transfer_marker: text("chatbot_transfer_marker"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

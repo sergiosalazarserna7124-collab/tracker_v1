@@ -611,33 +611,80 @@ interface BackfillPrimerMsgResult {
 /**
  * Backfill diario de primer_msg_lead_at en chats_logs.
  *
- * Para cada fila con primer_msg_lead_at NULL, extrae el timestamp mínimo
- * del primer mensaje de role="lead" dentro del JSONB chat[].
+ * Para cada fila con primer_msg_lead_at NULL, calcula el timestamp del primer
+ * mensaje de role="lead" dentro del JSONB chat[].
+ *
+ * Cuentas CON chatbot_transfer_marker: usa el primer mensaje lead DESPUÉS del
+ * mensaje de transferencia chatbot→humano. Si el marker no está en el chat,
+ * cae al primer mensaje lead absoluto (fallback seguro).
+ *
+ * Cuentas SIN chatbot_transfer_marker: comportamiento original (primer mensaje
+ * lead absoluto).
+ *
  * Operación idempotente: solo escribe en filas con valor NULL.
  *
  * Ejecutar una vez al día como safety net para cubrir cualquier webhook
  * que llegue sin dateAdded o que sea insertado por fuentes externas (n8n, etc.).
  */
 export async function backfillPrimerMsgLeadAt(): Promise<BackfillPrimerMsgResult> {
-  // Filas con NULL que tienen al menos un mensaje lead con timestamp
-  const updateResult = await pgPool.query<{ count: string }>(
-    `UPDATE chats_logs
+  // ── 1. Cuentas CON chatbot_transfer_marker ─────────────────────────────────
+  // Primer mensaje lead DESPUÉS del marker de transferencia.
+  // Si el marker no aparece en el chat → cae al primer lead absoluto (COALESCE -1).
+  const chatbotResult = await pgPool.query<{ id_evento: number }>(
+    `UPDATE chats_logs cl
      SET primer_msg_lead_at = (
-       SELECT MIN((m->>'timestamp')::timestamptz)
-       FROM jsonb_array_elements(chat) m
-       WHERE m->>'role' = 'lead'
-         AND m->>'timestamp' IS NOT NULL
+       WITH transfer_pos AS (
+         SELECT (t.ordinality - 1)::int AS pos
+         FROM jsonb_array_elements(cl.chat) WITH ORDINALITY AS t(msg, ordinality)
+         WHERE t.msg->>'message' LIKE '%' || c.chatbot_transfer_marker || '%'
+         ORDER BY t.ordinality
+         LIMIT 1
+       )
+       SELECT MIN((t.msg->>'timestamp')::timestamptz)
+       FROM jsonb_array_elements(cl.chat) WITH ORDINALITY AS t(msg, ordinality)
+       WHERE t.msg->>'role' = 'lead'
+         AND t.msg->>'timestamp' IS NOT NULL
+         AND (t.ordinality - 1)::int > COALESCE((SELECT pos FROM transfer_pos), -1)
      )
-     WHERE primer_msg_lead_at IS NULL
-       AND chat IS NOT NULL
+     FROM cuentas c
+     WHERE cl.id_cuenta = c.id_cuenta
+       AND c.chatbot_transfer_marker IS NOT NULL
+       AND c.chatbot_transfer_marker <> ''
+       AND cl.primer_msg_lead_at IS NULL
+       AND cl.chat IS NOT NULL
        AND EXISTS (
-         SELECT 1 FROM jsonb_array_elements(chat) m
+         SELECT 1 FROM jsonb_array_elements(cl.chat) m
          WHERE m->>'role' = 'lead'
            AND m->>'timestamp' IS NOT NULL
        )
-     RETURNING id_evento`,
+     RETURNING cl.id_evento`,
   );
-  const actualizados = updateResult.rowCount ?? 0;
+  const actualizadosChatbot = chatbotResult.rowCount ?? 0;
+
+  // ── 2. Cuentas SIN chatbot_transfer_marker (lógica original) ──────────────
+  const standardResult = await pgPool.query<{ id_evento: number }>(
+    `UPDATE chats_logs cl
+     SET primer_msg_lead_at = (
+       SELECT MIN((m->>'timestamp')::timestamptz)
+       FROM jsonb_array_elements(cl.chat) m
+       WHERE m->>'role' = 'lead'
+         AND m->>'timestamp' IS NOT NULL
+     )
+     FROM cuentas c
+     WHERE cl.id_cuenta = c.id_cuenta
+       AND (c.chatbot_transfer_marker IS NULL OR c.chatbot_transfer_marker = '')
+       AND cl.primer_msg_lead_at IS NULL
+       AND cl.chat IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(cl.chat) m
+         WHERE m->>'role' = 'lead'
+           AND m->>'timestamp' IS NOT NULL
+       )
+     RETURNING cl.id_evento`,
+  );
+  const actualizadosStandard = standardResult.rowCount ?? 0;
+
+  const actualizados = actualizadosChatbot + actualizadosStandard;
 
   // Contar filas que aún quedan NULL (sin mensajes lead — correcto por diseño)
   const pendingResult = await pgPool.query<{ count: string }>(
@@ -646,7 +693,9 @@ export async function backfillPrimerMsgLeadAt(): Promise<BackfillPrimerMsgResult
   const sin_mensajes_lead = parseInt(pendingResult.rows[0]?.count ?? "0", 10);
 
   console.info(
-    `[backfillPrimerMsgLeadAt] actualizados=${actualizados} | sin_mensajes_lead=${sin_mensajes_lead}`,
+    `[backfillPrimerMsgLeadAt] actualizados=${actualizados} ` +
+    `(chatbot=${actualizadosChatbot} standard=${actualizadosStandard}) | ` +
+    `sin_mensajes_lead=${sin_mensajes_lead}`,
   );
 
   return { success: true, actualizados, sin_mensajes_lead };
