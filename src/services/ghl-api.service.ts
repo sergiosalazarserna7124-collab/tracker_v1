@@ -306,6 +306,43 @@ export async function addContactTag(
   }
 }
 
+// ─── DELETE a GHL API: quitar tag del contacto ───────────────────────────────
+
+export async function removeContactTag(
+  contactId: string,
+  bearerToken: string,
+  tag: string,
+): Promise<void> {
+  const url = `https://services.leadconnectorhq.com/contacts/${contactId}/tags`;
+  const authHeader = buildBearerAuth(bearerToken);
+  const requestBody = JSON.stringify({ tags: [tag] });
+
+  const headers = {
+    Authorization: authHeader,
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Version: "2021-07-28",
+  };
+
+  const response = await fetchWithTimeout(url, { method: "DELETE", headers, body: requestBody }, GHL_TIMEOUT_MS);
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error(`[GHL removeContactTag] ERROR ${response.status} removing tag "${tag}" from contact ${contactId}:`, text);
+    if (response.status === 401) {
+      const err = new Error(`GHL_TOKEN_INVALID: remove tag API 401`);
+      (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
+      throw err;
+    }
+    // Best-effort: no lanzar error si el tag ya no existía (404)
+    if (response.status !== 404) {
+      throw new Error(`GHL remove tag API responded ${response.status}: ${text}`);
+    }
+  } else {
+    console.info(`[GHL removeContactTag] Removed tag "${tag}" from contact ${contactId}`);
+  }
+}
+
 // ─── POST a GHL API: agregar nota al contacto ────────────────────────────────
 
 export async function addContactNote(

@@ -9,6 +9,7 @@ import {
   getContactAppointmentInfo,
   safeAddContactTag,
   safeAddContactTags,
+  removeContactTag,
   searchOpportunityByContact,
   updateOpportunityStage,
   parseFunnelStageMap,
@@ -485,6 +486,7 @@ export async function processFathomCall(
       // ── UPDATE: registro previo encontrado ───────────────────────────────
       // link_llamada siempre se incluye para garantizar que el objeto .set()
       // nunca quede vacío (Drizzle lanza error con {}).
+      const previousCategoria = existing.categoria;
       const nuevaCategoria = classifier ? (funnelStageFromReglas ?? classifier.categoria) : null;
       const categoriaChanged = nuevaCategoria !== null && nuevaCategoria !== existing.categoria;
 
@@ -535,6 +537,30 @@ export async function processFathomCall(
       console.info(
         `[Fathom] Updated agenda record ${existing.id} for id_cuenta=${idCuenta}, email=${emailLead}, categoria=${classifier?.categoria ?? "N/A"}`,
       );
+
+      // ── Limpiar tag noshowautoia de GHL si el registro cambió de no_show ──
+      // Cuando el cron marca un lead como no_show y luego llega la grabación de
+      // Fathom, el UPDATE arriba corrige la categoría en BD, pero el tag
+      // 'noshowautoia' queda huérfano en GHL. Aquí lo removemos.
+      if (
+        previousCategoria === "no_show" &&
+        nuevaCategoria !== null &&
+        nuevaCategoria !== "no_show" &&
+        contactId &&
+        account.token_ghl
+      ) {
+        try {
+          await removeContactTag(contactId, account.token_ghl, GHL_TAGS.noshow);
+          console.info(
+            `[Fathom] Removed GHL tag "${GHL_TAGS.noshow}" from contact ${contactId} — re-ingestion changed categoria from no_show → ${nuevaCategoria}`,
+          );
+        } catch (err) {
+          console.error(
+            `[Fathom] Failed to remove noshow GHL tag for contact ${contactId}:`,
+            err,
+          );
+        }
+      }
     } else {
       // ── INSERT: sin registro previo (videollamada sin cita en GHL) ───────
       const now = new Date();
