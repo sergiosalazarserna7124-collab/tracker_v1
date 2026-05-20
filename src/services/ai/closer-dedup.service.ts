@@ -97,7 +97,7 @@ export async function detectDuplicates(idCuenta: number): Promise<number> {
 
      SELECT nombre_closer AS nombre, closer_mail AS email, COUNT(*)::text AS conteo
      FROM registros_de_llamada
-     WHERE id_cuenta = $1 AND nombre_closer IS NOT NULL AND TRIM(nombre_closer) <> ''
+     WHERE id_cuenta = $1::text AND nombre_closer IS NOT NULL AND TRIM(nombre_closer) <> ''
      GROUP BY nombre_closer, closer_mail
 
      UNION ALL
