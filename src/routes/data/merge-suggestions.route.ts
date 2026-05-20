@@ -12,7 +12,7 @@ import { apiKeyAuthHook } from "../../hooks/api-key-auth.hook.js";
 import { db as pgPool } from "../../config/database.js";
 import { drizzleDb } from "../../config/drizzle.js";
 import { cuentas } from "../../db/schema.js";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { detectDuplicates } from "../../services/ai/closer-dedup.service.js";
 import type { CloserMergeRule, CloserAlias } from "../../services/ai/closer-dedup.service.js";
 
@@ -181,74 +181,92 @@ export async function asesoresMergeSuggestionsRoute(app: FastifyInstance) {
         }
       }
 
-      // 3. Backfill histórico
+      // 3-5. Backfill histórico + guardar regla + marcar accepted — todo en una transacción
       const aliasNombres = aliases.map((a) => a.nombre);
       const aliasEmails = aliases.map((a) => a.email).filter((e): e is string => !!e);
 
-      const updatedLogs = await pgPool.query<{ count: string }>(
-        `WITH updated AS (
-           UPDATE log_llamadas
-           SET nombre_closer = $1,
-               closer_mail   = COALESCE($2, closer_mail)
-           WHERE id_cuenta = $3
-             AND (
-               nombre_closer = ANY($4::text[])
-               OR ($5::text[] <> '{}' AND closer_mail = ANY($5::text[]))
-             )
-           RETURNING 1
-         ) SELECT COUNT(*)::text AS count FROM updated`,
-        [canonicalNombre, canonicalEmail, idCuenta, aliasNombres, aliasEmails],
-      );
-
-      const updatedLlamadas = await pgPool.query<{ count: string }>(
-        `WITH updated AS (
-           UPDATE registros_de_llamada
-           SET nombre_closer = $1,
-               closer_mail   = COALESCE($2, closer_mail)
-           WHERE id_cuenta = $3
-             AND (
-               nombre_closer = ANY($4::text[])
-               OR ($5::text[] <> '{}' AND closer_mail = ANY($5::text[]))
-             )
-           RETURNING 1
-         ) SELECT COUNT(*)::text AS count FROM updated`,
-        [canonicalNombre, canonicalEmail, idCuenta, aliasNombres, aliasEmails],
-      );
-
-      const updatedAgendas = await pgPool.query<{ count: string }>(
-        `WITH updated AS (
-           UPDATE resumenes_diarios_agendas
-           SET closer = $1
-           WHERE id_cuenta = $2 AND closer = ANY($3::text[])
-           RETURNING 1
-         ) SELECT COUNT(*)::text AS count FROM updated`,
-        [canonicalNombre, idCuenta, aliasNombres],
-      );
-
-      const totalMerged =
-        Number(updatedLogs.rows[0]?.count ?? 0) +
-        Number(updatedLlamadas.rows[0]?.count ?? 0) +
-        Number(updatedAgendas.rows[0]?.count ?? 0);
-
-      // 4. Agregar regla a cuentas.closer_merge_rules
       const newRule: CloserMergeRule = {
         canonical_email: canonicalEmail ?? null,
         canonical_nombre: canonicalNombre,
         aliases,
       };
 
-      await drizzleDb
-        .update(cuentas)
-        .set({
-          closer_merge_rules: sql`COALESCE(closer_merge_rules, '[]'::jsonb) || ${JSON.stringify([newRule])}::jsonb`,
-        })
-        .where(eq(cuentas.id_cuenta, idCuenta));
+      const txClient = await pgPool.connect();
+      let countLogs = 0;
+      let countLlamadas = 0;
+      let countAgendas = 0;
+      try {
+        await txClient.query("BEGIN");
 
-      // 5. Marcar suggestion como accepted
-      await pgPool.query(
-        `UPDATE closer_merge_suggestions SET status = 'accepted', resuelto_at = NOW() WHERE id = $1`,
-        [id],
-      );
+        // 3a. UPDATE log_llamadas
+        const logsResult = await txClient.query<{ count: string }>(
+          `WITH updated AS (
+             UPDATE log_llamadas
+             SET nombre_closer = $1,
+                 closer_mail   = COALESCE($2, closer_mail)
+             WHERE id_cuenta = $3
+               AND (
+                 nombre_closer = ANY($4::text[])
+                 OR ($5::text[] <> '{}' AND closer_mail = ANY($5::text[]))
+               )
+             RETURNING 1
+           ) SELECT COUNT(*)::text AS count FROM updated`,
+          [canonicalNombre, canonicalEmail, idCuenta, aliasNombres, aliasEmails],
+        );
+        countLogs = Number(logsResult.rows[0]?.count ?? 0);
+
+        // 3b. UPDATE registros_de_llamada
+        const llamadasResult = await txClient.query<{ count: string }>(
+          `WITH updated AS (
+             UPDATE registros_de_llamada
+             SET nombre_closer = $1,
+                 closer_mail   = COALESCE($2, closer_mail)
+             WHERE id_cuenta = $3
+               AND (
+                 nombre_closer = ANY($4::text[])
+                 OR ($5::text[] <> '{}' AND closer_mail = ANY($5::text[]))
+               )
+             RETURNING 1
+           ) SELECT COUNT(*)::text AS count FROM updated`,
+          [canonicalNombre, canonicalEmail, idCuenta, aliasNombres, aliasEmails],
+        );
+        countLlamadas = Number(llamadasResult.rows[0]?.count ?? 0);
+
+        // 3c. UPDATE resumenes_diarios_agendas
+        const agendasResult = await txClient.query<{ count: string }>(
+          `WITH updated AS (
+             UPDATE resumenes_diarios_agendas
+             SET closer = $1
+             WHERE id_cuenta = $2 AND closer = ANY($3::text[])
+             RETURNING 1
+           ) SELECT COUNT(*)::text AS count FROM updated`,
+          [canonicalNombre, idCuenta, aliasNombres],
+        );
+        countAgendas = Number(agendasResult.rows[0]?.count ?? 0);
+
+        // 4. Agregar regla a cuentas.closer_merge_rules
+        await txClient.query(
+          `UPDATE cuentas
+           SET closer_merge_rules = COALESCE(closer_merge_rules, '[]'::jsonb) || $1::jsonb
+           WHERE id_cuenta = $2`,
+          [JSON.stringify([newRule]), idCuenta],
+        );
+
+        // 5. Marcar suggestion como accepted
+        await txClient.query(
+          `UPDATE closer_merge_suggestions SET status = 'accepted', resuelto_at = NOW() WHERE id = $1`,
+          [id],
+        );
+
+        await txClient.query("COMMIT");
+      } catch (err) {
+        await txClient.query("ROLLBACK");
+        throw err;
+      } finally {
+        txClient.release();
+      }
+
+      const totalMerged = countLogs + countLlamadas + countAgendas;
 
       return reply.send({
         ok: true,
@@ -256,9 +274,9 @@ export async function asesoresMergeSuggestionsRoute(app: FastifyInstance) {
           canonical_nombre: canonicalNombre,
           canonical_email: canonicalEmail,
           records_updated: totalMerged,
-          log_llamadas: Number(updatedLogs.rows[0]?.count ?? 0),
-          registros_de_llamada: Number(updatedLlamadas.rows[0]?.count ?? 0),
-          resumenes_diarios_agendas: Number(updatedAgendas.rows[0]?.count ?? 0),
+          log_llamadas: countLogs,
+          registros_de_llamada: countLlamadas,
+          resumenes_diarios_agendas: countAgendas,
         },
       });
     },
