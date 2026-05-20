@@ -31,7 +31,7 @@ export async function cronDetectDuplicatesClosersRoute(app: FastifyInstance) {
       const result = await pgPool.query<{ id_cuenta: number }>(
         `SELECT DISTINCT id_cuenta
          FROM log_llamadas
-         WHERE fecha_y_hora_z >= NOW() - INTERVAL '30 days'
+         WHERE ts >= NOW() - INTERVAL '30 days'
          ORDER BY id_cuenta`,
       );
 
