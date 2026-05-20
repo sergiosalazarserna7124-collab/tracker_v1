@@ -66,7 +66,8 @@ export async function asesoresMergeSuggestionsRoute(app: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Querystring: GetSuggestionsQuery }>, reply: FastifyReply) => {
-      const idCuenta = request.apiKeyAuth!.idCuenta;
+      if (!request.apiKeyAuth) return reply.status(401).send({ ok: false, error: "Unauthorized" });
+      const idCuenta = request.apiKeyAuth.idCuenta;
       const status = request.query.status ?? "pending";
 
       const rows = await pgPool.query<MergeSuggestionRow>(
@@ -103,7 +104,8 @@ export async function asesoresMergeSuggestionsRoute(app: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Params: SuggestionParams; Body: AcceptBody }>, reply: FastifyReply) => {
-      const idCuenta = request.apiKeyAuth!.idCuenta;
+      if (!request.apiKeyAuth) return reply.status(401).send({ ok: false, error: "Unauthorized" });
+      const idCuenta = request.apiKeyAuth.idCuenta;
       const { id } = request.params;
       const { canonical_email: bodyEmail, canonical_nombre: bodyNombre } = request.body ?? {};
 
@@ -276,7 +278,8 @@ export async function asesoresMergeSuggestionsRoute(app: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Params: SuggestionParams }>, reply: FastifyReply) => {
-      const idCuenta = request.apiKeyAuth!.idCuenta;
+      if (!request.apiKeyAuth) return reply.status(401).send({ ok: false, error: "Unauthorized" });
+      const idCuenta = request.apiKeyAuth.idCuenta;
       const { id } = request.params;
 
       const check = await pgPool.query<{ id: number; status: string }>(
@@ -308,7 +311,8 @@ export async function asesoresMergeSuggestionsRoute(app: FastifyInstance) {
       preHandler: [apiKeyAuthHook],
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const idCuenta = request.apiKeyAuth!.idCuenta;
+      if (!request.apiKeyAuth) return reply.status(401).send({ ok: false, error: "Unauthorized" });
+      const idCuenta = request.apiKeyAuth.idCuenta;
 
       try {
         const suggestionsCreated = await detectDuplicates(idCuenta);
