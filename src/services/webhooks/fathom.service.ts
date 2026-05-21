@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, or, desc, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { db as pgPool } from "../../config/database.js";
 import { agendas, cuentas, eventosHuerfanos } from "../../db/schema.js";
@@ -473,8 +473,14 @@ export async function processFathomCall(
           .from(agendas)
           .where(
             and(
-              eq(agendas.email_lead, emailLead),
               eq(agendas.id_cuenta, idCuenta),
+              // Buscar por email_lead O por ghl_contact_id para evitar crear duplicados
+              // cuando GHL crea el registro sin email (solo con contactId) y Fathom
+              // llega después con el email → sin este OR se insertaba un segundo registro.
+              or(
+                eq(agendas.email_lead, emailLead),
+                ...(contactId ? [eq(agendas.ghl_contact_id, contactId)] : []),
+              ),
             ),
           )
           .orderBy(desc(agendas.fecha))
