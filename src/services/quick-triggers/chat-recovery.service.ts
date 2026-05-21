@@ -417,6 +417,14 @@ export async function executeChatRecovery(
         .sort();
       const primerMsgLeadAt = leadTimestamps[0] ?? null;
 
+      // primer_msg_at: timestamp mínimo de cualquier mensaje (inbound o outbound).
+      // Inmutable — usado para filtro de fecha en el dashboard (AUT-316).
+      const allTimestamps = chatMessages
+        .filter((m) => m.timestamp)
+        .map((m) => m.timestamp)
+        .sort();
+      const primerMsgAt = allTimestamps[0] ?? new Date().toISOString();
+
       // 5. Upsert en chats_logs con deduplicación por _ghl_message_id
       // Insertamos todos los mensajes nuevos usando un CASE WHEN que comprueba
       // si cada _ghl_message_id ya existe en el array existente
@@ -426,8 +434,8 @@ export async function executeChatRecovery(
         () =>
           db.query(
             `INSERT INTO chats_logs
-               (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, primer_msg_lead_at)
-             VALUES ($1, $2, $3, $4, NOW(), 'activo', NULL, $5::jsonb, $6::timestamptz)
+               (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, primer_msg_lead_at, primer_msg_at)
+             VALUES ($1, $2, $3, $4, NOW(), 'activo', NULL, $5::jsonb, $6::timestamptz, $7::timestamptz)
              ON CONFLICT (chatid) DO UPDATE SET
                chat = (
                  SELECT jsonb_agg(msg ORDER BY (msg->>'timestamp') ASC NULLS LAST)
@@ -446,7 +454,9 @@ export async function executeChatRecovery(
                fecha_y_hora_z = NOW(),
                nombre_lead    = EXCLUDED.nombre_lead,
                -- Inmutable: solo se escribe si aún no existe (primer mensaje lead)
-               primer_msg_lead_at = COALESCE(chats_logs.primer_msg_lead_at, EXCLUDED.primer_msg_lead_at)`,
+               primer_msg_lead_at = COALESCE(chats_logs.primer_msg_lead_at, EXCLUDED.primer_msg_lead_at),
+               -- Inmutable: solo se escribe si aún no existe (primer mensaje cualquier dir.)
+               primer_msg_at = COALESCE(chats_logs.primer_msg_at, EXCLUDED.primer_msg_at)`,
             [
               idCuenta,
               conv.contactName,
@@ -454,6 +464,7 @@ export async function executeChatRecovery(
               conv.conversationId,
               messagesJson,
               primerMsgLeadAt,
+              primerMsgAt,
             ],
           ),
         { label: `chatRecovery/upsert/${conv.conversationId}` },

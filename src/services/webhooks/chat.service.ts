@@ -465,12 +465,20 @@ export async function processChatWebhook(
     ? new Date(dateAdded).toISOString()
     : null;
 
+  // primer_msg_at: timestamp del primer mensaje de la conversación (cualquier dirección).
+  // Inmutable — se establece en el INSERT y nunca se actualiza (AUT-316).
+  // Usado como filtro de fecha en el dashboard para incluir conversaciones
+  // outbound-only que tienen primer_msg_lead_at = NULL.
+  const primerMsgAt = dateAdded
+    ? new Date(dateAdded).toISOString()
+    : new Date().toISOString();
+
   await withRetry(
     () =>
       db.query(
         `INSERT INTO chats_logs
-           (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, asesor_asignado, origen, primer_msg_lead_at)
-         VALUES ($1, $2, $3, $4, NOW(), 'activo', $5, $6::jsonb, $8, $9, $10::timestamptz)
+           (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, asesor_asignado, origen, primer_msg_lead_at, primer_msg_at)
+         VALUES ($1, $2, $3, $4, NOW(), 'activo', $5, $6::jsonb, $8, $9, $10::timestamptz, $11::timestamptz)
          ON CONFLICT (chatid) DO UPDATE SET
            -- Solo append si el messageId no está ya en el array (deduplicación)
            chat = CASE
@@ -488,7 +496,9 @@ export async function processChatWebhook(
              ELSE chats_logs.asesor_asignado
            END,
            -- Inmutable: solo se escribe si aún no existe (primer mensaje lead)
-           primer_msg_lead_at = COALESCE(chats_logs.primer_msg_lead_at, EXCLUDED.primer_msg_lead_at)`,
+           primer_msg_lead_at = COALESCE(chats_logs.primer_msg_lead_at, EXCLUDED.primer_msg_lead_at),
+           -- Inmutable: solo se escribe si aún no existe (primer mensaje cualquier dir.)
+           primer_msg_at = COALESCE(chats_logs.primer_msg_at, EXCLUDED.primer_msg_at)`,
         [
           idCuenta,
           contactName,
@@ -500,6 +510,7 @@ export async function processChatWebhook(
           closerName ?? null,
           channelType,
           primerMsgLeadAt,
+          primerMsgAt,
         ],
       ),
     { label: "chat/upsertChatLog" },
