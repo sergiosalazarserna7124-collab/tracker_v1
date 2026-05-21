@@ -122,6 +122,7 @@ export const cuentas = pgTable("cuentas", {
   locationid: text("locationid"),
   token_ghl: text("token_ghl"),
   token_ghl_status: text("token_ghl_status").default("unknown"), // 'ok' | 'invalid' | 'unknown'
+  ghl_app_uninstalled_at: timestamp("ghl_app_uninstalled_at", { withTimezone: true }),
   prompt_ventas: text("prompt_ventas"),
   twilio_sid: text("twilio_sid"),
   auth_twilio: text("auth_twilio"),

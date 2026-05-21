@@ -60,8 +60,9 @@ async function getAccountByLocationIdFallback(locationId: string) {
         locationid: string | null;
         token_ghl: string | null;
         estado_cuenta: string | null;
+        ghl_app_uninstalled_at?: Date | null;
       }>(
-        `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta
+        `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta, ghl_app_uninstalled_at
          FROM cuentas
          WHERE locationid ILIKE $1
          LIMIT 1`,
@@ -99,8 +100,9 @@ async function getAccountByLocationIdFallback(locationId: string) {
             locationid: string | null;
             token_ghl: string | null;
             estado_cuenta: string | null;
+            ghl_app_uninstalled_at?: Date | null;
           }>(
-            `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta
+            `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta, ghl_app_uninstalled_at
              FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
             [oauthRows[0].id_cuenta],
           ),
@@ -262,6 +264,19 @@ export async function processChatWebhook(
   console.log("[Chat] conversationId    :", body.conversationId ?? "(undefined)");
   console.log("[Chat] contactId         :", body.contactId ?? "(undefined)");
 
+  // ── 0. Evento UNINSTALL — marcar cuenta como desconectada ────────────────
+  if (body.type === "UNINSTALL") {
+    console.log(`[Chat] UNINSTALL recibido para locationId="${locationId}" — marcando cuenta como desconectada`);
+    void saveRawWebhook(body, locationId, false, "app_uninstalled");
+    if (locationId) {
+      await drizzleDb
+        .update(cuentas)
+        .set({ ghl_app_uninstalled_at: new Date() })
+        .where(eq(cuentas.locationid, locationId));
+    }
+    return { success: true, data: { skipped: true, reason: "app_uninstalled" } };
+  }
+
   // ── 1. Filtro de n8n: solo text/plain + delivered + sin attachments ──────
   const contentType = body.contentType ?? "";
   const status = body.status ?? "";
@@ -346,6 +361,17 @@ export async function processChatWebhook(
 
   const idCuenta = account.id_cuenta;
   const tokenGhl = account.token_ghl ?? "";
+
+  // ── 5b-pre. Auto-limpiar flag de desconexión si la app fue reinstalada ───
+  // Cuando llega cualquier mensaje real después de un UNINSTALL, significa que
+  // el cliente reinstalió la app → limpiamos ghl_app_uninstalled_at.
+  if (account.ghl_app_uninstalled_at) {
+    await drizzleDb
+      .update(cuentas)
+      .set({ ghl_app_uninstalled_at: null })
+      .where(eq(cuentas.id_cuenta, idCuenta));
+    console.log(`[Chat] App reinstalada — limpiando ghl_app_uninstalled_at para cuenta id=${idCuenta}`);
+  }
 
   // ── 5b. Rechazar silenciosamente si la cuenta está cancelada ─────────────
   // Responde 200 a GHL pero no persiste nada — evita DB bloat por webhooks
