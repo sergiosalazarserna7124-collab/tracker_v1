@@ -10,6 +10,7 @@ import { cronSincronizarAdsRoute } from "./routes/cron/sincronizar-ads.route.js"
 import { cronDetectDuplicatesClosersRoute } from "./routes/cron/detect-duplicates-closers.route.js";
 import { cronSpeedToLeadAlertsRoute } from "./routes/cron/speed-to-lead-alerts.route.js";
 import { cronSpeedToLeadChatAlertsRoute } from "./routes/cron/speed-to-lead-chat-alerts.route.js";
+import { cronWebhookRecoveryRoute } from "./routes/cron/webhook-recovery.route.js";
 import { externalDataRoute } from "./routes/webhooks/external-data.route.js";
 import { orphanRoute } from "./routes/webhooks/orphan.route.js";
 import { reasignacionRoute } from "./routes/webhooks/reasignacion.route.js";
@@ -42,6 +43,7 @@ export async function buildApp() {
   await app.register(cronDetectDuplicatesClosersRoute, { prefix: "/cron" });
   await app.register(cronSpeedToLeadAlertsRoute, { prefix: "/cron" });
   await app.register(cronSpeedToLeadChatAlertsRoute, { prefix: "/cron" });
+  await app.register(cronWebhookRecoveryRoute, { prefix: "/cron" });
   await app.register(videoRecoveryRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatRecoveryRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatWebhookRoute, { prefix: "/webhooks" });
