@@ -279,8 +279,47 @@ async function handlePendiente(body: GhlBodyPayload, tokenGhl?: string): Promise
     id = existingId;
     action = "updated";
   } else {
-    id = await insertAgenda(fields, "PDTE");
-    action = "created";
+    // Verificar si hay un no_show previo del mismo contacto antes de insertar
+    let noShowId: number | null = null;
+    if (fields.contactId) {
+      try {
+        const { rows: noShowRows } = await db.query<{ id_registro_agenda: number }>(
+          `SELECT id_registro_agenda FROM resumenes_diarios_agendas
+           WHERE id_cuenta = $1 AND ghl_contact_id = $2
+             AND categoria = 'no_show'
+           ORDER BY fecha_reunion DESC LIMIT 1`,
+          [fields.idCuenta, fields.contactId],
+        );
+        noShowId = noShowRows.length > 0 ? noShowRows[0].id_registro_agenda : null;
+      } catch (dbErr) {
+        console.error("ERROR en lookup no_show (handlePendiente):", dbErr);
+        noShowId = null; // fallback: continuar con insert normal
+      }
+    }
+
+    if (noShowId !== null) {
+      // Reutilizar registro: resetear a PDTE con nueva fecha
+      await withRetry(
+        () =>
+          db.query(
+            `UPDATE resumenes_diarios_agendas
+             SET categoria = 'PDTE',
+                 fecha_reunion = COALESCE($2, fecha_reunion),
+                 fecha = NOW()
+             WHERE id_registro_agenda = $1`,
+            [noShowId, fields.fechaReunion],
+          ),
+        { label: "handlePendiente/reuse-noshow" },
+      );
+      id = noShowId;
+      action = "updated";
+      console.info(
+        `[GHL handlePendiente] No-show previo reutilizado — id=${noShowId}, contacto=${fields.contactId}`,
+      );
+    } else {
+      id = await insertAgenda(fields, "PDTE");
+      action = "created";
+    }
   }
 
   const tagged = await applyGhlTag(
