@@ -216,7 +216,16 @@ async function enviarAlerta60m(chat: ChatPendiente): Promise<boolean> {
   try {
     await addContactNote(chat.id_lead, chat.token_ghl, nota);
   } catch (err) {
-    // Si GHL falla, revertir el timestamp para que la próxima corrida reintente.
+    const errMsg = (err as Error).message ?? "";
+    // Error permanente: el contacto no existe en GHL (fue eliminado o nunca existió).
+    // Mantener el lock para no reintentar indefinidamente.
+    if (errMsg.includes("Contact not found") || /responded 4[0-9][0-9]:/.test(errMsg)) {
+      console.warn(
+        `[stl-chat] Contacto inexistente en GHL, saltando evento=${chat.id_evento}: ${errMsg}`,
+      );
+      throw new Error(`SIN_GHL_CONTACT: evento=${chat.id_evento} contacto_inexistente`);
+    }
+    // Error transitorio (timeout, 5xx): revertir lock para que reintente en la próxima corrida.
     await pgPool.query(
       `UPDATE chats_logs SET chat_stl_alerted_at = NULL WHERE id_evento = $1`,
       [chat.id_evento],
@@ -273,7 +282,16 @@ async function enviarAlerta4h(chat: ChatPendiente): Promise<boolean> {
   try {
     await addContactNote(chat.id_lead, chat.token_ghl, nota);
   } catch (err) {
-    // Si GHL falla, revertir el timestamp para que la próxima corrida reintente.
+    const errMsg = (err as Error).message ?? "";
+    // Error permanente: el contacto no existe en GHL.
+    // Mantener el lock para no reintentar indefinidamente.
+    if (errMsg.includes("Contact not found") || /responded 4[0-9][0-9]:/.test(errMsg)) {
+      console.warn(
+        `[stl-chat] Contacto inexistente en GHL, saltando evento=${chat.id_evento}: ${errMsg}`,
+      );
+      throw new Error(`SIN_GHL_CONTACT: evento=${chat.id_evento} contacto_inexistente`);
+    }
+    // Error transitorio (timeout, 5xx): revertir lock para que reintente en la próxima corrida.
     await pgPool.query(
       `UPDATE chats_logs SET chat_stl_4h_alerted_at = NULL WHERE id_evento = $1`,
       [chat.id_evento],
