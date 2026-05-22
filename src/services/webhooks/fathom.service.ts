@@ -1,7 +1,7 @@
 import { eq, and, or, desc, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { db as pgPool } from "../../config/database.js";
-import { agendas, cuentas, eventosHuerfanos } from "../../db/schema.js";
+import { agendas, cuentas, eventosHuerfanos, logLlamadas } from "../../db/schema.js";
 import {
   addContactNote,
   searchContactByEmail,
@@ -605,6 +605,35 @@ export async function processFathomCall(
       console.info(
         `[Fathom] Inserted new agenda record for id_cuenta=${idCuenta}, email=${emailLead}, categoria=${classifier?.categoria ?? "N/A"}`,
       );
+
+      // ── Registrar en log_llamadas como Lead Generado ─────────────────────────
+      // Las videollamadas de Fathom sin cita previa en GHL crean un nuevo lead.
+      // Sin este INSERT, el contador "Leads Generados" del dashboard no los incluye.
+      try {
+        await withRetry(
+          () =>
+            drizzleDb.insert(logLlamadas).values({
+              id_registro: null,
+              id_cuenta: idCuenta,
+              mail_lead: emailLead,
+              contact_id_ghl: contactId,
+              nombre_lead: contactName,
+              tipo_evento: "contacto_creado",
+              closer_mail: closerEmail ?? closerEmailFromGhl ?? null,
+              nombre_closer: closerName ?? null,
+              creativo_origen: utmContent ?? null,
+            }),
+          { label: "Fathom/insertLogLlamada" },
+        );
+        console.info(
+          `[Fathom] Inserted log_llamadas (contacto_creado) for id_cuenta=${idCuenta}, email=${emailLead}`,
+        );
+      } catch (logErr) {
+        console.error(
+          `[Fathom] Error insertando en log_llamadas para email=${emailLead}, id_cuenta=${idCuenta}:`,
+          logErr,
+        );
+      }
     }
   } catch (err) {
     console.error(
