@@ -49,34 +49,56 @@ export async function logWebhookReceived(input: LogWebhookInput): Promise<bigint
 
 /**
  * Actualiza el registro con el resultado del procesamiento.
- * @param logId   id retornado por logWebhookReceived
+ * @param logId      id retornado por logWebhookReceived
  * @param resultado  objeto con el resultado (action, ids, etc.)
- * @param error   mensaje de error si falló
- * @param ms      milisegundos que tardó el procesamiento
+ * @param error      mensaje de error si falló
+ * @param ms         milisegundos que tardó el procesamiento
+ * @param id_cuenta  cuenta asociada al evento (si se conoce tras el procesamiento)
  */
 export async function logWebhookResult(
   logId: bigint | null,
   resultado: unknown,
   error: string | null,
   ms: number,
+  id_cuenta?: number | null,
 ): Promise<void> {
   if (!logId) return;
   try {
-    await db.query(
-      `UPDATE webhook_events_log
-       SET procesado     = $1,
-           resultado     = $2::jsonb,
-           error         = $3,
-           processing_ms = $4
-       WHERE id = $5`,
-      [
-        error === null,
-        JSON.stringify(resultado ?? {}),
-        error,
-        ms,
-        logId,
-      ],
-    );
+    if (id_cuenta != null) {
+      await db.query(
+        `UPDATE webhook_events_log
+         SET procesado     = $1,
+             resultado     = $2::jsonb,
+             error         = $3,
+             processing_ms = $4,
+             id_cuenta     = $5
+         WHERE id = $6`,
+        [
+          error === null,
+          JSON.stringify(resultado ?? {}),
+          error,
+          ms,
+          id_cuenta,
+          logId,
+        ],
+      );
+    } else {
+      await db.query(
+        `UPDATE webhook_events_log
+         SET procesado     = $1,
+             resultado     = $2::jsonb,
+             error         = $3,
+             processing_ms = $4
+         WHERE id = $5`,
+        [
+          error === null,
+          JSON.stringify(resultado ?? {}),
+          error,
+          ms,
+          logId,
+        ],
+      );
+    }
   } catch (err) {
     console.warn("[webhook-logger] Error actualizando resultado:", err instanceof Error ? err.message : err);
   }

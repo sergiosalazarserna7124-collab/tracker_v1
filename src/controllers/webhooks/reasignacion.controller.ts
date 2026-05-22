@@ -23,7 +23,8 @@ export async function handleReasignacion(
   const logId = await logWebhookReceived({ fuente: "reasignacion", tipo_evento: "reasignacion", payload_raw: request.body });
   const t0 = Date.now();
   const result = await processReasignacion(eventBody);
-  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0);
+  const idCuentaReasig = (result.data as { id_cuenta?: number | null } | undefined)?.id_cuenta ?? null;
+  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0, idCuentaReasig);
 
   if (!result.success) {
     return reply.status(422).send({ success: false, message: result.error ?? "Failed to process reasignacion" });

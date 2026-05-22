@@ -511,6 +511,7 @@ async function followUpPath(
     success: true,
     data: {
       id_registro: idRegistro,
+      id_cuenta: idCuenta,
       action: existing ? "updated" : "created",
       path: "followUp",
     },
@@ -633,7 +634,7 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
 
     if (existingPdte) {
       console.info(`[Twilio] Registro PDTE ya existe (id=${existingPdte.id_registro}), ignorando webhook duplicado.`);
-      return { success: true, data: { id_registro: existingPdte.id_registro, action: "already_exists" } };
+      return { success: true, data: { id_registro: existingPdte.id_registro, id_cuenta: idCuenta, action: "already_exists" } };
     }
 
     const [inserted] = await withRetry(
@@ -674,7 +675,7 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
       estadoResultado: "pdte",
     });
 
-    return { success: true, data: { id_registro: idRegistro } };
+    return { success: true, data: { id_registro: idRegistro, id_cuenta: idCuenta } };
   } catch (err) {
     console.error("[Twilio] Error insertando registro de llamada:", err);
     return { success: false, error: "Database error while inserting call record" };
@@ -1335,6 +1336,7 @@ async function effectivePath(
     success: true,
     data: {
       id_registro: idRegistro,
+      id_cuenta: idCuenta,
       action: existing && estadoActivo ? "updated" : "created",
       path: "effective",
       estado: effectiveEstado,

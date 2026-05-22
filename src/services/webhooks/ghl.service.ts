@@ -9,6 +9,7 @@ import type { ServiceResult } from "../../types/index.js";
 
 interface AgendaResult {
   id_registro_agenda: number;
+  id_cuenta?: number | null;
   categoria: string;
   action: "created" | "updated";
   tagged: boolean;
@@ -480,18 +481,26 @@ export async function processGhlWebhook(
       }
     } catch { /* best-effort */ }
 
+    const idCuentaGhl = !isNaN(idCuentaRaw) && idCuentaRaw > 0 ? idCuentaRaw : null;
+
     switch (categoria) {
-      case "pendiente":
+      case "pendiente": {
         console.log("🔀 [GHL webhook] Entrando a handlePendiente");
-        return { success: true, data: await handlePendiente(body, tokenGhl) };
+        const data = await handlePendiente(body, tokenGhl);
+        return { success: true, data: { ...data, id_cuenta: idCuentaGhl } };
+      }
 
-      case "cancelada":
+      case "cancelada": {
         console.log("🔀 [GHL webhook] Entrando a handleCancelada");
-        return { success: true, data: await handleCancelada(body) };
+        const data = await handleCancelada(body);
+        return { success: true, data: { ...data, id_cuenta: idCuentaGhl } };
+      }
 
-      case "reagenda":
+      case "reagenda": {
         console.log("🔀 [GHL webhook] Entrando a handleReagenda");
-        return { success: true, data: await handleReagenda(body, tokenGhl) };
+        const data = await handleReagenda(body, tokenGhl);
+        return { success: true, data: { ...data, id_cuenta: idCuentaGhl } };
+      }
 
       default:
         console.warn(

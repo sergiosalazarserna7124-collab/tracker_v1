@@ -30,7 +30,8 @@ export async function handleTwilioWebhook(
   const logId = await logWebhookReceived({ fuente: "twilio", tipo_evento: "pdte", payload_raw: request.body });
   const t0 = Date.now();
   const result = await processTwilioWebhook(eventBody);
-  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0);
+  const idCuentaPdte = (result.data as { id_cuenta?: number | null } | undefined)?.id_cuenta ?? null;
+  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0, idCuentaPdte);
 
   if (!result.success) {
     return reply.status(422).send({ success: false, message: result.error ?? "Failed to process call event" });
@@ -58,7 +59,8 @@ export async function handleNoAnswerCall(
   const logId = await logWebhookReceived({ fuente: "twilio", tipo_evento: "no_contesto", payload_raw: request.body });
   const t0 = Date.now();
   const result = await processNoAnswerCall(eventBody);
-  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0);
+  const idCuentaNoContesto = (result.data as { id_cuenta?: number | null } | undefined)?.id_cuenta ?? null;
+  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0, idCuentaNoContesto);
 
   if (!result.success) {
     return reply.status(422).send({ success: false, message: result.error ?? "Failed to process no-answer event" });
@@ -87,7 +89,10 @@ export async function handleEffectiveCall(
   const logId = await logWebhookReceived({ fuente: "twilio", tipo_evento: "efectiva", payload_raw: request.body });
   const t0 = Date.now();
   processEffectiveCall(eventBody)
-    .then((res) => logWebhookResult(logId, res?.data ?? null, res?.success ? null : (res?.error ?? "error"), Date.now() - t0))
+    .then((res) => {
+      const idCuentaEfectiva = (res?.data as { id_cuenta?: number | null } | undefined)?.id_cuenta ?? null;
+      return logWebhookResult(logId, res?.data ?? null, res?.success ? null : (res?.error ?? "error"), Date.now() - t0, idCuentaEfectiva);
+    })
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       logWebhookResult(logId, null, msg, Date.now() - t0).catch(() => {});

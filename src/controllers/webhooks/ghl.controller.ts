@@ -31,7 +31,8 @@ export async function handleGhlWebhook(
 
   const t0 = Date.now();
   const result = await processGhlWebhook(body);
-  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0);
+  const idCuentaGhl = (result.data as { id_cuenta?: number | null } | undefined)?.id_cuenta ?? null;
+  await logWebhookResult(logId, result.data ?? null, result.success ? null : (result.error ?? "error"), Date.now() - t0, idCuentaGhl);
 
   if (!result.success) {
     return reply.status(422).send({
