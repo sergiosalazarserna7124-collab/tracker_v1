@@ -792,8 +792,11 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     if (errMsg.includes("Recording download responded 404")) {
-      console.warn("[Effective] Recording aún no procesado por Twilio (404) — skip sin actualizar GHL ni BD");
-      return { success: true, data: { path: "skip-recording-not-ready" } };
+      // AUT-378: Recording aún no disponible en Twilio (race condition en llamadas largas).
+      // Retornar success:false para que el webhook-recovery cron reintente en 5-10 min,
+      // cuando el recording ya debería estar procesado por Twilio.
+      console.warn("[Effective] Recording Twilio 404 — marcando para retry automático vía webhook-recovery");
+      return { success: false, error: "recording-not-ready-404" };
     }
     console.error("[Effective] Error en pipeline Twilio:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, null, null, "Effective");
