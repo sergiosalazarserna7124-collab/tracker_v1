@@ -3,6 +3,11 @@ import { drizzleDb } from "../../config/drizzle.js";
 import { cuentas } from "../../db/schema.js";
 import { eq } from "drizzle-orm";
 import type { MetricaConfig, MetricaConfigChat, ChatMetricaResultado } from "../../types/metricas.js";
+import {
+  esCalificado,
+  parseCriteriosCalificacion,
+  type CriteriosCalificacion,
+} from "./criterios-calificacion.utils.js";
 
 // ─── Tipos internos ───────────────────────────────────────────────────────────
 
@@ -17,6 +22,7 @@ interface ChatRow {
   ia_objeciones: unknown;
   tags_internos: unknown;
   primer_msg_lead_at: string | null;
+  es_calificado: boolean;
 }
 
 // ─── Cómputo de métricas custom tipo "chat" ───────────────────────────────────
@@ -125,9 +131,12 @@ export interface GetChatsResult {
 export async function getChatsData(params: GetChatsParams): Promise<GetChatsResult> {
   const { idCuenta, desde, hasta } = params;
 
-  // ── 1. Obtener metricas_config de la cuenta ─────────────────────────────
+  // ── 1. Obtener metricas_config y criterios_calificacion de la cuenta ───────
   const [cuenta] = await drizzleDb
-    .select({ metricas_config: cuentas.metricas_config })
+    .select({
+      metricas_config: cuentas.metricas_config,
+      criterios_calificacion: cuentas.criterios_calificacion,
+    })
     .from(cuentas)
     .where(eq(cuentas.id_cuenta, idCuenta))
     .limit(1);
@@ -135,6 +144,16 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
   const metricasConfig: MetricaConfig[] = Array.isArray(cuenta?.metricas_config)
     ? (cuenta.metricas_config as MetricaConfig[])
     : [];
+
+  // Parsear criterios_calificacion; null → todos calificados (backward compat)
+  let criterios: CriteriosCalificacion | null = null;
+  if (cuenta?.criterios_calificacion !== null && cuenta?.criterios_calificacion !== undefined) {
+    try {
+      criterios = parseCriteriosCalificacion(cuenta.criterios_calificacion);
+    } catch {
+      criterios = null;
+    }
+  }
 
   const chatMetricasConfig = metricasConfig.filter(
     (m): m is MetricaConfigChat => m.tipo === "chat",
@@ -155,7 +174,10 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
 
   const where = conditions.join(" AND ");
 
-  const { rows } = await db.query<ChatRow>(
+  // ChatRowRaw = resultado directo de BD, sin es_calificado
+  interface ChatRowRaw extends Omit<ChatRow, "es_calificado"> {}
+
+  const { rows: rawRows } = await db.query<ChatRowRaw>(
     `SELECT
        id_evento, id_cuenta, fecha_y_hora_z, estado, origen,
        asesor_asignado, ia_categoria, ia_objeciones, tags_internos,
@@ -166,7 +188,13 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
     values,
   );
 
-  // ── 3. Calcular métricas custom ─────────────────────────────────────────
+  // ── 3. Enriquecer con es_calificado ─────────────────────────────────────
+  const rows: ChatRow[] = rawRows.map((r) => ({
+    ...r,
+    es_calificado: esCalificado(r.ia_categoria, criterios),
+  }));
+
+  // ── 4. Calcular métricas custom ─────────────────────────────────────────
   const metricasCustom: ChatMetricaResultado[] = chatMetricasConfig.map((config) =>
     computeChatMetrica(rows, config),
   );

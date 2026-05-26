@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique, index, uuid } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique, index, uuid, numeric } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 /**
@@ -149,6 +149,10 @@ export const cuentas = pgTable("cuentas", {
   chatbot_transfer_marker: text("chatbot_transfer_marker"),
   // ── V8: reglas de deduplicación inteligente de closers ────────────────────
   closer_merge_rules: jsonb("closer_merge_rules"),
+  // ── V9: criterios de calificación de leads por cuenta ─────────────────────
+  // NULL = todos los chats son calificados (backward compat).
+  // Estructura: {"categorias_calificadas": string[], "umbral_minimo": number}
+  criterios_calificacion: jsonb("criterios_calificacion"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────
