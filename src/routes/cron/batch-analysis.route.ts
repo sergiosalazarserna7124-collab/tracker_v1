@@ -41,10 +41,10 @@ async function handleBatchAnalysis(
 // ─── Registro de ruta ─────────────────────────────────────────────────────────
 
 export async function cronBatchAnalysisRoute(app: FastifyInstance) {
-  // n8n envía POST sin Content-Type: application/json — aceptar cualquier tipo
-  // y parsear el body como JSON si es posible; sino, devolver objeto vacío.
+  // n8n y Cloud Scheduler envían POST sin Content-Type — usar '*' como string
+  // (no array) que es el catch-all real de Fastify para content-type undefined.
   app.addContentTypeParser(
-    ["text/plain", "application/x-www-form-urlencoded", "*"],
+    "*",
     { parseAs: "string" },
     (_req, body, done) => {
       const raw = typeof body === "string" ? body.trim() : "";
