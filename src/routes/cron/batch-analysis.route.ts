@@ -44,7 +44,7 @@ export async function cronBatchAnalysisRoute(app: FastifyInstance) {
   // n8n envía POST sin Content-Type: application/json — aceptar cualquier tipo
   // y parsear el body como JSON si es posible; sino, devolver objeto vacío.
   app.addContentTypeParser(
-    ["text/plain", "application/x-www-form-urlencoded", ""],
+    ["text/plain", "application/x-www-form-urlencoded", "*"],
     { parseAs: "string" },
     (_req, body, done) => {
       const raw = typeof body === "string" ? body.trim() : "";
