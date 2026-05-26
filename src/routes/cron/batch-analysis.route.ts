@@ -60,6 +60,14 @@ export async function cronBatchAnalysisRoute(app: FastifyInstance) {
     },
   );
 
+  // Cuando no hay body (Content-Length: 0 o header ausente), Fastify omite el
+  // parser y deja request.body como undefined. Normalizar a {} antes de validar.
+  app.addHook("preValidation", async (request) => {
+    if (request.body == null) {
+      (request as unknown as { body: Record<string, never> }).body = {};
+    }
+  });
+
   app.post(
     "/batch-analizar-conversaciones",
     {
