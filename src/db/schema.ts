@@ -246,3 +246,24 @@ export const closerMergeSuggestions = pgTable("closer_merge_suggestions", {
 }, (table) => [
   index("idx_cms_cuenta_status").on(table.id_cuenta, table.status),
 ]);
+
+
+// ── Tablas: métricas personalizadas por cuenta (AUT-417) ──────────────────────
+export const metrics = pgTable("metrics", {
+  id:         uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  id_cuenta:  integer("id_cuenta").notNull().references(() => cuentas.id_cuenta, { onDelete: "cascade" }),
+  name:       text("name").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index("idx_metrics_cuenta").on(table.id_cuenta),
+]);
+
+export const metricDataPoints = pgTable("metric_data_points", {
+  id:        uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  metric_id: uuid("metric_id").notNull().references(() => metrics.id, { onDelete: "cascade" }),
+  id_cuenta: integer("id_cuenta").notNull().references(() => cuentas.id_cuenta, { onDelete: "cascade" }),
+  value:     text("value").notNull(),
+  ts:        timestamp("ts", { withTimezone: true }).notNull(),
+}, (table) => [
+  index("idx_mdp_metric_cuenta_ts").on(table.metric_id, table.id_cuenta, table.ts),
+]);
