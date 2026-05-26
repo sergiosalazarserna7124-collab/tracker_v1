@@ -27,7 +27,7 @@ async function handleBatchAnalysis(
     return reply.status(401).send({ success: false, error: "Unauthorized" });
   }
 
-  const { account_ids } = request.body ?? {};
+  const { account_ids } = (request.body as BatchAnalysisPayload | null) ?? {};
 
   try {
     const result = await runBatchAnalysis(account_ids);
@@ -41,6 +41,25 @@ async function handleBatchAnalysis(
 // ─── Registro de ruta ─────────────────────────────────────────────────────────
 
 export async function cronBatchAnalysisRoute(app: FastifyInstance) {
+  // n8n envía POST sin Content-Type: application/json — aceptar cualquier tipo
+  // y parsear el body como JSON si es posible; sino, devolver objeto vacío.
+  app.addContentTypeParser(
+    ["text/plain", "application/x-www-form-urlencoded", ""],
+    { parseAs: "string" },
+    (_req, body, done) => {
+      const raw = typeof body === "string" ? body.trim() : "";
+      if (raw) {
+        try {
+          done(null, JSON.parse(raw));
+        } catch {
+          done(null, {});
+        }
+      } else {
+        done(null, {});
+      }
+    },
+  );
+
   app.post(
     "/batch-analizar-conversaciones",
     {
