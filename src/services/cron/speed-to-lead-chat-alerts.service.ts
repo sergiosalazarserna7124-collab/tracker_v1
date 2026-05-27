@@ -219,7 +219,7 @@ async function enviarAlerta60m(chat: ChatPendiente): Promise<boolean> {
     const errMsg = (err as Error).message ?? "";
     // Error permanente: el contacto no existe en GHL (fue eliminado o nunca existió).
     // Mantener el lock para no reintentar indefinidamente.
-    if (errMsg.includes("Contact not found") || /responded 4[0-9][0-9]:/.test(errMsg)) {
+    if (errMsg.includes("Contact not found") || errMsg.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") || /responded 4[0-9][0-9]:/.test(errMsg)) {
       console.warn(
         `[stl-chat] Contacto inexistente en GHL, saltando evento=${chat.id_evento}: ${errMsg}`,
       );
@@ -285,7 +285,7 @@ async function enviarAlerta4h(chat: ChatPendiente): Promise<boolean> {
     const errMsg = (err as Error).message ?? "";
     // Error permanente: el contacto no existe en GHL.
     // Mantener el lock para no reintentar indefinidamente.
-    if (errMsg.includes("Contact not found") || /responded 4[0-9][0-9]:/.test(errMsg)) {
+    if (errMsg.includes("Contact not found") || errMsg.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") || /responded 4[0-9][0-9]:/.test(errMsg)) {
       console.warn(
         `[stl-chat] Contacto inexistente en GHL, saltando evento=${chat.id_evento}: ${errMsg}`,
       );

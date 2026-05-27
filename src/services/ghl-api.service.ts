@@ -379,6 +379,12 @@ export async function addContactNote(
       (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
       throw err;
     }
+    // 403 "does not have access to this location" = contact belongs to a different GHL
+    // sub-account. This is a permanent data-quality issue for this specific contact —
+    // mark as GHL_CONTACT_NOT_ACCESSIBLE so callers can skip it without infinite retry.
+    if (response.status === 403) {
+      throw new Error(`GHL_CONTACT_NOT_ACCESSIBLE: notes API 403 for contact=${contactId}: ${text}`);
+    }
     throw new Error(`GHL notes API responded ${response.status}: ${text}`);
   }
 }

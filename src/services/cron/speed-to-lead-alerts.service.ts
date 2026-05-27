@@ -36,6 +36,7 @@ export interface SpeedToLeadAlertsResult {
   alertas_4h: number;
   sin_ghl_contact: number;
   sin_token_ghl: number;
+  contacto_inaccesible: number;
   errores: number;
 }
 
@@ -49,6 +50,7 @@ export async function runSpeedToLeadAlerts(): Promise<SpeedToLeadAlertsResult> {
     alertas_4h: 0,
     sin_ghl_contact: 0,
     sin_token_ghl: 0,
+    contacto_inaccesible: 0,
     errores: 0,
   };
 
@@ -92,6 +94,11 @@ export async function runSpeedToLeadAlerts(): Promise<SpeedToLeadAlertsResult> {
         result.sin_token_ghl++;
       } else if ((err as Error).message?.startsWith("GHL_TOKEN_INVALID")) {
         result.sin_token_ghl++;
+      } else if ((err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE")) {
+        // El contacto pertenece a una location diferente en GHL (403).
+        // No se puede notificar — marcar como procesado para evitar retry infinito.
+        result.contacto_inaccesible++;
+        console.warn(`[speed-to-lead] Contacto inaccesible 60m registro=${lead.id_registro} cuenta=${lead.id_cuenta}: ${(err as Error).message}`);
       } else {
         result.errores++;
         console.error(`[speed-to-lead] Error alerta 60m registro=${lead.id_registro}:`, err);
@@ -146,6 +153,9 @@ export async function runSpeedToLeadAlerts(): Promise<SpeedToLeadAlertsResult> {
           result.sin_token_ghl++;
         } else if ((err as Error).message?.startsWith("GHL_TOKEN_INVALID")) {
           result.sin_token_ghl++;
+        } else if ((err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE")) {
+          result.contacto_inaccesible++;
+          console.warn(`[speed-to-lead] Contacto inaccesible 4h registro=${lead.id_registro} cuenta=${lead.id_cuenta}: ${(err as Error).message}`);
         } else {
           result.errores++;
           console.error(`[speed-to-lead] Error escalación 4h registro=${lead.id_registro}:`, err);
@@ -156,7 +166,8 @@ export async function runSpeedToLeadAlerts(): Promise<SpeedToLeadAlertsResult> {
 
   console.info(
     `[speed-to-lead] Resultado: 60m=${result.alertas_60m} 4h=${result.alertas_4h} ` +
-      `sin_contact=${result.sin_ghl_contact} sin_token=${result.sin_token_ghl} errores=${result.errores}`,
+      `sin_contact=${result.sin_ghl_contact} sin_token=${result.sin_token_ghl} ` +
+      `contacto_inaccesible=${result.contacto_inaccesible} errores=${result.errores}`,
   );
 
   return result;
@@ -207,7 +218,12 @@ async function enviarAlerta60m(lead: LeadPendiente): Promise<boolean> {
   try {
     await addContactNote(lead.ghl_contact_id, lead.token_ghl, nota);
   } catch (err) {
-    // Si GHL falla, revertir el timestamp para que la próxima corrida reintente.
+    if ((err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE")) {
+      // El contacto pertenece a otra location en GHL — no se puede notificar.
+      // No revertir: dejar speed_to_lead_alerted_at marcado para evitar retry infinito.
+      throw err;
+    }
+    // Para cualquier otro error, revertir el timestamp para que la próxima corrida reintente.
     await pgPool.query(
       `UPDATE registros_de_llamada SET speed_to_lead_alerted_at = NULL WHERE id_registro = $1`,
       [lead.id_registro],
@@ -264,7 +280,12 @@ async function enviarAlerta4h(lead: LeadPendiente): Promise<boolean> {
   try {
     await addContactNote(lead.ghl_contact_id, lead.token_ghl, nota);
   } catch (err) {
-    // Si GHL falla, revertir el timestamp para que la próxima corrida reintente.
+    if ((err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE")) {
+      // El contacto pertenece a otra location en GHL — no se puede notificar.
+      // No revertir: dejar speed_to_lead_4h_alerted_at marcado para evitar retry infinito.
+      throw err;
+    }
+    // Para cualquier otro error, revertir el timestamp para que la próxima corrida reintente.
     await pgPool.query(
       `UPDATE registros_de_llamada SET speed_to_lead_4h_alerted_at = NULL WHERE id_registro = $1`,
       [lead.id_registro],
