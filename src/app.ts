@@ -22,6 +22,7 @@ import { ghlCallbackRoute } from "./routes/oauth/ghl-callback.route.js";
 import { dataChatsRoute } from "./routes/data/chats.route.js";
 import { asesoresMergeSuggestionsRoute } from "./routes/data/merge-suggestions.route.js";
 import { criteriosCalificacionRoute } from "./routes/data/criterios-calificacion.route.js";
+import { metricsRoute } from "./routes/data/metrics.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -54,6 +55,7 @@ export async function buildApp() {
   await app.register(dataChatsRoute, { prefix: "/api/data" });
   await app.register(asesoresMergeSuggestionsRoute, { prefix: "/api/data/asesores" });
   await app.register(criteriosCalificacionRoute, { prefix: "/api" });
+  await app.register(metricsRoute, { prefix: "/api/v1/metrics" });
 
   return app;
 }
