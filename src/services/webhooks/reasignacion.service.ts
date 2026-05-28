@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { db as pgPool } from "../../config/database.js";
-import { llamadas, logLlamadas, agendas } from "../../db/schema.js";
+import { llamadas, logLlamadas } from "../../db/schema.js";
 import { getAccountByLocationId } from "../ghl-api.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
@@ -117,27 +117,12 @@ export async function processReasignacion(
   }
 
   // ── 3. resumenes_diarios_agendas ────────────────────────────────────────────
-  try {
-    const closerValue = fields.closerMail || fields.nombreCloser || null;
-    if (closerValue) {
-      const res = await withRetry(
-        () =>
-          drizzleDb
-            .update(agendas)
-            .set({ closer: closerValue })
-            .where(
-              and(
-                eq(agendas.ghl_contact_id, contactId),
-                ...(idCuenta ? [eq(agendas.id_cuenta, idCuenta)] : []),
-              ),
-            ),
-        { label: `${label}/agendas` },
-      );
-      results.resumenes_diarios_agendas = (res as unknown as { rowCount?: number })?.rowCount ?? 0;
-    }
-  } catch (err) {
-    console.error(`[${label}] Error actualizando resumenes_diarios_agendas:`, err);
-  }
+  // AUT-458: NO actualizar closer en agendas desde reasignación.
+  // El campo customData.correocloser en el webhook de reasignación contiene el
+  // assigned user del CONTACTO (setter), no el appointment owner (closer).
+  // El closer correcto de una agenda solo debe venir del webhook ghl_agenda.
+  // Antes este bloque sobreescribía el closer correcto con el email del setter.
+  results.resumenes_diarios_agendas = 0;
 
   // ── 4. chats_logs (notas_extra = nombre del closer asignado) ────────────────
   try {
