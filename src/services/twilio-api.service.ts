@@ -30,7 +30,21 @@ export interface TwilioCall {
   callSid: string;
   accountSid: string;
   parentCallSid: string | null;
+  /** Twilio AMD result. Only present when AMD was enabled on the call.
+   * Possible values: "human" | "machine_start" | "machine_end_beep" |
+   * "machine_end_silence" | "machine_end_other" | "fax" | "unknown" | null */
+  answeredBy: string | null;
 }
+
+// Twilio AMD values that indicate the call was answered by a machine/voicemail.
+// "human" and "unknown" are intentionally excluded — we only block confirmed machines.
+export const TWILIO_MACHINE_ANSWERED_BY = new Set([
+  "machine_start",
+  "machine_end_beep",
+  "machine_end_silence",
+  "machine_end_other",
+  "fax",
+]);
 
 export async function getLatestCompletedCall(
   twilioSid: string,
@@ -60,7 +74,7 @@ export async function getLatestCompletedCall(
   }
 
   const data = (await response.json()) as {
-    calls?: Array<{ sid?: string; account_sid?: string; parent_call_sid?: string }>;
+    calls?: Array<{ sid?: string; account_sid?: string; parent_call_sid?: string; answered_by?: string }>;
   };
 
   const call = data.calls?.[0];
@@ -70,6 +84,7 @@ export async function getLatestCompletedCall(
     callSid: call.sid,
     accountSid: call.account_sid,
     parentCallSid: call.parent_call_sid ?? null,
+    answeredBy: call.answered_by ?? null,
   };
 }
 

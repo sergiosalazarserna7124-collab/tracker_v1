@@ -17,6 +17,7 @@ import {
   getLatestCompletedCall,
   getCallRecordingSid,
   downloadRecording,
+  TWILIO_MACHINE_ANSWERED_BY,
 } from "../twilio-api.service.js";
 import {
   transcribeAudio,
@@ -772,6 +773,22 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     if (!call) {
       console.warn(`[Effective] No se encontró llamada completada para phone="${fields.phone}"`);
       return followUpPath(fields, idCuenta, tokenGhl, null, null, null, "Effective");
+    }
+
+    // ── Guardia AMD (AUT-467): si Twilio detectó máquina, no procesar como efectiva ──
+    if (call.answeredBy && TWILIO_MACHINE_ANSWERED_BY.has(call.answeredBy)) {
+      console.warn(
+        `[Effective] AMD detectó máquina (answeredBy="${call.answeredBy}", callSid="${call.callSid}") — enrutando a followUpPath`,
+      );
+      return followUpPath(
+        fields,
+        idCuenta,
+        tokenGhl,
+        call.callSid,
+        null,
+        `Llamada a buzón de voz detectada por Twilio AMD (answeredBy=${call.answeredBy}).`,
+        "Effective/AMD-machine",
+      );
     }
 
     callSid = call.callSid;
