@@ -385,6 +385,11 @@ export async function addContactNote(
     if (response.status === 403) {
       throw new Error(`GHL_CONTACT_NOT_ACCESSIBLE: notes API 403 for contact=${contactId}: ${text}`);
     }
+    // 400 "Contact not found" = contact was deleted from GHL. Also permanent —
+    // treat the same as 403 so speed-to-lead cron does not retry forever.
+    if (response.status === 400 && text.toLowerCase().includes("contact not found")) {
+      throw new Error(`GHL_CONTACT_NOT_ACCESSIBLE: notes API 400 contact deleted contact=${contactId}: ${text}`);
+    }
     throw new Error(`GHL notes API responded ${response.status}: ${text}`);
   }
 }
