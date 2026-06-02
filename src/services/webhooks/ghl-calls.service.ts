@@ -73,8 +73,14 @@ function extractFields(body: GhlCallEventBody) {
       : "") ||
     null;
 
+  // GHL renderiza variables de template no resueltas como la cadena literal "Undefined".
+  // Filtrarla para caer al siguiente fallback en lugar de guardar ese valor inútil.
+  const cleanNombre = (v: string | undefined) => {
+    const t = v?.trim();
+    return t && t.toLowerCase() !== "undefined" ? t : undefined;
+  };
   const nombreLead =
-    cd.nombre?.trim() || body.full_name?.trim() || body.first_name?.trim() || "sin nombre";
+    cleanNombre(cd.nombre) || cleanNombre(body.full_name) || cleanNombre(body.first_name) || "sin nombre";
 
   const bodyEmail = (body as Record<string, unknown>).email as string | undefined;
   const mailLead = bodyEmail?.trim() || (cd.email?.includes("@") ? cd.email.trim() : null);
