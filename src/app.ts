@@ -18,6 +18,7 @@ import { reasignacionRoute } from "./routes/webhooks/reasignacion.route.js";
 import { videoRecoveryRoute } from "./routes/quick-triggers/video-recovery.route.js";
 import { chatRecoveryRoute } from "./routes/quick-triggers/chat-recovery.route.js";
 import { chatWebhookRoute } from "./routes/webhooks/chat.route.js";
+import { vozWebhookRoute } from "./routes/webhooks/voz.route.js";
 import { ghlCallbackRoute } from "./routes/oauth/ghl-callback.route.js";
 import { dataChatsRoute } from "./routes/data/chats.route.js";
 import { asesoresMergeSuggestionsRoute } from "./routes/data/merge-suggestions.route.js";
@@ -51,6 +52,7 @@ export async function buildApp() {
   await app.register(videoRecoveryRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatRecoveryRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatWebhookRoute, { prefix: "/webhooks" });
+  await app.register(vozWebhookRoute, { prefix: "/webhooks" });
   await app.register(ghlCallbackRoute);
   await app.register(dataChatsRoute, { prefix: "/api/data" });
   await app.register(asesoresMergeSuggestionsRoute, { prefix: "/api/data/asesores" });

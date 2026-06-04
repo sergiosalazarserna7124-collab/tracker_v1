@@ -72,6 +72,8 @@ export const GHL_TAGS = {
   no_interesado_llamada: "no_interesadollamadaautoia",
   contestada_llamada: "contestada_autoia_llamada",
   videollamada_efectiva: "videollamada_efectiva_autoia",
+  interesado_callai: "interesadocallai",
+  no_interesado_callai: "nointeresadocallai",
 } as const;
 
 // ─── Consulta a BD: buscar cuenta por locationid (match exacto) ───────────────
