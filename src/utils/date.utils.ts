@@ -34,6 +34,47 @@ function normalizeIANA(tz: string): string {
     .join("/");
 }
 
+// ─── Alias de timezones no-IANA / mal escritos ───────────────────────────────
+// Algunas fuentes (GHL, configuraciones manuales) mandan nombres en español o
+// con typos que NO son IANA válidos. Ej:
+//   "america/ciudaddemexico"  → nombre en español, no existe en IANA
+//   "america/cuidaddemexico"  → typo conocido ("cuidad"), AUT-648
+// El IANA canónico de la Ciudad de México es "America/Mexico_City".
+// La clave se compara colapsando espacios/guiones-bajos y en minúsculas.
+const TZ_ALIASES: Record<string, string> = {
+  "america/ciudaddemexico": "America/Mexico_City",
+  "america/cuidaddemexico": "America/Mexico_City",
+  "america/mexico": "America/Mexico_City",
+  "america/mexicocity": "America/Mexico_City",
+  ciudaddemexico: "America/Mexico_City",
+  cuidaddemexico: "America/Mexico_City",
+};
+
+// Verifica si un string es un timezone IANA aceptado por el runtime.
+function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resuelve un string de timezone arbitrario al IANA canónico válido.
+ *  1. Busca en el mapa de alias (colapsando espacios/guiones bajos).
+ *  2. Normaliza capitalización a formato IANA.
+ *  3. Valida contra el runtime; devuelve null si no es un timezone real.
+ */
+function resolveTimezone(raw: string): string | null {
+  const collapsed = raw.trim().toLowerCase().replace(/[\s_]+/g, "");
+  const alias = TZ_ALIASES[collapsed];
+  if (alias) return alias;
+
+  const canonical = normalizeIANA(raw);
+  return isValidTimeZone(canonical) ? canonical : null;
+}
+
 /**
  * Convierte un tiempo local (year/month/day/hour/min) en un timezone IANA
  * al instante UTC equivalente.
@@ -96,35 +137,42 @@ function ianaLocalToUTC(
 }
 
 // ─── Parser formato español ───────────────────────────────────────────────────
-// Formato: "23 de febrero de 2026 8:00"
+// Formato con hora:  "23 de febrero de 2026 8:00"
+// Formato solo fecha: "4 de junio de 2026"  (AUT-648 — la hora es opcional;
+//   si falta, se asume 00:00 local para no descartar la cita / generar huérfano).
 
 function parseEspanol(hora: string): [number, number, number, number, number] | null {
-  const regex = /(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})\s+(\d{1,2}):(\d{2})/i;
+  const regex = /(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})(?:\s+(?:a\s+las\s+)?(\d{1,2}):(\d{2}))?/i;
   const match = hora.match(regex);
   if (!match) return null;
 
   const mes = MESES_ES[match[2].toLowerCase()];
   if (!mes) return null;
 
-  return [parseInt(match[3]), mes, parseInt(match[1]), parseInt(match[4]), parseInt(match[5])];
+  const horas = match[4] !== undefined ? parseInt(match[4]) : 0;
+  const minutos = match[5] !== undefined ? parseInt(match[5]) : 0;
+
+  return [parseInt(match[3]), mes, parseInt(match[1]), horas, minutos];
 }
 
-// ─── Parser formato inglés con AM/PM ─────────────────────────────────────────
-// Formato: "February 27, 2026 3:00 PM"  o  "February 27, 2026 3:00PM"
+// ─── Parser formato inglés ────────────────────────────────────────────────────
+// Con AM/PM:  "February 27, 2026 3:00 PM"  o  "February 27, 2026 3:00PM"
+// 24h:        "June 6, 2026 13:00"
+// Solo fecha: "June 6, 2026"  (AUT-648 — hora opcional; si falta, 00:00 local).
 
 function parseIngles(hora: string): [number, number, number, number, number] | null {
-  const regex = /^(\w+)\s+(\d{1,2}),?\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i;
+  const regex = /^(\w+)\s+(\d{1,2}),?\s+(\d{4})(?:\s+(\d{1,2}):(\d{2})\s*(AM|PM)?)?$/i;
   const match = hora.trim().match(regex);
   if (!match) return null;
 
   const mes = MESES_EN[match[1].toLowerCase()];
   if (!mes) return null;
 
-  let horas = parseInt(match[4]);
-  const minutos = parseInt(match[5]);
-  const ampm = match[6].toUpperCase();
+  let horas = match[4] !== undefined ? parseInt(match[4]) : 0;
+  const minutos = match[5] !== undefined ? parseInt(match[5]) : 0;
+  const ampm = match[6] ? match[6].toUpperCase() : null;
 
-  // Conversión 12h → 24h
+  // Conversión 12h → 24h (solo si hay marcador AM/PM)
   if (ampm === "PM" && horas !== 12) horas += 12;
   if (ampm === "AM" && horas === 12) horas = 0;
 
@@ -148,7 +196,13 @@ function parseIngles(hora: string): [number, number, number, number, number] | n
 export function parseFechaReunionToUTC(hora: string | undefined, zonahoraria: string | undefined): Date | null {
   if (!hora || !zonahoraria) return null;
 
-  const tz = normalizeIANA(zonahoraria);
+  // Resolver el timezone primero: aplica alias (typos / nombres en español) y
+  // valida contra el runtime. Diagnóstico separado del parseo de fecha (AUT-648).
+  const tz = resolveTimezone(zonahoraria);
+  if (!tz) {
+    console.warn(`[date.utils] timezone no reconocida: "${zonahoraria}" (fecha="${hora}")`);
+    return null;
+  }
 
   // Intentar formato inglés primero (es el que envía GHL actualmente)
   const partsEn = parseIngles(hora);
@@ -163,6 +217,6 @@ export function parseFechaReunionToUTC(hora: string | undefined, zonahoraria: st
     return ianaLocalToUTC(...partsEs, tz);
   }
 
-  console.warn(`[date.utils] No se pudo parsear la fecha: "${hora}" con tz="${zonahoraria}"`);
+  console.warn(`[date.utils] No se pudo parsear la fecha: "${hora}" con tz="${zonahoraria}" (tz resuelta a "${tz}")`);
   return null;
 }
