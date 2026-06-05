@@ -542,7 +542,7 @@ export async function processChatWebhook(
     { label: "chat/upsertChatLog" },
   );
 
-  console.log(`[Chat] ✅ Upsert OK — conversationId="${conversationId}" | id_cuenta=${idCuenta}`);
+  console.log(`[Chat] ✅ Upsert OK — conversationId="${conversationId}" | id_cuenta=${idCuenta} | primer_msg_at=${primerMsgAt} | dateAdded=${dateAdded}`);
 
   // Guardar raw para diagnóstico (processed = true)
   void saveRawWebhook(body, locationId, true, null);
