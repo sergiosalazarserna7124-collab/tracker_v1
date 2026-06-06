@@ -11,6 +11,11 @@ import {
 import { extractWebhookBody } from "../../utils/payload.utils.js";
 import { logWebhookReceived, logWebhookResult } from "../../utils/webhook-logger.js";
 
+function extractLocationIdFromPayload(body: TwilioEventBody): string | null {
+  const cd = body.customData;
+  return cd?.locationid?.trim() || body.location?.id?.trim() || null;
+}
+
 // ─── POST /webhooks/twilio ────────────────────────────────────────────────────
 // Llamada pendiente: inserta registro con estado "pdte"
 
@@ -27,7 +32,8 @@ export async function handleTwilioWebhook(
     });
   }
 
-  const logId = await logWebhookReceived({ fuente: "twilio", tipo_evento: "pdte", payload_raw: request.body });
+  const locationId = extractLocationIdFromPayload(eventBody);
+  const logId = await logWebhookReceived({ fuente: "twilio", tipo_evento: "pdte", location_id: locationId, payload_raw: request.body });
   const t0 = Date.now();
   const result = await processTwilioWebhook(eventBody);
   const idCuentaPdte = (result.data as { id_cuenta?: number | null } | undefined)?.id_cuenta ?? null;
@@ -56,7 +62,8 @@ export async function handleNoAnswerCall(
     });
   }
 
-  const logId = await logWebhookReceived({ fuente: "twilio", tipo_evento: "no_contesto", payload_raw: request.body });
+  const locationIdNoAnswer = extractLocationIdFromPayload(eventBody);
+  const logId = await logWebhookReceived({ fuente: "twilio", tipo_evento: "no_contesto", location_id: locationIdNoAnswer, payload_raw: request.body });
   const t0 = Date.now();
   const result = await processNoAnswerCall(eventBody);
   const idCuentaNoContesto = (result.data as { id_cuenta?: number | null } | undefined)?.id_cuenta ?? null;
@@ -86,7 +93,8 @@ export async function handleEffectiveCall(
     });
   }
 
-  const logId = await logWebhookReceived({ fuente: "twilio", tipo_evento: "efectiva", payload_raw: request.body });
+  const locationIdEfectiva = extractLocationIdFromPayload(eventBody);
+  const logId = await logWebhookReceived({ fuente: "twilio", tipo_evento: "efectiva", location_id: locationIdEfectiva, payload_raw: request.body });
   const t0 = Date.now();
   processEffectiveCall(eventBody)
     .then((res) => {

@@ -150,17 +150,16 @@ async function resolveAccount(
     if (account) {
       if (account.estado_cuenta === "cancelado") {
         console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
-        return { idCuenta: null, tokenGhl: null, isCancelled: true };
+        return { idCuenta: account.id_cuenta, tokenGhl: null, isCancelled: true };
       }
       return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl ?? null, isCancelled: false };
     }
-    // Fallback: intentar con body.location.id si customData.locationid no matcheó
     if (locationIdFallback && locationIdFallback !== locationId) {
       const fallbackAccount = await getAccountByLocationId(locationIdFallback);
       if (fallbackAccount) {
         if (fallbackAccount.estado_cuenta === "cancelado") {
           console.info(`[${label}] Cuenta cancelada (id=${fallbackAccount.id_cuenta}) — webhook descartado silenciosamente`);
-          return { idCuenta: null, tokenGhl: null, isCancelled: true };
+          return { idCuenta: fallbackAccount.id_cuenta, tokenGhl: null, isCancelled: true };
         }
         console.info(`[${label}] Cuenta encontrada por fallback location.id="${locationIdFallback}" (customData.locationid="${locationId}" no matcheó)`);
         return { idCuenta: fallbackAccount.id_cuenta, tokenGhl: fallbackAccount.token_ghl ?? null, isCancelled: false };
@@ -211,7 +210,7 @@ async function resolveAccountFull(
     }
     if (account.estado_cuenta === "cancelado") {
       console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
-      return { ...empty, isCancelled: true };
+      return { ...empty, idCuenta: account.id_cuenta, isCancelled: true };
     }
     return {
       idCuenta: account.id_cuenta,
@@ -549,7 +548,7 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
   const fields = extractFields(body);
 
   const { idCuenta, isCancelled } = await resolveAccount(fields.locationId, "Twilio", fields.locationIdFallback);
-  if (isCancelled) return { success: true };
+  if (isCancelled) return { success: true, data: { id_cuenta: idCuenta, cancelled: true } };
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl && !fields.phone) {
     return saveOrphanEvent(body, idCuenta, "Twilio");
@@ -691,7 +690,7 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
   const fields = extractFields(body);
 
   const { idCuenta, tokenGhl, isCancelled } = await resolveAccount(fields.locationId, "NoAnswer", fields.locationIdFallback);
-  if (isCancelled) return { success: true };
+  if (isCancelled) return { success: true, data: { id_cuenta: idCuenta, cancelled: true } };
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
     return saveOrphanEvent(body, idCuenta, "NoAnswer");
@@ -720,7 +719,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, isCancelled } =
     await resolveAccountFull(fields.locationId, "Effective", fields.locationIdFallback);
-  if (isCancelled) return { success: true };
+  if (isCancelled) return { success: true, data: { id_cuenta: idCuenta, cancelled: true } };
 
   if (!fields.mailLead && !fields.contactId && !fields.idUserGhl) {
     return saveOrphanEvent(body, idCuenta, "Effective");
