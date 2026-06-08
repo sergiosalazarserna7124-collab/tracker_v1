@@ -2,6 +2,7 @@ import type { FastifyRequest, FastifyReply } from "fastify";
 import { env } from "../../config/env.js";
 import type { CronDailyTasksPayload, CronAnalyzeChatsPayload } from "../../schemas/cron/daily-tasks.schema.js";
 import { updateNoShows, analyzeChatsNightly, expirePdteRegistros, backfillPrimerMsgLeadAt } from "../../services/cron/daily-tasks.service.js";
+import { db as pgPool } from "../../config/database.js";
 
 export async function handleUpdateNoShows(
   request: FastifyRequest<{ Body: CronDailyTasksPayload }>,
@@ -19,7 +20,9 @@ export async function handleUpdateNoShows(
   return reply.send(result);
 }
 
-let analyzeChatsRunning = false;
+// Advisory lock ID for cross-instance concurrency guard on analyzeChats.
+// pg_try_advisory_lock uses bigint — pick a stable arbitrary value.
+const ANALYZE_CHATS_LOCK_ID = 737_001;
 
 export async function handleAnalyzeChats(
   request: FastifyRequest<{ Body: CronAnalyzeChatsPayload }>,
@@ -30,33 +33,35 @@ export async function handleAnalyzeChats(
     return reply.status(401).send({ success: false, error: "Unauthorized" });
   }
 
-  if (analyzeChatsRunning) {
-    return reply.status(409).send({
-      success: false,
-      error: "análisis ya en curso",
-      status: "already_running",
-    });
+  const client = await pgPool.connect();
+  try {
+    const lockResult = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock($1) AS locked",
+      [ANALYZE_CHATS_LOCK_ID],
+    );
+    if (!lockResult.rows[0]?.locked) {
+      return reply.status(409).send({
+        success: false,
+        error: "análisis ya en curso (lock global)",
+        status: "already_running",
+      });
+    }
+
+    const { account_ids } = request.body;
+
+    try {
+      const result = await analyzeChatsNightly(account_ids);
+      console.info("[handleAnalyzeChats] Finalizado:", JSON.stringify(result));
+      return reply.send({ success: true, ...result });
+    } catch (err) {
+      console.error("[handleAnalyzeChats] Error:", err);
+      return reply.status(500).send({ success: false, error: "Error interno en análisis de chats" });
+    } finally {
+      await client.query("SELECT pg_advisory_unlock($1)", [ANALYZE_CHATS_LOCK_ID]);
+    }
+  } finally {
+    client.release();
   }
-
-  const { account_ids } = request.body;
-
-  analyzeChatsRunning = true;
-  analyzeChatsNightly(account_ids)
-    .then((result) => {
-      console.info("[handleAnalyzeChats] Finalizado en background:", JSON.stringify(result));
-    })
-    .catch((err) => {
-      console.error("[handleAnalyzeChats] Error en background:", err);
-    })
-    .finally(() => {
-      analyzeChatsRunning = false;
-    });
-
-  return reply.status(202).send({
-    success: true,
-    status: "accepted",
-    message: "análisis iniciado en background",
-  });
 }
 
 export async function handleExpirePdteRegistros(
