@@ -19,6 +19,8 @@ export async function handleUpdateNoShows(
   return reply.send(result);
 }
 
+let analyzeChatsRunning = false;
+
 export async function handleAnalyzeChats(
   request: FastifyRequest<{ Body: CronAnalyzeChatsPayload }>,
   reply: FastifyReply,
@@ -28,15 +30,33 @@ export async function handleAnalyzeChats(
     return reply.status(401).send({ success: false, error: "Unauthorized" });
   }
 
+  if (analyzeChatsRunning) {
+    return reply.status(409).send({
+      success: false,
+      error: "análisis ya en curso",
+      status: "already_running",
+    });
+  }
+
   const { account_ids } = request.body;
 
-  try {
-    const result = await analyzeChatsNightly(account_ids);
-    return reply.send({ success: true, ...result });
-  } catch (err) {
-    console.error("[handleAnalyzeChats] Error:", err);
-    return reply.status(500).send({ success: false, error: "Error interno al analizar chats" });
-  }
+  analyzeChatsRunning = true;
+  analyzeChatsNightly(account_ids)
+    .then((result) => {
+      console.info("[handleAnalyzeChats] Finalizado en background:", JSON.stringify(result));
+    })
+    .catch((err) => {
+      console.error("[handleAnalyzeChats] Error en background:", err);
+    })
+    .finally(() => {
+      analyzeChatsRunning = false;
+    });
+
+  return reply.status(202).send({
+    success: true,
+    status: "accepted",
+    message: "análisis iniciado en background",
+  });
 }
 
 export async function handleExpirePdteRegistros(
