@@ -15,6 +15,7 @@
 
 import { db as pgPool } from "../../config/database.js";
 import { addContactNote } from "../ghl-api.service.js";
+import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid } from "../ghl-token-guard.service.js";
 
 // Máximo de GHL calls totales por corrida (anti rate-limit GHL).
@@ -56,34 +57,38 @@ export async function runSpeedToLeadChatAlerts(): Promise<SpeedToLeadChatAlertsR
 
   // ── 1. Chats que necesitan alerta de 60 minutos ───────────────────────────
   // primer_msg_lead_at entre 60 min y 48h atrás, sin alerta previa, sin respuesta de agente.
-  const chats60m = await pgPool.query<ChatPendiente>(
-    `SELECT
-       cl.id_evento,
-       cl.id_cuenta,
-       cl.nombre_lead,
-       cl.id_lead,
-       cl.asesor_asignado,
-       c.token_ghl,
-       c.nombre_cuenta,
-       cl.primer_msg_lead_at,
-       EXTRACT(EPOCH FROM (NOW() - cl.primer_msg_lead_at)) / 60 AS minutos_sin_respuesta
-     FROM chats_logs cl
-     JOIN cuentas c ON c.id_cuenta = cl.id_cuenta
-     JOIN metas_cuenta mc ON mc.id_cuenta = cl.id_cuenta
-     WHERE cl.primer_msg_lead_at IS NOT NULL
-       AND cl.chat_stl_alerted_at IS NULL
-       AND cl.primer_msg_lead_at >= NOW() - INTERVAL '48 hours'
-       AND cl.primer_msg_lead_at < NOW() - INTERVAL '60 minutes'
-       AND NOT EXISTS (
-         SELECT 1 FROM jsonb_array_elements(cl.chat) m
-         WHERE m->>'role' = 'agent'
-       )
-       AND mc.meta_speed_chat_min IS NOT NULL
-       AND c.estado_cuenta = 'activo'
-       AND c.monto_mensualidad > 0
-     ORDER BY cl.primer_msg_lead_at ASC
-     LIMIT $1`,
-    [MAX_CHATS_PER_RUN],
+  const chats60m = await withRetry(
+    () =>
+      pgPool.query<ChatPendiente>(
+        `SELECT
+           cl.id_evento,
+           cl.id_cuenta,
+           cl.nombre_lead,
+           cl.id_lead,
+           cl.asesor_asignado,
+           c.token_ghl,
+           c.nombre_cuenta,
+           cl.primer_msg_lead_at,
+           EXTRACT(EPOCH FROM (NOW() - cl.primer_msg_lead_at)) / 60 AS minutos_sin_respuesta
+         FROM chats_logs cl
+         JOIN cuentas c ON c.id_cuenta = cl.id_cuenta
+         JOIN metas_cuenta mc ON mc.id_cuenta = cl.id_cuenta
+         WHERE cl.primer_msg_lead_at IS NOT NULL
+           AND cl.chat_stl_alerted_at IS NULL
+           AND cl.primer_msg_lead_at >= NOW() - INTERVAL '48 hours'
+           AND cl.primer_msg_lead_at < NOW() - INTERVAL '60 minutes'
+           AND NOT EXISTS (
+             SELECT 1 FROM jsonb_array_elements(cl.chat) m
+             WHERE m->>'role' = 'agent'
+           )
+           AND mc.meta_speed_chat_min IS NOT NULL
+           AND c.estado_cuenta = 'activo'
+           AND c.monto_mensualidad > 0
+         ORDER BY cl.primer_msg_lead_at ASC
+         LIMIT $1`,
+        [MAX_CHATS_PER_RUN],
+      ),
+    { label: "stl-chat-60m" },
   );
 
   console.info(`[stl-chat] Chats para alerta 60m: ${chats60m.rows.length}`);
@@ -114,35 +119,39 @@ export async function runSpeedToLeadChatAlerts(): Promise<SpeedToLeadChatAlertsR
   if (capacidad4h <= 0) {
     console.info("[stl-chat] Presupuesto GHL agotado por alertas 60m, saltando 4h.");
   } else {
-    const chats4h = await pgPool.query<ChatPendiente>(
-      `SELECT
-         cl.id_evento,
-         cl.id_cuenta,
-         cl.nombre_lead,
-         cl.id_lead,
-         cl.asesor_asignado,
-         c.token_ghl,
-         c.nombre_cuenta,
-         cl.primer_msg_lead_at,
-         EXTRACT(EPOCH FROM (NOW() - cl.primer_msg_lead_at)) / 60 AS minutos_sin_respuesta
-       FROM chats_logs cl
-       JOIN cuentas c ON c.id_cuenta = cl.id_cuenta
-       JOIN metas_cuenta mc ON mc.id_cuenta = cl.id_cuenta
-       WHERE cl.primer_msg_lead_at IS NOT NULL
-         AND cl.chat_stl_alerted_at IS NOT NULL
-         AND cl.chat_stl_4h_alerted_at IS NULL
-         AND cl.primer_msg_lead_at >= NOW() - INTERVAL '48 hours'
-         AND cl.primer_msg_lead_at < NOW() - INTERVAL '4 hours'
-         AND NOT EXISTS (
-           SELECT 1 FROM jsonb_array_elements(cl.chat) m
-           WHERE m->>'role' = 'agent'
-         )
-         AND mc.meta_speed_chat_min IS NOT NULL
-         AND c.estado_cuenta = 'activo'
-         AND c.monto_mensualidad > 0
-       ORDER BY cl.primer_msg_lead_at ASC
-       LIMIT $1`,
-      [capacidad4h],
+    const chats4h = await withRetry(
+      () =>
+        pgPool.query<ChatPendiente>(
+          `SELECT
+             cl.id_evento,
+             cl.id_cuenta,
+             cl.nombre_lead,
+             cl.id_lead,
+             cl.asesor_asignado,
+             c.token_ghl,
+             c.nombre_cuenta,
+             cl.primer_msg_lead_at,
+             EXTRACT(EPOCH FROM (NOW() - cl.primer_msg_lead_at)) / 60 AS minutos_sin_respuesta
+           FROM chats_logs cl
+           JOIN cuentas c ON c.id_cuenta = cl.id_cuenta
+           JOIN metas_cuenta mc ON mc.id_cuenta = cl.id_cuenta
+           WHERE cl.primer_msg_lead_at IS NOT NULL
+             AND cl.chat_stl_alerted_at IS NOT NULL
+             AND cl.chat_stl_4h_alerted_at IS NULL
+             AND cl.primer_msg_lead_at >= NOW() - INTERVAL '48 hours'
+             AND cl.primer_msg_lead_at < NOW() - INTERVAL '4 hours'
+             AND NOT EXISTS (
+               SELECT 1 FROM jsonb_array_elements(cl.chat) m
+               WHERE m->>'role' = 'agent'
+             )
+             AND mc.meta_speed_chat_min IS NOT NULL
+             AND c.estado_cuenta = 'activo'
+             AND c.monto_mensualidad > 0
+           ORDER BY cl.primer_msg_lead_at ASC
+           LIMIT $1`,
+          [capacidad4h],
+        ),
+      { label: "stl-chat-4h" },
     );
 
     console.info(`[stl-chat] Chats para escalación 4h: ${chats4h.rows.length}`);
