@@ -213,6 +213,17 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
        Object.keys(datosExtra).length > 0 ? JSON.stringify(datosExtra) : null],
     );
   }
+
+  // AUT-804: remove legacy account-level rows when campaign-level data exists
+  if (rows.length > 0) {
+    await pgPool.query(
+      `DELETE FROM resumenes_diarios_ads
+       WHERE id_cuenta = $1 AND fecha = $2 AND plataforma = 'meta'
+         AND (campana IS NULL OR campana = '')
+         AND datos_extra IS NULL`,
+      [idCuenta, fecha],
+    );
+  }
 }
 
 // ─── Google Ads sync ──────────────────────────────────────────────────────────
