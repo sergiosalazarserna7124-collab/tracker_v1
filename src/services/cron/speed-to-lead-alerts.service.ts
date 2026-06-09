@@ -13,6 +13,7 @@
 
 import { db as pgPool } from "../../config/database.js";
 import { addContactNote } from "../ghl-api.service.js";
+import { markTokenInvalid, savePendingNote } from "../ghl-token-guard.service.js";
 
 // Máximo de GHL calls totales por corrida (anti rate-limit GHL).
 // 60m y 4h comparten este presupuesto global: 60m consume primero,
@@ -94,9 +95,8 @@ export async function runSpeedToLeadAlerts(): Promise<SpeedToLeadAlertsResult> {
         result.sin_token_ghl++;
       } else if ((err as Error).message?.startsWith("GHL_TOKEN_INVALID")) {
         result.sin_token_ghl++;
+        await markTokenInvalid(lead.id_cuenta);
       } else if ((err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE")) {
-        // El contacto pertenece a una location diferente en GHL (403).
-        // No se puede notificar — marcar como procesado para evitar retry infinito.
         result.contacto_inaccesible++;
         console.warn(`[speed-to-lead] Contacto inaccesible 60m registro=${lead.id_registro} cuenta=${lead.id_cuenta}: ${(err as Error).message}`);
       } else {
@@ -153,6 +153,7 @@ export async function runSpeedToLeadAlerts(): Promise<SpeedToLeadAlertsResult> {
           result.sin_token_ghl++;
         } else if ((err as Error).message?.startsWith("GHL_TOKEN_INVALID")) {
           result.sin_token_ghl++;
+          await markTokenInvalid(lead.id_cuenta);
         } else if ((err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE")) {
           result.contacto_inaccesible++;
           console.warn(`[speed-to-lead] Contacto inaccesible 4h registro=${lead.id_registro} cuenta=${lead.id_cuenta}: ${(err as Error).message}`);
@@ -218,16 +219,15 @@ async function enviarAlerta60m(lead: LeadPendiente): Promise<boolean> {
   try {
     await addContactNote(lead.ghl_contact_id, lead.token_ghl, nota);
   } catch (err) {
-    if ((err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE")) {
-      // El contacto pertenece a otra location en GHL — no se puede notificar.
-      // No revertir: dejar speed_to_lead_alerted_at marcado para evitar retry infinito.
-      throw err;
+    const isPermanent =
+      (err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") ||
+      (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+    if (!isPermanent) {
+      await pgPool.query(
+        `UPDATE registros_de_llamada SET speed_to_lead_alerted_at = NULL WHERE id_registro = $1`,
+        [lead.id_registro],
+      );
     }
-    // Para cualquier otro error, revertir el timestamp para que la próxima corrida reintente.
-    await pgPool.query(
-      `UPDATE registros_de_llamada SET speed_to_lead_alerted_at = NULL WHERE id_registro = $1`,
-      [lead.id_registro],
-    );
     throw err;
   }
 
@@ -280,16 +280,15 @@ async function enviarAlerta4h(lead: LeadPendiente): Promise<boolean> {
   try {
     await addContactNote(lead.ghl_contact_id, lead.token_ghl, nota);
   } catch (err) {
-    if ((err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE")) {
-      // El contacto pertenece a otra location en GHL — no se puede notificar.
-      // No revertir: dejar speed_to_lead_4h_alerted_at marcado para evitar retry infinito.
-      throw err;
+    const isPermanent =
+      (err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") ||
+      (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+    if (!isPermanent) {
+      await pgPool.query(
+        `UPDATE registros_de_llamada SET speed_to_lead_4h_alerted_at = NULL WHERE id_registro = $1`,
+        [lead.id_registro],
+      );
     }
-    // Para cualquier otro error, revertir el timestamp para que la próxima corrida reintente.
-    await pgPool.query(
-      `UPDATE registros_de_llamada SET speed_to_lead_4h_alerted_at = NULL WHERE id_registro = $1`,
-      [lead.id_registro],
-    );
     throw err;
   }
 

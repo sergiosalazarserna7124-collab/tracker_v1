@@ -15,6 +15,7 @@
 
 import { db as pgPool } from "../../config/database.js";
 import { addContactNote } from "../ghl-api.service.js";
+import { markTokenInvalid } from "../ghl-token-guard.service.js";
 
 // Máximo de GHL calls totales por corrida (anti rate-limit GHL).
 // 60m y 4h comparten este presupuesto global.
@@ -98,6 +99,7 @@ export async function runSpeedToLeadChatAlerts(): Promise<SpeedToLeadChatAlertsR
         result.sin_token_ghl++;
       } else if ((err as Error).message?.startsWith("GHL_TOKEN_INVALID")) {
         result.sin_token_ghl++;
+        await markTokenInvalid(chat.id_cuenta);
       } else {
         result.errores++;
         console.error(`[stl-chat] Error alerta 60m evento=${chat.id_evento}:`, err);
@@ -156,6 +158,7 @@ export async function runSpeedToLeadChatAlerts(): Promise<SpeedToLeadChatAlertsR
           result.sin_token_ghl++;
         } else if ((err as Error).message?.startsWith("GHL_TOKEN_INVALID")) {
           result.sin_token_ghl++;
+          await markTokenInvalid(chat.id_cuenta);
         } else {
           result.errores++;
           console.error(`[stl-chat] Error escalación 4h evento=${chat.id_evento}:`, err);
@@ -217,15 +220,16 @@ async function enviarAlerta60m(chat: ChatPendiente): Promise<boolean> {
     await addContactNote(chat.id_lead, chat.token_ghl, nota);
   } catch (err) {
     const errMsg = (err as Error).message ?? "";
-    // Error permanente: el contacto no existe en GHL (fue eliminado o nunca existió).
-    // Mantener el lock para no reintentar indefinidamente.
+    const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+    if (isTokenInvalid) {
+      throw err;
+    }
     if (errMsg.includes("Contact not found") || errMsg.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") || /responded 4[0-9][0-9]:/.test(errMsg)) {
       console.warn(
         `[stl-chat] Contacto inexistente en GHL, saltando evento=${chat.id_evento}: ${errMsg}`,
       );
       throw new Error(`SIN_GHL_CONTACT: evento=${chat.id_evento} contacto_inexistente`);
     }
-    // Error transitorio (timeout, 5xx): revertir lock para que reintente en la próxima corrida.
     await pgPool.query(
       `UPDATE chats_logs SET chat_stl_alerted_at = NULL WHERE id_evento = $1`,
       [chat.id_evento],
@@ -283,15 +287,16 @@ async function enviarAlerta4h(chat: ChatPendiente): Promise<boolean> {
     await addContactNote(chat.id_lead, chat.token_ghl, nota);
   } catch (err) {
     const errMsg = (err as Error).message ?? "";
-    // Error permanente: el contacto no existe en GHL.
-    // Mantener el lock para no reintentar indefinidamente.
+    const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+    if (isTokenInvalid) {
+      throw err;
+    }
     if (errMsg.includes("Contact not found") || errMsg.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") || /responded 4[0-9][0-9]:/.test(errMsg)) {
       console.warn(
         `[stl-chat] Contacto inexistente en GHL, saltando evento=${chat.id_evento}: ${errMsg}`,
       );
       throw new Error(`SIN_GHL_CONTACT: evento=${chat.id_evento} contacto_inexistente`);
     }
-    // Error transitorio (timeout, 5xx): revertir lock para que reintente en la próxima corrida.
     await pgPool.query(
       `UPDATE chats_logs SET chat_stl_4h_alerted_at = NULL WHERE id_evento = $1`,
       [chat.id_evento],

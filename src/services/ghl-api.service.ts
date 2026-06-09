@@ -6,6 +6,16 @@ import { withRetry } from "../utils/retry.utils.js";
 
 const GHL_TIMEOUT_MS = 15_000;
 
+function isLocationLevelDenied(responseText: string): boolean {
+  return /does not have access to this location/i.test(responseText);
+}
+
+function throwTokenInvalid(message: string): never {
+  const err = new Error(message);
+  (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
+  throw err;
+}
+
 // ─── Helper: normalizar token de GHL ─────────────────────────────────────────
 // Garantiza que el header Authorization sea siempre "Bearer <token>",
 // independientemente de cómo esté guardado en la BD (con o sin prefijo).
@@ -302,9 +312,10 @@ export async function addContactTag(
     const text = await response.text();
     console.error("[GHL addContactTag] ERROR response body:", text);
     if (response.status === 401) {
-      const err = new Error(`GHL_TOKEN_INVALID: tag API 401`);
-      (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
-      throw err;
+      throwTokenInvalid(`GHL_TOKEN_INVALID: tag API 401`);
+    }
+    if (response.status === 403 && isLocationLevelDenied(text)) {
+      throwTokenInvalid(`GHL_TOKEN_INVALID: tag API 403 location-level denial`);
     }
     throw new Error(`GHL tag API responded ${response.status}: ${text}`);
   }
@@ -334,9 +345,10 @@ export async function removeContactTag(
     const text = await response.text();
     console.error(`[GHL removeContactTag] ERROR ${response.status} removing tag "${tag}" from contact ${contactId}:`, text);
     if (response.status === 401) {
-      const err = new Error(`GHL_TOKEN_INVALID: remove tag API 401`);
-      (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
-      throw err;
+      throwTokenInvalid(`GHL_TOKEN_INVALID: remove tag API 401`);
+    }
+    if (response.status === 403 && isLocationLevelDenied(text)) {
+      throwTokenInvalid(`GHL_TOKEN_INVALID: remove tag API 403 location-level denial`);
     }
     // Best-effort: no lanzar error si el tag ya no existía (404)
     if (response.status !== 404) {
@@ -375,16 +387,13 @@ export async function addContactNote(
 
   if (!response.ok) {
     const text = await response.text();
-    // Surface 401 specifically so callers can handle token-invalid scenario
     if (response.status === 401) {
-      const err = new Error(`GHL_TOKEN_INVALID: notes API 401 for contact=${contactId}`);
-      (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
-      throw err;
+      throwTokenInvalid(`GHL_TOKEN_INVALID: notes API 401 for contact=${contactId}`);
     }
-    // 403 "does not have access to this location" = contact belongs to a different GHL
-    // sub-account. This is a permanent data-quality issue for this specific contact —
-    // mark as GHL_CONTACT_NOT_ACCESSIBLE so callers can skip it without infinite retry.
     if (response.status === 403) {
+      if (isLocationLevelDenied(text)) {
+        throwTokenInvalid(`GHL_TOKEN_INVALID: notes API 403 location-level denial for contact=${contactId}`);
+      }
       throw new Error(`GHL_CONTACT_NOT_ACCESSIBLE: notes API 403 for contact=${contactId}: ${text}`);
     }
     // 400 "Contact not found" = contact was deleted from GHL. Also permanent —
@@ -427,9 +436,10 @@ export async function addContactTags(
     const text = await response.text();
     console.error(`[GHL addContactTags] ERROR ${response.status}:`, text);
     if (response.status === 401) {
-      const err = new Error(`GHL_TOKEN_INVALID: tags API 401`);
-      (err as Error & { isTokenInvalid: boolean }).isTokenInvalid = true;
-      throw err;
+      throwTokenInvalid(`GHL_TOKEN_INVALID: tags API 401`);
+    }
+    if (response.status === 403 && isLocationLevelDenied(text)) {
+      throwTokenInvalid(`GHL_TOKEN_INVALID: tags API 403 location-level denial`);
     }
     throw new Error(`GHL tag API responded ${response.status}: ${text}`);
   }

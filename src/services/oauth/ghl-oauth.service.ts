@@ -6,6 +6,7 @@
 import { db } from "../../config/database.js";
 import { env } from "../../config/env.js";
 import { withRetry } from "../../utils/retry.utils.js";
+import { markTokenOk, retryPendingActions } from "../ghl-token-guard.service.js";
 
 const GHL_TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
 
@@ -107,6 +108,13 @@ export async function exchangeCodeForTokens(
   console.log(
     `[GhlOAuth] Tokens guardados para locationId="${locationId}" | id_cuenta=${idCuenta ?? "no encontrada"}`,
   );
+
+  if (idCuenta) {
+    await markTokenOk(idCuenta);
+    retryPendingActions(idCuenta, tokenData.access_token).catch((err) =>
+      console.error(`[GhlOAuth] Error reintentando pendientes cuenta=${idCuenta}:`, err),
+    );
+  }
 
   return tokenData;
 }
