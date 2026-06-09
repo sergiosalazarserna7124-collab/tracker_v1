@@ -736,3 +736,56 @@ export async function expirePdteRegistros(): Promise<ExpirePdteResult> {
 
   return { success: true, total_expirados: rows.length, por_cuenta };
 }
+
+// ─── backfillPrimerMsgAt ─────────────────────────────────────────────────────
+
+interface BackfillPrimerMsgAtResult {
+  success: boolean;
+  actualizados_jsonb: number;
+  actualizados_fallback: number;
+  pendientes_null: number;
+}
+
+/**
+ * Safety net: rellena primer_msg_at desde el JSONB chat para filas que
+ * fueron insertadas por writers que no conocen esta columna (AUT-690).
+ *
+ * Complementa el trigger fn_auto_primer_msg_at (migración 016) que cubre
+ * INSERT/UPDATE en tiempo real. Este cron atrapa edge cases.
+ */
+export async function backfillPrimerMsgAt(): Promise<BackfillPrimerMsgAtResult> {
+  const jsonbResult = await pgPool.query<{ id_evento: number }>(
+    `UPDATE chats_logs
+     SET primer_msg_at = (
+       SELECT MIN((msg->>'timestamp')::timestamptz)
+       FROM jsonb_array_elements(chat) AS msg
+       WHERE msg->>'timestamp' IS NOT NULL
+         AND msg->>'timestamp' <> ''
+         AND (msg->>'timestamp')::timestamptz > '2020-01-01'::timestamptz
+     )
+     WHERE primer_msg_at IS NULL
+       AND chat IS NOT NULL
+       AND jsonb_array_length(chat) > 0
+     RETURNING id_evento`,
+  );
+  const actualizados_jsonb = jsonbResult.rowCount ?? 0;
+
+  const fallbackResult = await pgPool.query<{ id_evento: number }>(
+    `UPDATE chats_logs
+     SET primer_msg_at = COALESCE(primer_msg_lead_at, fecha_y_hora_z)
+     WHERE primer_msg_at IS NULL
+     RETURNING id_evento`,
+  );
+  const actualizados_fallback = fallbackResult.rowCount ?? 0;
+
+  const pendingResult = await pgPool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM chats_logs WHERE primer_msg_at IS NULL`,
+  );
+  const pendientes_null = parseInt(pendingResult.rows[0]?.count ?? "0", 10);
+
+  console.info(
+    `[backfillPrimerMsgAt] jsonb=${actualizados_jsonb} fallback=${actualizados_fallback} | pendientes_null=${pendientes_null}`,
+  );
+
+  return { success: true, actualizados_jsonb, actualizados_fallback, pendientes_null };
+}

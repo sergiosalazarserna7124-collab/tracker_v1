@@ -1,7 +1,7 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { env } from "../../config/env.js";
 import type { CronDailyTasksPayload, CronAnalyzeChatsPayload } from "../../schemas/cron/daily-tasks.schema.js";
-import { updateNoShows, analyzeChatsNightly, expirePdteRegistros, backfillPrimerMsgLeadAt } from "../../services/cron/daily-tasks.service.js";
+import { updateNoShows, analyzeChatsNightly, expirePdteRegistros, backfillPrimerMsgLeadAt, backfillPrimerMsgAt } from "../../services/cron/daily-tasks.service.js";
 import { db as pgPool } from "../../config/database.js";
 
 export async function handleUpdateNoShows(
@@ -97,5 +97,23 @@ export async function handleBackfillPrimerMsgLeadAt(
   } catch (err) {
     console.error("[handleBackfillPrimerMsgLeadAt] Error:", err);
     return reply.status(500).send({ success: false, error: "Error interno al backfill primer_msg_lead_at" });
+  }
+}
+
+export async function handleBackfillPrimerMsgAt(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const secret = request.headers["x-cron-secret"];
+  if (secret !== env.CRON_SECRET) {
+    return reply.status(401).send({ success: false, error: "Unauthorized" });
+  }
+
+  try {
+    const result = await backfillPrimerMsgAt();
+    return reply.send(result);
+  } catch (err) {
+    console.error("[handleBackfillPrimerMsgAt] Error:", err);
+    return reply.status(500).send({ success: false, error: "Error interno al backfill primer_msg_at" });
   }
 }
