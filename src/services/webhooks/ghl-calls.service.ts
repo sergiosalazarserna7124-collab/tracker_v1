@@ -11,7 +11,7 @@
  *   POST /webhooks/ghl/calls/effective → contestó → IA → estado clasificado
  */
 
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, not, or, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { llamadas, logLlamadas, eventosHuerfanos, agendas } from "../../db/schema.js";
 import {
@@ -40,9 +40,14 @@ import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import type { GhlCallEventBody } from "../../schemas/webhooks/ghl-calls.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
-// ─── Estados activos para búsqueda de registro existente ─────────────────────
-
+// Estados activos (solo para decidir transición de estado, NO para lookup)
 const ESTADOS_ACTIVOS = ["pdte", "seguimiento", "programado", "no_contestada", "no_contestado"] as const;
+
+// Estados terminales: leads cerrados que NO deben re-abrirse con nuevas llamadas
+const ESTADOS_TERMINALES = ["venta", "ganado", "ganada", "perdido", "perdida", "cerrado", "cerrada"] as const;
+
+// Ventana temporal para re-agregación: no matchear leads más antiguos que esto
+const REAGREGACION_WINDOW_DAYS = 30;
 
 // ─── Helper: calcular speed_to_lead ──────────────────────────────────────────
 
@@ -355,7 +360,8 @@ async function followUpPath(
               and(
                 sql`LOWER(${llamadas.mail_lead}) = LOWER(${mailLead})`,
                 idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
-                or(inArray(llamadas.estado, [...ESTADOS_ACTIVOS]), isNull(llamadas.estado)),
+                or(isNull(llamadas.estado), not(inArray(llamadas.estado, [...ESTADOS_TERMINALES]))),
+                gte(llamadas.fecha_evento, new Date(now.getTime() - REAGREGACION_WINDOW_DAYS * 86_400_000)),
               ),
             )
             .orderBy(desc(llamadas.fecha_evento))
@@ -379,7 +385,8 @@ async function followUpPath(
               and(
                 eq(llamadas.id_user_ghl, idUserGhl),
                 idCuenta ? eq(llamadas.id_cuenta, idCuenta) : undefined,
-                or(inArray(llamadas.estado, [...ESTADOS_ACTIVOS]), isNull(llamadas.estado)),
+                or(isNull(llamadas.estado), not(inArray(llamadas.estado, [...ESTADOS_TERMINALES]))),
+                gte(llamadas.fecha_evento, new Date(now.getTime() - REAGREGACION_WINDOW_DAYS * 86_400_000)),
               ),
             )
             .orderBy(desc(llamadas.fecha_evento))
@@ -396,6 +403,8 @@ async function followUpPath(
 
   if (existing) {
     const stl = calcSpeedToLead(existing.estado, existing.fecha_evento, now);
+    const isEffective = existing.estado != null && existing.estado !== "" &&
+      !(ESTADOS_ACTIVOS as readonly string[]).includes(existing.estado.toLowerCase());
     try {
       await withRetry(
         () =>
@@ -403,7 +412,7 @@ async function followUpPath(
             .update(llamadas)
             .set({
               nombre_lead: nombreLead,
-              estado: "no_contestada",
+              estado: isEffective ? existing!.estado! : "no_contestada",
               closer_mail: closerMail,
               nombre_closer: nombreCloser,
               fecha_y_hora_de_seguimiento: now,
@@ -608,15 +617,18 @@ async function effectivePath(
     }
   }
 
-  const estadoActivo =
-    existing &&
-    (existing.estado === null ||
-      existing.estado === "" ||
-      ESTADOS_ACTIVOS.some((e) => existing!.estado?.toLowerCase().includes(e)));
+  const esTerminal =
+    existing?.estado != null &&
+    existing.estado !== "" &&
+    ESTADOS_TERMINALES.some((e) => existing!.estado!.toLowerCase() === e);
+  const dentroDeVentana =
+    existing?.fecha_evento != null &&
+    now.getTime() - existing.fecha_evento.getTime() < REAGREGACION_WINDOW_DAYS * 86_400_000;
+  const esReagregable = existing && !esTerminal && dentroDeVentana;
 
   let idRegistro: number | null = null;
 
-  if (existing && estadoActivo) {
+  if (existing && esReagregable) {
     const stl = calcSpeedToLead(existing.estado, existing.fecha_evento, now);
     try {
       await withRetry(
@@ -805,7 +817,7 @@ async function effectivePath(
     success: true,
     data: {
       id_registro: idRegistro,
-      action: existing && estadoActivo ? "updated" : "created",
+      action: existing && esReagregable ? "updated" : "created",
       path: "effective",
       estado: effectiveEstado,
       buzon: false,
