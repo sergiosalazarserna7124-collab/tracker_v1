@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray, isNull, not, or, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
-import { llamadas, logLlamadas, eventosHuerfanos, cuentas, agendas } from "../../db/schema.js";
+import { llamadas, logLlamadas, eventosHuerfanos, cuentas } from "../../db/schema.js";
 import {
   addContactNote,
   getAccountByLocationId,
@@ -1206,50 +1206,8 @@ async function effectivePath(
     }
   }
 
-  // ── Transicionar cita PDTE → estado clasificado (Twilio sin Fathom) ─────────
-  // Si el contacto tenía una cita agendada en PDTE, la llamada efectiva la marca
-  // con el estado de la IA. Solo se toca si está en PDTE para no pisar Fathom.
-  if (idCuenta) {
-    try {
-      const agendaWhere = contactId
-        ? and(eq(agendas.ghl_contact_id, contactId), eq(agendas.id_cuenta, idCuenta), eq(agendas.categoria, "PDTE"))
-        : mailLead
-          ? and(sql`LOWER(${agendas.email_lead}) = LOWER(${mailLead})`, eq(agendas.id_cuenta, idCuenta), eq(agendas.categoria, "PDTE"))
-          : null;
-
-      if (agendaWhere) {
-        const [existingAgenda] = await withRetry(
-          () =>
-            drizzleDb
-              .select({ id: agendas.id_registro_agenda })
-              .from(agendas)
-              .where(agendaWhere)
-              .orderBy(desc(agendas.fecha))
-              .limit(1),
-          { label: "effectivePath/findAgenda" },
-        );
-
-        if (existingAgenda) {
-          await withRetry(
-            () =>
-              drizzleDb
-                .update(agendas)
-                .set({
-                  categoria: effectiveEstado,
-                  ...(iadesc ? { resumen_ia: iadesc } : {}),
-                })
-                .where(eq(agendas.id_registro_agenda, existingAgenda.id)),
-            { label: "effectivePath/updateAgenda" },
-          );
-          console.info(
-            `[Effective] Agenda ${existingAgenda.id} actualizada: PDTE → ${effectiveEstado} (id_cuenta=${idCuenta})`,
-          );
-        }
-      }
-    } catch (err) {
-      console.error(`[Effective] Error actualizando agenda PDTE para id_cuenta=${idCuenta}:`, err);
-    }
-  }
+  // AUT-838: phone calls no longer overwrite PDTE agendas — the call analysis
+  // stays in registros_de_llamada; the agenda row remains untouched.
 
   // Tag dinámico de clasificación + tag de llamada contestada
   const tag = mapEstadoToTag(effectiveEstado);
