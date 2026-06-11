@@ -12,6 +12,17 @@ const VozEstado = Type.Union([
   Type.Literal("desconocido"),
 ]);
 
+const VozReagendamiento = Type.Object(
+  {
+    scheduled_for: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    timezone: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    when_text: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    notes: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    modo: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  },
+  { additionalProperties: true },
+);
+
 export const VozCallCompletedBody = Type.Object(
   {
     event: Type.String(),
@@ -22,9 +33,15 @@ export const VozCallCompletedBody = Type.Object(
     client_email: Type.Optional(Type.String()),
     client_whatsapp: Type.Optional(Type.String()),
     broker_name: Type.Optional(Type.String()),
-    userid: Type.Optional(Type.String()),
+    broker_company: Type.Optional(Type.String()),
+    campaign_id: Type.Optional(Type.String()),
+    // contactid = id del contacto en GHL (v2; alias legado: userid)
+    contactid: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    userid: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    reagendamiento: Type.Optional(Type.Union([VozReagendamiento, Type.Null()])),
     transcript: Type.Optional(Type.String()),
     short_summary: Type.Optional(Type.String()),
+    ended_at: Type.Optional(Type.String()),
     duration_seconds: Type.Optional(Type.Number()),
   },
   { additionalProperties: true },

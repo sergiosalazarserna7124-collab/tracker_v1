@@ -6,6 +6,7 @@ import {
   searchContactByEmail,
   safeAddContactTags,
   createLocationTag,
+  addContactNote,
   GHL_TAGS,
   type CuentaFullRow,
 } from "../ghl-api.service.js";
@@ -109,9 +110,24 @@ async function processVozInternal(
   const transcript = body.transcript ?? "";
   const iadescripcion = body.short_summary ?? null;
   const callId = body.call_id;
-  const idUserGhl = body.userid ?? null;
   const estado = body.estado;
   const now = new Date();
+
+  // contactid (v2) es el id del contacto en GHL; userid es el alias legado.
+  const contactIdRaw = body.contactid ?? body.userid ?? null;
+  const ghlContactIdPayload =
+    contactIdRaw !== null && contactIdRaw !== "" ? String(contactIdRaw) : null;
+  const idUserGhl = ghlContactIdPayload;
+
+  // reagendamiento (solo en estado="reagendado"): persistir la cita.
+  const reagendamiento = body.reagendamiento ?? null;
+  let fechaSeguimiento: Date | null = null;
+  if (reagendamiento?.scheduled_for) {
+    const parsed = new Date(reagendamiento.scheduled_for);
+    if (!Number.isNaN(parsed.getTime())) {
+      fechaSeguimiento = parsed;
+    }
+  }
 
   // ── 4. Evaluar reglas de etiquetas (si hay transcript) ─────────────────────
   let reglasMatchedTags: string[] = [];
@@ -164,6 +180,8 @@ async function processVozInternal(
             trancription: transcript || null,
             iadescripcion,
             id_user_ghl: idUserGhl,
+            ghl_contact_id: ghlContactIdPayload,
+            fecha_y_hora_de_seguimiento: fechaSeguimiento,
             tags_internos: tagsInternos,
           })
           .where(eq(llamadas.id_registro, existingByCallId[0].id_registro)),
@@ -186,7 +204,7 @@ async function processVozInternal(
             creativo_origen: null,
             closer_mail: "voz@autokpi.net",
             nombre_closer: "Agente de voz - Auto KPI",
-            fecha_y_hora_de_seguimiento: null,
+            fecha_y_hora_de_seguimiento: fechaSeguimiento,
             speed_to_lead: null,
             intentos_contacto: 1,
             fecha_primera_llamada: now,
@@ -194,7 +212,7 @@ async function processVozInternal(
             callsid: callId,
             iadescripcion,
             id_user_ghl: idUserGhl,
-            ghl_contact_id: null,
+            ghl_contact_id: ghlContactIdPayload,
             tags_internos: tagsInternos,
           })
           .returning({ id_registro: llamadas.id_registro }),
@@ -213,7 +231,7 @@ async function processVozInternal(
           id_cuenta: idCuenta,
           mail_lead: mailLead,
           id_user_ghl: idUserGhl,
-          contact_id_ghl: null,
+          contact_id_ghl: ghlContactIdPayload,
           nombre_lead: nombreLead,
           phone,
           tipo_evento: "voz_callai",
@@ -233,15 +251,18 @@ async function processVozInternal(
     console.error(`${label} Error insertando en log_llamadas (best-effort):`, err);
   }
 
-  // ── 7. Tagging GHL ─────────────────────────────────────────────────────────
+  // ── 7. Tagging + nota en GHL ───────────────────────────────────────────────
   const tokenGhl = cuenta.token_ghl;
   const locationId = cuenta.locationid;
+  let tagsAplicados: string[] = [];
+  let notaAplicada = false;
 
   if (tokenGhl && locationId) {
-    let ghlContactId: string | null = null;
+    // El contactid del payload ES el id del contacto en GHL: úsalo directo.
+    // Solo si no viene, caer al lookup por email/teléfono (legacy/robustez).
+    let ghlContactId: string | null = ghlContactIdPayload;
 
-    // Resolver contacto GHL por email o teléfono
-    if (mailLead) {
+    if (!ghlContactId && mailLead) {
       try {
         const contact = await searchContactByEmail(locationId, mailLead, tokenGhl);
         ghlContactId = contact?.id ?? null;
@@ -259,8 +280,8 @@ async function processVozInternal(
     }
 
     if (ghlContactId) {
-      // Actualizar ghl_contact_id en el registro si se encontró
-      if (idRegistro) {
+      // Si resolvimos el contacto por búsqueda (no venía en el payload), persistirlo
+      if (ghlContactId !== ghlContactIdPayload && idRegistro) {
         try {
           await drizzleDb
             .update(llamadas)
@@ -291,6 +312,7 @@ async function processVozInternal(
             } catch { /* best-effort */ }
           }
           await safeAddContactTags(ghlContactId, tokenGhl, tagsToApply, locationId);
+          tagsAplicados = tagsToApply;
         } catch (err) {
           const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
           if (isTokenInvalid) {
@@ -302,11 +324,28 @@ async function processVozInternal(
           }
         }
       }
+
+      // Nota en GHL con resumen + reagendamiento + transcript (best-effort)
+      try {
+        const noteLines: string[] = [`📞 Agente de voz - Auto KPI — estado: ${estado}`];
+        if (iadescripcion) noteLines.push(`Resumen: ${iadescripcion}`);
+        if (reagendamiento) {
+          const tz = reagendamiento.timezone ? ` (${reagendamiento.timezone})` : "";
+          const when = reagendamiento.when_text ? ` — "${reagendamiento.when_text}"` : "";
+          noteLines.push(`📅 Reagendado: ${reagendamiento.scheduled_for ?? "sin fecha"}${tz}${when}`);
+          if (reagendamiento.notes) noteLines.push(`Notas de la cita: ${reagendamiento.notes}`);
+        }
+        if (transcript.trim()) noteLines.push(`\n--- Transcript ---\n${transcript}`);
+        await addContactNote(ghlContactId, tokenGhl, noteLines.join("\n"));
+        notaAplicada = true;
+      } catch (err) {
+        console.error(`${label} Error agregando nota GHL (best-effort):`, err);
+      }
     } else {
-      console.warn(`${label} No se encontró contacto GHL — tags quedan sin aplicar`);
+      console.warn(`${label} No se encontró contacto GHL — tags/nota sin aplicar`);
     }
   } else {
-    console.warn(`${label} Cuenta sin token_ghl o locationid — tags no aplicados`);
+    console.warn(`${label} Cuenta sin token_ghl o locationid — tags/nota no aplicados`);
   }
 
   return {
@@ -316,7 +355,10 @@ async function processVozInternal(
       id_cuenta: idCuenta,
       id_registro: idRegistro,
       estado,
-      tags_applied: reglasMatchedTags,
+      ghl_contact_id: ghlContactIdPayload,
+      reagendado: reagendamiento ? true : false,
+      nota_aplicada: notaAplicada,
+      tags_applied: tagsAplicados,
     },
   };
 }
