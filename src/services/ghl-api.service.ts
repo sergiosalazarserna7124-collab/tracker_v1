@@ -84,6 +84,7 @@ export const GHL_TAGS = {
   videollamada_efectiva: "videollamada_efectiva_autoia",
   interesado_callai: "interesadocallai",
   no_interesado_callai: "nointeresadocallai",
+  perdido: "perdidoautoia",
 } as const;
 
 // ─── Consulta a BD: buscar cuenta por locationid (match exacto) ───────────────
