@@ -37,6 +37,7 @@ import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-a
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
+import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
 import type { GhlCallEventBody } from "../../schemas/webhooks/ghl-calls.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
@@ -189,6 +190,7 @@ async function resolveAccountFull(
   promptVentas: string | null;
   promptLlamadas: string | null;
   reglasEtiquetas: unknown;
+  configLlamadas: unknown;
   isCancelled: boolean;
 }> {
   const empty = {
@@ -199,6 +201,7 @@ async function resolveAccountFull(
     promptVentas: null,
     promptLlamadas: null,
     reglasEtiquetas: null,
+    configLlamadas: null,
     isCancelled: false,
   };
 
@@ -211,6 +214,7 @@ async function resolveAccountFull(
       promptVentas: account.prompt_ventas,
       promptLlamadas: account.prompt_llamadas,
       reglasEtiquetas: account.reglas_etiquetas,
+      configLlamadas: account.config_llamadas,
       isCancelled: false,
     };
   }
@@ -963,6 +967,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     promptVentas,
     promptLlamadas,
     reglasEtiquetas,
+    configLlamadas,
     isCancelled,
   } = await resolveAccountFull(fields.locationId, "GhlCalls/Effective", fields.idCuentaFromPayload);
   if (isCancelled) return { success: true };
@@ -985,9 +990,14 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
   const transcript = fields.transcript;
 
   // Sin transcripción: tratar como no-answer (no hay conversación que clasificar)
-  if (!transcript || transcript.trim().length < 80) {
+  const cfgLlamadas = parseConfigLlamadas(configLlamadas);
+  const wordCount = transcript ? countWords(transcript) : 0;
+  const minPalabras = cfgLlamadas?.min_palabras ?? 0;
+  const shortByWords = transcript && minPalabras > 0 && wordCount < minPalabras;
+  const shortByChars = transcript && minPalabras === 0 && transcript.trim().length < 80;
+  if (!transcript || shortByWords || shortByChars) {
     console.warn(
-      `[GhlCalls/Effective] Transcripción ${!transcript ? "ausente" : "muy corta"} — procesando como seguimiento`,
+      `[GhlCalls/Effective] Transcripción ${!transcript ? "ausente" : `muy corta (${wordCount} palabras, ${transcript.trim().length} chars)`} — procesando como seguimiento`,
     );
     return followUpPath(
       fields,

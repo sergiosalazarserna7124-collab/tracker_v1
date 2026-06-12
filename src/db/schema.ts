@@ -153,6 +153,10 @@ export const cuentas = pgTable("cuentas", {
   // NULL = todos los chats son calificados (backward compat).
   // Estructura: {"categorias_calificadas": string[], "umbral_minimo": number}
   criterios_calificacion: jsonb("criterios_calificacion"),
+  // ── V10: clasificación estricta de llamadas por cuenta ───────────────────────
+  // NULL = comportamiento actual (80-chars guard, backward compat).
+  // Estructura: {"min_palabras": 15, "requiere_conversacion_real": true}
+  config_llamadas: jsonb("config_llamadas"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

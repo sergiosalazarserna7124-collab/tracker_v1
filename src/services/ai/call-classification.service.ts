@@ -98,19 +98,20 @@ CRÍTICO - LEE CON ATENCIÓN:
    - **Caso B (mensaje largo automático SIN conversación):** El iPhone puede leer un mensaje largo tipo "How to reach Liza at Botanical Santo Nino is your name and phone number. Ustedes van a ver a Liza con Botanical Santo Nino." Si la transcripción contiene SOLO (o casi solo) ese tipo de mensaje automático y la persona llamada NUNCA habla para tener un diálogo real → buzon: true (es buzón/filtrado automático, NO efectiva).
    - Regla: si NO hay en ningún momento voz de la persona llamada manteniendo una conversación (preguntas, respuestas, intercambio), es buzón.
 
-2. **PERSONA QUE CONTESTA**:
-   - Si en CUALQUIER momento hay un humano que responde y conversa → buzon: false
-   - Aunque sea breve: "Aló", "Bueno", "Diga", "Hello" seguido de conversación → buzon: false
+2. **PERSONA QUE CONTESTA CON CONVERSACIÓN REAL**:
+   - No basta con que el lead diga "Aló", "Bueno", "Sí" o "¿Bueno?" y luego no haya más contenido real del lead → eso NO es conversación → buzon: true, estado: "seguimiento".
+   - Para que sea buzon: false se requiere que el lead aporte contenido real: responda preguntas, haga preguntas, dé información, muestre interés o rechazo, etc.
+   - Si SOLO habló el asesor (presentándose, diciendo su nombre, empresa, motivo) y el lead nunca respondió con contenido real → buzon: true, estado: "seguimiento".
 
 3. **LLAMADA FALLIDA O CORTADA**:
    - Si la llamada simplemente no conectó pero no es buzón → buzon: null
    - Si solo hay silencio o ruido → buzon: null
 
 ### REGLA DE ORO PARA BUZÓN:
-Pregúntate: "¿Hubo en algún momento una persona humana que respondió y conversó?"
-- SÍ hubo persona → buzon: false
-- NO hubo persona, solo mensaje pregrabado pidiendo dejar mensaje → buzon: true
-- No está claro / llamada vacía → buzon: null
+Pregúntate: "¿Hubo una conversación real donde el LEAD aportó contenido (no solo 'aló')?"
+- SÍ hubo conversación real del lead (respondió, preguntó, dio info) → buzon: false
+- Solo habló el asesor, o el lead solo dijo palabras de saludo sin más contenido → buzon: true
+- Llamada vacía, cortada, o indeterminada → buzon: null
 
 ---
 
@@ -222,8 +223,8 @@ Si la transcripción muestra SOLO al asesor hablando (presentándose, diciendo "
 ### Caso: Recepcionista / asistente que toma nota y cuelga sin pasar la llamada
 Si solo hay una recepcionista/asistente que dice cosas como "permanezca en espera", "voy a verificar si está disponible", "le dejo el recado", "¿me puede dejar su nombre?" y la llamada termina sin que el prospecto real hable directamente → el prospecto NUNCA fue contactado → buzon: false, estado: "seguimiento", iadesc explicando que fue interceptado por recepcionista sin pasar al prospecto.
 
-### Caso: La transcripción es muy corta (menos de 80 caracteres)
-Casi con certeza es un buzón, una llamada cortada o sin conversación real. A menos que haya un "aló" seguido de cuelgue, clasificar como buzon: true, estado: "seguimiento".
+### Caso: La transcripción es muy corta (menos de 15 palabras)
+Casi con certeza es un buzón, una llamada cortada o sin conversación real. Clasificar como buzon: true, estado: "seguimiento".
 
 ### Caso: La persona muestra interés pero NO agenda nada ni pide info
 → Evalúa el nivel de interés. Si fue tibio sin compromiso → podría ser "seguimiento". Si mostró interés activo → "interesado"

@@ -30,6 +30,7 @@ import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingNote, savePendingTag } from "../ghl-token-guard.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
+import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
@@ -195,9 +196,10 @@ async function resolveAccountFull(
   promptVentas: string | null;
   promptLlamadas: string | null;
   reglasEtiquetas: unknown;
+  configLlamadas: unknown;
   isCancelled: boolean;
 }> {
-  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, isCancelled: false };
+  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, configLlamadas: null, isCancelled: false };
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
     return empty;
@@ -228,6 +230,7 @@ async function resolveAccountFull(
       promptVentas: account.prompt_ventas,
       promptLlamadas: account.prompt_llamadas,
       reglasEtiquetas: account.reglas_etiquetas,
+      configLlamadas: account.config_llamadas,
       isCancelled: false,
     };
   } catch (err) {
@@ -717,7 +720,7 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
 export async function processEffectiveCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
-  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, isCancelled } =
+  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, configLlamadas, isCancelled } =
     await resolveAccountFull(fields.locationId, "Effective", fields.locationIdFallback);
   if (isCancelled) return { success: true, data: { id_cuenta: idCuenta, cancelled: true } };
 
@@ -855,11 +858,15 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   // Pre-flight: transcripción demasiado corta → buzón de voz o llamada sin
   // conversación real (ej: "Bueno, se le quedó?" / mensaje de screening iPhone).
-  // Umbral de 80 chars: cualquier conversación real tiene al menos eso.
-  const MIN_TRANSCRIPT_CHARS = 80;
-  if (transcript.trim().length < MIN_TRANSCRIPT_CHARS) {
+  // Default: 80 chars. Si la cuenta tiene config_llamadas.min_palabras, usar palabras.
+  const cfgLlamadas = parseConfigLlamadas(configLlamadas);
+  const wordCount = countWords(transcript);
+  const minPalabras = cfgLlamadas?.min_palabras ?? 0;
+  const shortByWords = minPalabras > 0 && wordCount < minPalabras;
+  const shortByChars = minPalabras === 0 && transcript.trim().length < 80;
+  if (shortByWords || shortByChars) {
     console.warn(
-      `[Effective] Transcripción muy corta (${transcript.trim().length} chars < ${MIN_TRANSCRIPT_CHARS}); clasificando como seguimiento sin consumir IA`,
+      `[Effective] Transcripción muy corta (${wordCount} palabras, ${transcript.trim().length} chars); clasificando como seguimiento sin consumir IA`,
     );
     return followUpPath(fields, idCuenta, tokenGhl, callSid, transcript, "Transcripción demasiado corta para ser una conversación real.", "Effective/short-transcript");
   }
