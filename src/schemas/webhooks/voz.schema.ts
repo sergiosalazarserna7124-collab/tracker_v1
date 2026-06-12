@@ -23,6 +23,16 @@ const VozReagendamiento = Type.Object(
   { additionalProperties: true },
 );
 
+// ya_afiliado: respuestas textuales del prospecto cuando dice que ya está
+// afiliado a otra red. Independiente del estado.
+const VozYaAfiliado = Type.Object(
+  {
+    con_quien: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    como_le_va: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  },
+  { additionalProperties: true },
+);
+
 export const VozCallCompletedBody = Type.Object(
   {
     event: Type.String(),
@@ -39,6 +49,10 @@ export const VozCallCompletedBody = Type.Object(
     contactid: Type.Optional(Type.Union([Type.String(), Type.Number()])),
     userid: Type.Optional(Type.Union([Type.String(), Type.Number()])),
     reagendamiento: Type.Optional(Type.Union([VozReagendamiento, Type.Null()])),
+    // etiquetas: tags genéricos a aplicar al contacto, independientes del estado
+    // (hoy solo "afiliado_imexico", pero el array es extensible).
+    etiquetas: Type.Optional(Type.Array(Type.String())),
+    ya_afiliado: Type.Optional(Type.Union([VozYaAfiliado, Type.Null()])),
     transcript: Type.Optional(Type.String()),
     short_summary: Type.Optional(Type.String()),
     ended_at: Type.Optional(Type.String()),

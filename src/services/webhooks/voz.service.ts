@@ -119,6 +119,15 @@ async function processVozInternal(
     contactIdRaw !== null && contactIdRaw !== "" ? String(contactIdRaw) : null;
   const idUserGhl = ghlContactIdPayload;
 
+  // etiquetas: tags genéricos del bot, independientes del estado (p.ej.
+  // "afiliado_imexico"). Se aplican al contacto además del tag de clasificación.
+  const etiquetasPayload = Array.isArray(body.etiquetas)
+    ? body.etiquetas.filter((t): t is string => typeof t === "string" && t.trim() !== "")
+    : [];
+
+  // ya_afiliado: respuestas textuales del prospecto ya afiliado a otra red.
+  const yaAfiliado = body.ya_afiliado ?? null;
+
   // reagendamiento (solo en estado="reagendado"): persistir la cita.
   const reagendamiento = body.reagendamiento ?? null;
   let fechaSeguimiento: Date | null = null;
@@ -303,6 +312,16 @@ async function processVozInternal(
         tagsToApply.push(...reglasMatchedTags);
       }
 
+      // Etiquetas genéricas del bot (independientes del estado, p.ej. afiliado_imexico)
+      if (etiquetasPayload.length > 0) {
+        tagsToApply.push(...etiquetasPayload);
+      }
+
+      // Dedupe (un afiliado interesado no debe recibir el mismo tag dos veces)
+      const tagsUnicos = [...new Set(tagsToApply)];
+      tagsToApply.length = 0;
+      tagsToApply.push(...tagsUnicos);
+
       if (tagsToApply.length > 0) {
         try {
           // Crear tags nuevos en la location si no existen
@@ -329,6 +348,14 @@ async function processVozInternal(
       try {
         const noteLines: string[] = [`📞 Agente de voz - Auto KPI — estado: ${estado}`];
         if (iadescripcion) noteLines.push(`Resumen: ${iadescripcion}`);
+        if (etiquetasPayload.length > 0) {
+          noteLines.push(`🏷️ Etiquetas: ${etiquetasPayload.join(", ")}`);
+        }
+        if (yaAfiliado && (yaAfiliado.con_quien || yaAfiliado.como_le_va)) {
+          noteLines.push("🤝 Ya afiliado:");
+          if (yaAfiliado.con_quien) noteLines.push(`  • Con quién: ${yaAfiliado.con_quien}`);
+          if (yaAfiliado.como_le_va) noteLines.push(`  • Cómo le va: ${yaAfiliado.como_le_va}`);
+        }
         if (reagendamiento) {
           const tz = reagendamiento.timezone ? ` (${reagendamiento.timezone})` : "";
           const when = reagendamiento.when_text ? ` — "${reagendamiento.when_text}"` : "";
@@ -357,6 +384,8 @@ async function processVozInternal(
       estado,
       ghl_contact_id: ghlContactIdPayload,
       reagendado: reagendamiento ? true : false,
+      ya_afiliado: yaAfiliado ? true : false,
+      etiquetas_payload: etiquetasPayload,
       nota_aplicada: notaAplicada,
       tags_applied: tagsAplicados,
     },
