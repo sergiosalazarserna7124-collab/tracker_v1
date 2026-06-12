@@ -219,9 +219,13 @@ async function enviarAlerta60m(lead: LeadPendiente): Promise<boolean> {
   try {
     await addContactNote(lead.ghl_contact_id, lead.token_ghl, nota);
   } catch (err) {
+    const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
     const isPermanent =
       (err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") ||
-      (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+      isTokenInvalid;
+    if (isTokenInvalid) {
+      await savePendingNote(lead.id_cuenta, lead.ghl_contact_id, nota, String(err));
+    }
     if (!isPermanent) {
       await pgPool.query(
         `UPDATE registros_de_llamada SET speed_to_lead_alerted_at = NULL WHERE id_registro = $1`,
@@ -280,9 +284,13 @@ async function enviarAlerta4h(lead: LeadPendiente): Promise<boolean> {
   try {
     await addContactNote(lead.ghl_contact_id, lead.token_ghl, nota);
   } catch (err) {
+    const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
     const isPermanent =
       (err as Error).message?.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") ||
-      (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+      isTokenInvalid;
+    if (isTokenInvalid) {
+      await savePendingNote(lead.id_cuenta, lead.ghl_contact_id, nota, String(err));
+    }
     if (!isPermanent) {
       await pgPool.query(
         `UPDATE registros_de_llamada SET speed_to_lead_4h_alerted_at = NULL WHERE id_registro = $1`,

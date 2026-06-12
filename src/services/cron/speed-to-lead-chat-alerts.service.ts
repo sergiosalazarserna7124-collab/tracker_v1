@@ -16,7 +16,7 @@
 import { db as pgPool } from "../../config/database.js";
 import { addContactNote } from "../ghl-api.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
-import { markTokenInvalid } from "../ghl-token-guard.service.js";
+import { markTokenInvalid, savePendingNote } from "../ghl-token-guard.service.js";
 
 // Máximo de GHL calls totales por corrida (anti rate-limit GHL).
 // 60m y 4h comparten este presupuesto global.
@@ -231,6 +231,7 @@ async function enviarAlerta60m(chat: ChatPendiente): Promise<boolean> {
     const errMsg = (err as Error).message ?? "";
     const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
     if (isTokenInvalid) {
+      await savePendingNote(chat.id_cuenta, chat.id_lead, nota, String(err));
       throw err;
     }
     if (errMsg.includes("Contact not found") || errMsg.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") || /responded 4[0-9][0-9]:/.test(errMsg)) {
@@ -298,6 +299,7 @@ async function enviarAlerta4h(chat: ChatPendiente): Promise<boolean> {
     const errMsg = (err as Error).message ?? "";
     const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
     if (isTokenInvalid) {
+      await savePendingNote(chat.id_cuenta, chat.id_lead, nota, String(err));
       throw err;
     }
     if (errMsg.includes("Contact not found") || errMsg.startsWith("GHL_CONTACT_NOT_ACCESSIBLE") || /responded 4[0-9][0-9]:/.test(errMsg)) {
