@@ -427,6 +427,63 @@ async function handleReagenda(body: GhlBodyPayload, tokenGhl?: string): Promise<
   return { id_registro_agenda: id, categoria: "PDTE", action, tagged };
 }
 
+// ─── Handler: lead perdido ──────────────────────────────────────────────────
+
+async function handlePerdido(body: GhlBodyPayload): Promise<AgendaResult> {
+  const fields = extractFields(body);
+
+  let updatedChats = 0;
+  let updatedLlamadas = 0;
+
+  if (fields.contactId) {
+    const { rowCount } = await withRetry(
+      () =>
+        db.query(
+          `UPDATE chats_logs
+           SET estado = 'perdido'
+           WHERE id_cuenta = $1 AND id_lead = $2 AND estado <> 'perdido'`,
+          [fields.idCuenta, fields.contactId],
+        ),
+      { label: "handlePerdido/chats" },
+    );
+    updatedChats = rowCount ?? 0;
+  }
+
+  if (fields.contactId) {
+    const { rowCount } = await withRetry(
+      () =>
+        db.query(
+          `UPDATE registros_de_llamada
+           SET estado = 'perdido'
+           WHERE id_cuenta = $1 AND ghl_contact_id = $2
+             AND estado NOT IN ('venta','ganado','ganada','perdido','perdida','cerrado','cerrada')`,
+          [fields.idCuenta, fields.contactId],
+        ),
+      { label: "handlePerdido/llamadas" },
+    );
+    updatedLlamadas = rowCount ?? 0;
+  }
+
+  console.log(
+    `[GHL handlePerdido] cuenta=${fields.idCuenta} contacto=${fields.contactId} ` +
+    `→ chats=${updatedChats} llamadas=${updatedLlamadas}`,
+  );
+
+  const tagged = await applyGhlTag(
+    fields.locationId,
+    fields.contactId,
+    GHL_TAGS.perdido,
+    "handlePerdido",
+  );
+
+  return {
+    id_registro_agenda: 0,
+    categoria: "perdido",
+    action: "updated",
+    tagged,
+  };
+}
+
 // ─── Dispatcher principal ─────────────────────────────────────────────────────
 
 export async function processGhlWebhook(
@@ -499,6 +556,12 @@ export async function processGhlWebhook(
       case "reagenda": {
         console.log("🔀 [GHL webhook] Entrando a handleReagenda");
         const data = await handleReagenda(body, tokenGhl);
+        return { success: true, data: { ...data, id_cuenta: idCuentaGhl } };
+      }
+
+      case "perdido": {
+        console.log("🔀 [GHL webhook] Entrando a handlePerdido");
+        const data = await handlePerdido(body);
         return { success: true, data: { ...data, id_cuenta: idCuentaGhl } };
       }
 
