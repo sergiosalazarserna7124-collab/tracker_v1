@@ -145,34 +145,82 @@ function getBackfillDatesInTz(tz: string, days: number): string[] {
   return dates; // [ayer, antier, hace3días, ...]
 }
 
+// ─── Meta Ads types ──────────────────────────────────────────────────────────
+
+interface MetaInsightRow {
+  campaign_name?: string;
+  adset_name?: string;
+  spend?: string;
+  impressions?: string;
+  clicks?: string;
+  cpm?: string;
+  cpc?: string;
+  ctr?: string;
+  date_start?: string;
+  date_stop?: string;
+  [key: string]: unknown;
+}
+
+interface MetaPaging {
+  cursors?: { before?: string; after?: string };
+  next?: string;
+}
+
+interface MetaInsightsResponse {
+  data?: MetaInsightRow[];
+  paging?: MetaPaging;
+}
+
 // ─── Meta Ads sync ────────────────────────────────────────────────────────────
 
-async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha: string, timezone?: string | null): Promise<void> {
-  const url = new URL(
+const META_PAGINATION_LIMIT = 500;
+const META_MAX_PAGES = 50;
+
+export async function fetchAllMetaInsightPages(initialUrl: string): Promise<MetaInsightRow[]> {
+  const allRows: MetaInsightRow[] = [];
+  let nextUrl: string | undefined = initialUrl;
+  let page = 0;
+
+  while (nextUrl && page < META_MAX_PAGES) {
+    const res = await fetch(nextUrl);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Meta API error: ${res.status} ${text}`);
+    }
+
+    const json = (await res.json()) as MetaInsightsResponse;
+    const rows = json.data ?? [];
+    allRows.push(...rows);
+
+    nextUrl = json.paging?.next;
+    page++;
+  }
+
+  if (page >= META_MAX_PAGES) {
+    console.warn(`[Meta] Hit pagination limit (${META_MAX_PAGES} pages, ${allRows.length} rows) — some campaigns may be missing`);
+  }
+
+  return allRows;
+}
+
+export async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha: string, timezone?: string | null): Promise<void> {
+  // --- Fix 1: Fetch ALL campaign-level rows following pagination ---
+  const campaignUrl = new URL(
     `https://graph.facebook.com/v19.0/act_${config.ad_account_id}/insights`,
   );
-  // Campos base siempre incluidos + campos extra configurados por el usuario
   const baseFields = ["spend", "impressions", "clicks", "campaign_name", "adset_name", "cpm", "cpc", "ctr"];
   const extraFields = (config.campos_extra ?? []).filter((f) => !baseFields.includes(f));
   const allFields = [...baseFields, ...extraFields];
-  url.searchParams.set("fields", allFields.join(","));
-  url.searchParams.set("time_range", JSON.stringify({ since: fecha, until: fecha }));
-  url.searchParams.set("level", "campaign");
-  // Pasar timezone de la cuenta para que Meta devuelva los datos en el huso correcto.
-  // Sin esto, Meta usa la timezone configurada en la ad account, que puede no coincidir.
+  campaignUrl.searchParams.set("fields", allFields.join(","));
+  campaignUrl.searchParams.set("time_range", JSON.stringify({ since: fecha, until: fecha }));
+  campaignUrl.searchParams.set("level", "campaign");
+  campaignUrl.searchParams.set("limit", String(META_PAGINATION_LIMIT));
   if (timezone) {
-    url.searchParams.set("time_increment", "1");
+    campaignUrl.searchParams.set("time_increment", "1");
   }
-  url.searchParams.set("access_token", config.access_token);
+  campaignUrl.searchParams.set("access_token", config.access_token);
 
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Meta API error: ${res.status} ${text}`);
-  }
-
-  const json = (await res.json()) as { data?: Array<Record<string, unknown>> };
-  const rows = json.data ?? [];
+  const rows = await fetchAllMetaInsightPages(campaignUrl.toString());
 
   const CAMPOS_BASE = new Set(["campaign_name", "adset_name", "spend", "impressions", "clicks", "cpm", "cpc", "ctr", "date_start", "date_stop"]);
 
@@ -186,7 +234,6 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
     const cpc = parseFloat(String(row.cpc ?? "0")) || 0;
     const ctr = parseFloat(String(row.ctr ?? "0")) || 0;
 
-    // Guardar campos extra en datos_extra (reach, actions, video_plays, etc.)
     const datosExtra: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(row)) {
       if (!CAMPOS_BASE.has(key)) {
@@ -214,16 +261,58 @@ async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig, fecha
     );
   }
 
-  // AUT-804: remove legacy account-level rows when campaign-level data exists
-  if (rows.length > 0) {
-    await pgPool.query(
-      `DELETE FROM resumenes_diarios_ads
-       WHERE id_cuenta = $1 AND fecha = $2 AND plataforma = 'meta'
-         AND (campana IS NULL OR campana = '')
-         AND datos_extra IS NULL`,
-      [idCuenta, fecha],
-    );
+  // --- Fix 2: Fetch account-level total as authoritative source of truth ---
+  const accountUrl = new URL(
+    `https://graph.facebook.com/v19.0/act_${config.ad_account_id}/insights`,
+  );
+  const accountFields = ["spend", "impressions", "clicks", "cpm", "cpc", "ctr"];
+  accountUrl.searchParams.set("fields", accountFields.join(","));
+  accountUrl.searchParams.set("time_range", JSON.stringify({ since: fecha, until: fecha }));
+  accountUrl.searchParams.set("level", "account");
+  if (timezone) {
+    accountUrl.searchParams.set("time_increment", "1");
   }
+  accountUrl.searchParams.set("access_token", config.access_token);
+
+  const accountRes = await fetch(accountUrl.toString());
+  if (!accountRes.ok) {
+    const text = await accountRes.text();
+    console.error(`[Meta] Account-level fetch failed for cuenta=${idCuenta} fecha=${fecha}: ${accountRes.status} ${text}`);
+  } else {
+    const accountJson = (await accountRes.json()) as MetaInsightsResponse;
+    const accountRow = accountJson.data?.[0];
+
+    if (accountRow) {
+      const gasto = parseFloat(String(accountRow.spend ?? "0")) || 0;
+      const impresiones = parseInt(String(accountRow.impressions ?? "0"), 10) || 0;
+      const clicks = parseInt(String(accountRow.clicks ?? "0"), 10) || 0;
+      const cpm = parseFloat(String(accountRow.cpm ?? "0")) || 0;
+      const cpc = parseFloat(String(accountRow.cpc ?? "0")) || 0;
+      const ctr = parseFloat(String(accountRow.ctr ?? "0")) || 0;
+
+      await pgPool.query(
+        `INSERT INTO resumenes_diarios_ads
+          (id_cuenta, fecha, plataforma, campana, gasto_total_ad, impresiones_totales, clicks_unicos, cpm, cpc, ctr, datos_extra)
+         VALUES ($1, $2, 'meta', '', $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (id_cuenta, fecha, COALESCE(campana, ''))
+         DO UPDATE SET
+           gasto_total_ad = EXCLUDED.gasto_total_ad,
+           impresiones_totales = EXCLUDED.impresiones_totales,
+           clicks_unicos = EXCLUDED.clicks_unicos,
+           cpm = EXCLUDED.cpm,
+           cpc = EXCLUDED.cpc,
+           ctr = EXCLUDED.ctr,
+           datos_extra = EXCLUDED.datos_extra,
+           plataforma = 'meta'`,
+        [idCuenta, fecha, gasto, impresiones, clicks, cpm, cpc, ctr,
+         JSON.stringify({ source: "account_level" })],
+      );
+    }
+  }
+
+  // AUT-804 DELETE removed: the account-level row is now the authoritative total,
+  // kept in sync by the level=account fetch above. The dashboard already prefers
+  // the account-level row (campana='') when it exists (dashboard.ts L191-230).
 }
 
 // ─── Google Ads sync ──────────────────────────────────────────────────────────
