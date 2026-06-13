@@ -111,23 +111,23 @@ describe("fetchAllMetaInsightPages — pagination", () => {
   });
 });
 
-describe("sincronizarMetaAds — account-level row preservation (static checks)", () => {
-  test("DELETE of account-level rows has been removed", () => {
+describe("sincronizarMetaAds — single source of truth (static checks)", () => {
+  test("deletes account-level row when campaign rows exist to prevent double counting", () => {
     assert.ok(
-      !SERVICE_SOURCE.includes("DELETE FROM resumenes_diarios_ads"),
-      "DELETE of account-level rows should have been removed",
+      SERVICE_SOURCE.includes("DELETE FROM resumenes_diarios_ads"),
+      "Should DELETE account-level row when campaign-level rows exist",
     );
   });
 
-  test("fetches level=account insights as source of truth", () => {
+  test("falls back to account-level when no campaign rows found", () => {
     assert.ok(
       SERVICE_SOURCE.includes('"level", "account"'),
-      "Should fetch level=account insights",
+      "Should fetch level=account insights as fallback",
     );
 
     assert.ok(
       SERVICE_SOURCE.includes('source: "account_level"'),
-      "Account-level row should have source marker in datos_extra",
+      "Account-level fallback row should have source marker in datos_extra",
     );
   });
 

@@ -261,7 +261,21 @@ export async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig
     );
   }
 
-  // --- Fix 2: Fetch account-level total as authoritative source of truth ---
+  if (rows.length > 0) {
+    // Campaign-level rows exist → delete the account-level row to prevent double counting.
+    // The per-campaign rows are the granular source of truth; the account-level row
+    // is redundant and causes SUM queries to double-count spend.
+    await pgPool.query(
+      `DELETE FROM resumenes_diarios_ads
+       WHERE id_cuenta = $1 AND fecha = $2 AND plataforma = 'meta'
+         AND (campana IS NULL OR campana = '')`,
+      [idCuenta, fecha],
+    );
+    return;
+  }
+
+  // No campaign rows found — fall back to account-level total so we don't lose data
+  // for accounts/days where Meta only reports at the account level.
   const accountUrl = new URL(
     `https://graph.facebook.com/v19.0/act_${config.ad_account_id}/insights`,
   );
@@ -278,41 +292,38 @@ export async function sincronizarMetaAds(idCuenta: number, config: AdsMetaConfig
   if (!accountRes.ok) {
     const text = await accountRes.text();
     console.error(`[Meta] Account-level fetch failed for cuenta=${idCuenta} fecha=${fecha}: ${accountRes.status} ${text}`);
-  } else {
-    const accountJson = (await accountRes.json()) as MetaInsightsResponse;
-    const accountRow = accountJson.data?.[0];
-
-    if (accountRow) {
-      const gasto = parseFloat(String(accountRow.spend ?? "0")) || 0;
-      const impresiones = parseInt(String(accountRow.impressions ?? "0"), 10) || 0;
-      const clicks = parseInt(String(accountRow.clicks ?? "0"), 10) || 0;
-      const cpm = parseFloat(String(accountRow.cpm ?? "0")) || 0;
-      const cpc = parseFloat(String(accountRow.cpc ?? "0")) || 0;
-      const ctr = parseFloat(String(accountRow.ctr ?? "0")) || 0;
-
-      await pgPool.query(
-        `INSERT INTO resumenes_diarios_ads
-          (id_cuenta, fecha, plataforma, campana, gasto_total_ad, impresiones_totales, clicks_unicos, cpm, cpc, ctr, datos_extra)
-         VALUES ($1, $2, 'meta', '', $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (id_cuenta, fecha, COALESCE(campana, ''))
-         DO UPDATE SET
-           gasto_total_ad = EXCLUDED.gasto_total_ad,
-           impresiones_totales = EXCLUDED.impresiones_totales,
-           clicks_unicos = EXCLUDED.clicks_unicos,
-           cpm = EXCLUDED.cpm,
-           cpc = EXCLUDED.cpc,
-           ctr = EXCLUDED.ctr,
-           datos_extra = EXCLUDED.datos_extra,
-           plataforma = 'meta'`,
-        [idCuenta, fecha, gasto, impresiones, clicks, cpm, cpc, ctr,
-         JSON.stringify({ source: "account_level" })],
-      );
-    }
+    return;
   }
 
-  // AUT-804 DELETE removed: the account-level row is now the authoritative total,
-  // kept in sync by the level=account fetch above. The dashboard already prefers
-  // the account-level row (campana='') when it exists (dashboard.ts L191-230).
+  const accountJson = (await accountRes.json()) as MetaInsightsResponse;
+  const accountRow = accountJson.data?.[0];
+
+  if (accountRow) {
+    const gasto = parseFloat(String(accountRow.spend ?? "0")) || 0;
+    const impresiones = parseInt(String(accountRow.impressions ?? "0"), 10) || 0;
+    const clicks = parseInt(String(accountRow.clicks ?? "0"), 10) || 0;
+    const cpm = parseFloat(String(accountRow.cpm ?? "0")) || 0;
+    const cpc = parseFloat(String(accountRow.cpc ?? "0")) || 0;
+    const ctr = parseFloat(String(accountRow.ctr ?? "0")) || 0;
+
+    await pgPool.query(
+      `INSERT INTO resumenes_diarios_ads
+        (id_cuenta, fecha, plataforma, campana, gasto_total_ad, impresiones_totales, clicks_unicos, cpm, cpc, ctr, datos_extra)
+       VALUES ($1, $2, 'meta', '', $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (id_cuenta, fecha, COALESCE(campana, ''))
+       DO UPDATE SET
+         gasto_total_ad = EXCLUDED.gasto_total_ad,
+         impresiones_totales = EXCLUDED.impresiones_totales,
+         clicks_unicos = EXCLUDED.clicks_unicos,
+         cpm = EXCLUDED.cpm,
+         cpc = EXCLUDED.cpc,
+         ctr = EXCLUDED.ctr,
+         datos_extra = EXCLUDED.datos_extra,
+         plataforma = 'meta'`,
+      [idCuenta, fecha, gasto, impresiones, clicks, cpm, cpc, ctr,
+       JSON.stringify({ source: "account_level" })],
+    );
+  }
 }
 
 // ─── Google Ads sync ──────────────────────────────────────────────────────────
