@@ -1,8 +1,11 @@
 import { buildApp } from "./app.js";
 import { env } from "./config/env.js";
 import { db } from "./config/database.js";
+import { runMigrations } from "./db/migrate.js";
 
 async function start() {
+  await runMigrations();
+
   const app = await buildApp();
 
   const shutdown = async (signal: string) => {
