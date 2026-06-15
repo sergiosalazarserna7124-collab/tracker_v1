@@ -12,6 +12,7 @@ import {
 } from "../ghl-api.service.js";
 import { savePendingTag } from "../ghl-token-guard.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
+import { classifyCall } from "../ai/call-classification.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { VozCallCompletedPayload } from "../../schemas/webhooks/voz.schema.js";
 
@@ -37,6 +38,130 @@ const VOZ_TAG_MAP: Record<string, string> = {
 
 function mapVozEstadoToTag(estado: string): string | null {
   return VOZ_TAG_MAP[estado] ?? null;
+}
+
+// ─── Capa defensiva: reclasificación IA para voz_callai ─────────────────────
+// Solo aplica a estados sospechosos o transcripts cortos.
+// Fail-open: si la IA falla/timeout, se preserva el estado original.
+
+export const VOZ_RECLASSIFY_CHAR_THRESHOLD = Number(
+  process.env.VOZ_RECLASSIFY_CHAR_THRESHOLD ?? "120",
+);
+
+const SUSPECT_ESTADOS = new Set(["no_interesado"]);
+
+type VozEstadoValue =
+  | "interesado"
+  | "no_interesado"
+  | "no_elegible"
+  | "reagendado"
+  | "no_contesto"
+  | "buzon_voz"
+  | "colgo_temprano";
+
+export function mapClassifierToVozEstado(
+  buzon: boolean | null,
+  iaEstado: string | null,
+): VozEstadoValue {
+  if (buzon === true) return "buzon_voz";
+  if (buzon === null && (!iaEstado || iaEstado === "seguimiento"))
+    return "no_contesto";
+  switch (iaEstado) {
+    case "no_interesado":
+      return "no_interesado";
+    case "interesado":
+      return "interesado";
+    case "programado":
+      return "reagendado";
+    case "seguimiento":
+      return "no_contesto";
+    default:
+      return "no_contesto";
+  }
+}
+
+interface ReclassifyResult {
+  estadoFinal: string;
+  reclassified: boolean;
+  estadoOriginal: string;
+  motivo: string | null;
+  iaDesc: string | null;
+}
+
+export type ClassifyCallFn = typeof classifyCall;
+
+export async function maybeReclassifyVozEstado(
+  estado: string,
+  transcript: string,
+  cuenta: CuentaFullRow,
+  label: string,
+  classifier: ClassifyCallFn = classifyCall,
+): Promise<ReclassifyResult> {
+  const base: ReclassifyResult = {
+    estadoFinal: estado,
+    reclassified: false,
+    estadoOriginal: estado,
+    motivo: null,
+    iaDesc: null,
+  };
+
+  const trimmed = transcript.trim();
+  const isSuspectEstado = SUSPECT_ESTADOS.has(estado);
+  const isShortTranscript =
+    trimmed.length > 0 && trimmed.length < VOZ_RECLASSIFY_CHAR_THRESHOLD;
+
+  if (!isSuspectEstado && !isShortTranscript) return base;
+  if (!trimmed) return base;
+
+  const trigger = isSuspectEstado
+    ? `estado_sospechoso(${estado})`
+    : `transcript_corto(${trimmed.length}<${VOZ_RECLASSIFY_CHAR_THRESHOLD})`;
+
+  console.info(
+    `${label} Reclasificación defensiva disparada: ${trigger}`,
+  );
+
+  try {
+    const result = await Promise.race([
+      classifier(
+        trimmed,
+        cuenta.openai_api_key,
+        cuenta.embudo_personalizado,
+        cuenta.prompt_ventas ?? null,
+        cuenta.prompt_llamadas ?? null,
+        cuenta.id_cuenta,
+      ),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), 8_000),
+      ),
+    ]);
+
+    const nuevoEstado = mapClassifierToVozEstado(result.buzon, result.estado);
+
+    if (nuevoEstado !== estado) {
+      console.info(
+        `${label} Reclasificación: ${estado} → ${nuevoEstado} (buzon=${result.buzon}, ia_estado=${result.estado}, trigger=${trigger})`,
+      );
+      return {
+        estadoFinal: nuevoEstado,
+        reclassified: true,
+        estadoOriginal: estado,
+        motivo: `${trigger} → ia(buzon=${result.buzon},estado=${result.estado})`,
+        iaDesc: result.iadesc,
+      };
+    }
+
+    console.info(
+      `${label} IA confirma estado original: ${estado} (trigger=${trigger})`,
+    );
+    return { ...base, motivo: `${trigger} → confirmado`, iaDesc: result.iadesc };
+  } catch (err) {
+    console.warn(
+      `${label} Reclasificación fail-open (se preserva estado original=${estado}):`,
+      err instanceof Error ? err.message : err,
+    );
+    return { ...base, motivo: `${trigger} → fail-open(${err instanceof Error ? err.message : "error"})` };
+  }
 }
 
 // ─── Guardar evento huérfano ─────────────────────────────────────────────────
@@ -161,6 +286,16 @@ async function processVozInternal(
 
   const tagsInternos = reglasMatchedTags;
 
+  // ── 4b. Capa defensiva: reclasificación IA si estado sospechoso o transcript corto
+  const reclassify = await maybeReclassifyVozEstado(estado, transcript, cuenta, label);
+  const estadoFinal = reclassify.estadoFinal;
+
+  if (reclassify.reclassified) {
+    console.info(
+      `${label} Reclasificación aplicada: ${reclassify.estadoOriginal} → ${estadoFinal} | motivo=${reclassify.motivo} | len=${transcript.trim().length}`,
+    );
+  }
+
   // ── 5. Persistir en registros_de_llamada (idempotente por call_id) ─────────
   let idRegistro: number | null = null;
 
@@ -181,7 +316,7 @@ async function processVozInternal(
           .update(llamadas)
           .set({
             nombre_lead: nombreLead,
-            estado,
+            estado: estadoFinal,
             mail_lead: mailLead,
             phone_raw_format: phone,
             nombre_closer: "Agente de voz - Auto KPI",
@@ -207,7 +342,7 @@ async function processVozInternal(
             fecha_evento: now,
             id_cuenta: idCuenta,
             nombre_lead: nombreLead,
-            estado,
+            estado: estadoFinal,
             mail_lead: mailLead,
             phone_raw_format: phone,
             creativo_origen: null,
@@ -244,7 +379,7 @@ async function processVozInternal(
           nombre_lead: nombreLead,
           phone,
           tipo_evento: "voz_callai",
-          estado_resultado: estado,
+          estado_resultado: estadoFinal,
           call_sid: callId,
           transcripcion: transcript || null,
           ia_descripcion: iadescripcion,
@@ -302,7 +437,7 @@ async function processVozInternal(
       const tagsToApply: string[] = [];
 
       // Tag de clasificación de voz
-      const clasificacionTag = mapVozEstadoToTag(estado);
+      const clasificacionTag = mapVozEstadoToTag(estadoFinal);
       if (clasificacionTag) {
         tagsToApply.push(clasificacionTag);
       }
@@ -346,7 +481,10 @@ async function processVozInternal(
 
       // Nota en GHL con resumen + reagendamiento + transcript (best-effort)
       try {
-        const noteLines: string[] = [`📞 Agente de voz - Auto KPI — estado: ${estado}`];
+        const noteLines: string[] = [`📞 Agente de voz - Auto KPI — estado: ${estadoFinal}`];
+        if (reclassify.reclassified) {
+          noteLines.push(`🔄 Reclasificado por IA: ${reclassify.estadoOriginal} → ${estadoFinal} (${reclassify.motivo})`);
+        }
         if (iadescripcion) noteLines.push(`Resumen: ${iadescripcion}`);
         if (etiquetasPayload.length > 0) {
           noteLines.push(`🏷️ Etiquetas: ${etiquetasPayload.join(", ")}`);
@@ -381,7 +519,10 @@ async function processVozInternal(
       path: "processed",
       id_cuenta: idCuenta,
       id_registro: idRegistro,
-      estado,
+      estado: estadoFinal,
+      estado_original: reclassify.reclassified ? reclassify.estadoOriginal : undefined,
+      reclassified: reclassify.reclassified,
+      reclassify_motivo: reclassify.motivo,
       ghl_contact_id: ghlContactIdPayload,
       reagendado: reagendamiento ? true : false,
       ya_afiliado: yaAfiliado ? true : false,
