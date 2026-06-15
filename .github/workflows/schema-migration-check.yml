@@ -1,0 +1,65 @@
+name: schema-migration-check
+
+# Regla de equipo "schema nuevo ⇒ migración" (AUT-941, ver CLAUDE.md → Deploy).
+# Falla el PR si cambia src/db/schema.ts y NO se agrega ninguna migración nueva en
+# migrations/*.sql. Es un belt-and-suspenders sobre el runner de boot (D1 / AUT-939),
+# que es el enforcement real: aplica automáticamente las migraciones pendientes antes
+# de servir tráfico.
+#
+# Escape hatch: si el cambio en schema.ts NO agrega columna/tabla nueva (rename, ajuste
+# de tipo, comentario, reordenar imports, etc.) y por tanto no necesita migración,
+# agregar la etiqueta "sin-migracion" al PR para saltar el check.
+
+on:
+  pull_request:
+    paths:
+      - 'src/db/schema.ts'
+
+jobs:
+  check-migration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verificar que el cambio de schema incluya su migración
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'sin-migracion') }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          echo "Base: $BASE_SHA"
+          echo "Head: $HEAD_SHA"
+
+          CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          echo "Archivos cambiados en el PR:"
+          echo "$CHANGED"
+
+          if ! echo "$CHANGED" | grep -qx 'src/db/schema.ts'; then
+            echo "src/db/schema.ts no cambió; nada que verificar."
+            exit 0
+          fi
+
+          # schema.ts cambió → exigir al menos una migración NUEVA (added) en migrations/*.sql
+          NEW_MIGRATIONS="$(git diff --name-only --diff-filter=A "$BASE_SHA" "$HEAD_SHA" \
+            | grep -E '^migrations/.*\.sql$' || true)"
+
+          if [ -z "$NEW_MIGRATIONS" ]; then
+            echo "::error file=src/db/schema.ts::src/db/schema.ts cambió pero el PR no agrega ninguna migración nueva en migrations/*.sql."
+            echo ""
+            echo "Regla schema⇒migración (CLAUDE.md → Deploy, AUT-941):"
+            echo "  Todo PR que agregue una columna o tabla nueva en src/db/schema.ts DEBE incluir"
+            echo "  su migrations/NNN_*.sql (idempotente, IF NOT EXISTS). El runner de boot la aplica"
+            echo "  automáticamente en el deploy de Cerebro."
+            echo ""
+            echo "Si este cambio NO necesita migración (rename, ajuste de tipo, comentario, etc.),"
+            echo "agregá la etiqueta 'sin-migracion' al PR para saltar este check."
+            exit 1
+          fi
+
+          echo "OK: src/db/schema.ts cambió y el PR agrega migración(es) nueva(s):"
+          echo "$NEW_MIGRATIONS"
