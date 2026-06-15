@@ -48,6 +48,13 @@ export const VOZ_RECLASSIFY_CHAR_THRESHOLD = Number(
   process.env.VOZ_RECLASSIFY_CHAR_THRESHOLD ?? "120",
 );
 
+// Banda baja: transcripts bajo este umbral se reclasifican determinísticamente
+// a buzon_voz SIN llamar a la IA (ahorro de créditos). Datos de prod muestran
+// que ningún estado real tiene transcript < 188 chars; 150 deja margen.
+export const VOZ_BAND_LOW_THRESHOLD = Number(
+  process.env.VOZ_BAND_LOW_THRESHOLD ?? "150",
+);
+
 const SUSPECT_ESTADOS = new Set(["no_interesado"]);
 
 type VozEstadoValue =
@@ -117,8 +124,26 @@ export async function maybeReclassifyVozEstado(
     ? `estado_sospechoso(${estado})`
     : `transcript_corto(${trimmed.length}<${VOZ_RECLASSIFY_CHAR_THRESHOLD})`;
 
+  // ── Banda baja: transcript muy corto → buzon_voz determinístico, sin IA ──
+  if (trimmed.length < VOZ_BAND_LOW_THRESHOLD) {
+    const nuevoEstado = "buzon_voz";
+    const banda = "banda_baja_determinista";
+    const changed = nuevoEstado !== estado;
+    console.info(
+      `${label} Reclasificación ${banda}: ${estado} → ${nuevoEstado} | len=${trimmed.length} < ${VOZ_BAND_LOW_THRESHOLD} | trigger=${trigger}`,
+    );
+    return {
+      estadoFinal: nuevoEstado,
+      reclassified: changed,
+      estadoOriginal: estado,
+      motivo: `${trigger} → ${banda}(len=${trimmed.length}<${VOZ_BAND_LOW_THRESHOLD})`,
+      iaDesc: null,
+    };
+  }
+
+  // ── Banda media/alta: transcript ≥ VOZ_BAND_LOW_THRESHOLD → clasificador IA ──
   console.info(
-    `${label} Reclasificación defensiva disparada: ${trigger}`,
+    `${label} Reclasificación defensiva disparada: ${trigger} | banda=ia | len=${trimmed.length}`,
   );
 
   try {
@@ -140,19 +165,19 @@ export async function maybeReclassifyVozEstado(
 
     if (nuevoEstado !== estado) {
       console.info(
-        `${label} Reclasificación: ${estado} → ${nuevoEstado} (buzon=${result.buzon}, ia_estado=${result.estado}, trigger=${trigger})`,
+        `${label} Reclasificación banda_ia: ${estado} → ${nuevoEstado} (buzon=${result.buzon}, ia_estado=${result.estado}, trigger=${trigger}, len=${trimmed.length})`,
       );
       return {
         estadoFinal: nuevoEstado,
         reclassified: true,
         estadoOriginal: estado,
-        motivo: `${trigger} → ia(buzon=${result.buzon},estado=${result.estado})`,
+        motivo: `${trigger} → banda_ia(buzon=${result.buzon},estado=${result.estado})`,
         iaDesc: result.iadesc,
       };
     }
 
     console.info(
-      `${label} IA confirma estado original: ${estado} (trigger=${trigger})`,
+      `${label} IA confirma estado original: ${estado} (trigger=${trigger}, len=${trimmed.length})`,
     );
     return { ...base, motivo: `${trigger} → confirmado`, iaDesc: result.iadesc };
   } catch (err) {

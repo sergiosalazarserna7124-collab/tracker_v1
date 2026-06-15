@@ -12,6 +12,7 @@ import {
   mapClassifierToVozEstado,
   maybeReclassifyVozEstado,
   VOZ_RECLASSIFY_CHAR_THRESHOLD,
+  VOZ_BAND_LOW_THRESHOLD,
   type ClassifyCallFn,
 } from "../services/webhooks/voz.service.js";
 
@@ -100,12 +101,15 @@ describe("maybeReclassifyVozEstado", () => {
     assert.equal(called, false);
   });
 
-  test("trigger por etiqueta sospechosa: no_interesado → reclasifica a buzon_voz", async () => {
+  test("trigger por etiqueta sospechosa: no_interesado → reclasifica a buzon_voz (banda IA)", async () => {
     const classifier = fakeClassifier({ buzon: true, estado: "seguimiento", iadesc: "Buzón de voz", tags_internos: [] });
+
+    const longBuzon = "Hola, en este momento no puedo atender su llamada, por favor deje su mensaje después del tono y con gusto le devolveré la llamada lo antes posible. Bip.";
+    assert.ok(longBuzon.trim().length >= VOZ_BAND_LOW_THRESHOLD);
 
     const result = await maybeReclassifyVozEstado(
       "no_interesado",
-      "Deje su mensaje después del tono. Bip.",
+      longBuzon,
       fakeCuenta(),
       "[test]",
       classifier,
@@ -117,12 +121,15 @@ describe("maybeReclassifyVozEstado", () => {
     assert.ok(result.motivo?.includes("estado_sospechoso"));
   });
 
-  test("trigger por etiqueta sospechosa: no_interesado → reclasifica a interesado", async () => {
+  test("trigger por etiqueta sospechosa: no_interesado → reclasifica a interesado (banda IA)", async () => {
     const classifier = fakeClassifier({ buzon: false, estado: "interesado", iadesc: "Mostró interés", tags_internos: [] });
+
+    const longTranscript = "Sí, me interesa mucho el proyecto, ¿pueden enviarme más info por WhatsApp? Me gustaría ver opciones de financiamiento y también saber los plazos de entrega aproximados.";
+    assert.ok(longTranscript.trim().length >= VOZ_BAND_LOW_THRESHOLD);
 
     const result = await maybeReclassifyVozEstado(
       "no_interesado",
-      "Sí, me interesa mucho, ¿pueden enviarme más info por WhatsApp?",
+      longTranscript,
       fakeCuenta(),
       "[test]",
       classifier,
@@ -133,31 +140,36 @@ describe("maybeReclassifyVozEstado", () => {
     assert.equal(result.estadoOriginal, "no_interesado");
   });
 
-  test("trigger por transcript corto: interesado con 10 chars → reclasifica a no_contesto", async () => {
+  test("trigger por transcript corto: interesado con 10 chars → banda baja → buzon_voz (AUT-961)", async () => {
     const shortTranscript = "Hola bueno";
-    assert.ok(shortTranscript.length < VOZ_RECLASSIFY_CHAR_THRESHOLD);
+    assert.ok(shortTranscript.length < VOZ_BAND_LOW_THRESHOLD);
 
-    const classifier = fakeClassifier({ buzon: null, estado: "seguimiento", iadesc: "Sin conversación", tags_internos: [] });
+    let called = false;
+    const spy = (async () => { called = true; return { buzon: null, estado: "seguimiento", iadesc: "Sin conversación", tags_internos: [] }; }) as unknown as ClassifyCallFn;
 
     const result = await maybeReclassifyVozEstado(
       "interesado",
       shortTranscript,
       fakeCuenta(),
       "[test]",
-      classifier,
+      spy,
     );
 
     assert.equal(result.reclassified, true);
-    assert.equal(result.estadoFinal, "no_contesto");
-    assert.ok(result.motivo?.includes("transcript_corto"));
+    assert.equal(result.estadoFinal, "buzon_voz");
+    assert.ok(result.motivo?.includes("banda_baja_determinista"));
+    assert.equal(called, false, "IA must NOT be called for banda baja");
   });
 
-  test("IA confirma estado original → no reclasifica pero registra motivo", async () => {
+  test("IA confirma estado original → no reclasifica pero registra motivo (banda IA)", async () => {
     const classifier = fakeClassifier({ buzon: false, estado: "no_interesado", iadesc: "Rechazó", tags_internos: [] });
+
+    const longTranscript = "No me interesa para nada, ya les dije que no quiero saber de inmobiliarias, quítenme de su lista de contactos por favor, no me vuelvan a llamar nunca más. Gracias.";
+    assert.ok(longTranscript.trim().length >= VOZ_BAND_LOW_THRESHOLD);
 
     const result = await maybeReclassifyVozEstado(
       "no_interesado",
-      "No me interesa, quíteme de su lista.",
+      longTranscript,
       fakeCuenta(),
       "[test]",
       classifier,
@@ -168,12 +180,15 @@ describe("maybeReclassifyVozEstado", () => {
     assert.ok(result.motivo?.includes("confirmado"));
   });
 
-  test("fail-open: error de IA preserva estado original", async () => {
+  test("fail-open: error de IA preserva estado original (banda IA)", async () => {
     const classifier = failingClassifier(new Error("OpenAI rate limit"));
+
+    const longTranscript = "Algún transcript suficientemente largo que debería procesarse por el clasificador de IA pero la IA falla y se preserva el estado original del webhook.";
+    assert.ok(longTranscript.trim().length >= VOZ_BAND_LOW_THRESHOLD);
 
     const result = await maybeReclassifyVozEstado(
       "no_interesado",
-      "Algún transcript que debería procesarse",
+      longTranscript,
       fakeCuenta(),
       "[test]",
       classifier,
@@ -184,12 +199,15 @@ describe("maybeReclassifyVozEstado", () => {
     assert.ok(result.motivo?.includes("fail-open"));
   });
 
-  test("fail-open: timeout preserva estado original", async () => {
+  test("fail-open: timeout preserva estado original (banda IA)", async () => {
     const classifier = hangingClassifier();
+
+    const longTranscript = "Transcript suficientemente largo que tardará en procesar por el clasificador de inteligencia artificial pero nunca responde y se dispara el timeout de ocho segundos completo.";
+    assert.ok(longTranscript.trim().length >= VOZ_BAND_LOW_THRESHOLD);
 
     const result = await maybeReclassifyVozEstado(
       "no_interesado",
-      "Transcript que tardará en procesar",
+      longTranscript,
       fakeCuenta(),
       "[test]",
       classifier,
@@ -223,5 +241,130 @@ describe("maybeReclassifyVozEstado", () => {
 
   test("VOZ_RECLASSIFY_CHAR_THRESHOLD defaults to 120", () => {
     assert.equal(VOZ_RECLASSIFY_CHAR_THRESHOLD, 120);
+  });
+
+  test("VOZ_BAND_LOW_THRESHOLD defaults to 150", () => {
+    assert.equal(VOZ_BAND_LOW_THRESHOLD, 150);
+  });
+});
+
+// ─── Bandas por longitud de transcript (AUT-961) ────────────────────────────
+
+describe("maybeReclassifyVozEstado — bandas por longitud", () => {
+  test("banda baja: transcript < 150 chars + no_interesado → buzon_voz SIN llamar IA", async () => {
+    let called = false;
+    const spy = (async () => { called = true; return { buzon: null, estado: null, iadesc: null, tags_internos: [] }; }) as unknown as ClassifyCallFn;
+
+    const shortText = "Deje su mensaje después del tono.";
+    assert.ok(shortText.length < VOZ_BAND_LOW_THRESHOLD, `precondition: len=${shortText.length} < ${VOZ_BAND_LOW_THRESHOLD}`);
+
+    const result = await maybeReclassifyVozEstado("no_interesado", shortText, fakeCuenta(), "[test]", spy);
+
+    assert.equal(result.reclassified, true);
+    assert.equal(result.estadoFinal, "buzon_voz");
+    assert.equal(result.estadoOriginal, "no_interesado");
+    assert.ok(result.motivo?.includes("banda_baja_determinista"));
+    assert.equal(result.iaDesc, null);
+    assert.equal(called, false, "IA classifier must NOT be called for banda baja");
+  });
+
+  test("banda baja: transcript corto + estado no sospechoso (interesado) → buzon_voz SIN IA", async () => {
+    let called = false;
+    const spy = (async () => { called = true; return { buzon: null, estado: null, iadesc: null, tags_internos: [] }; }) as unknown as ClassifyCallFn;
+
+    const shortText = "A".repeat(50);
+    assert.ok(shortText.length < VOZ_RECLASSIFY_CHAR_THRESHOLD);
+
+    const result = await maybeReclassifyVozEstado("interesado", shortText, fakeCuenta(), "[test]", spy);
+
+    assert.equal(result.reclassified, true);
+    assert.equal(result.estadoFinal, "buzon_voz");
+    assert.equal(called, false, "IA classifier must NOT be called for banda baja");
+  });
+
+  test("banda baja: buzon_voz con transcript corto → buzon_voz (reclassified=false)", async () => {
+    let called = false;
+    const spy = (async () => { called = true; return { buzon: null, estado: null, iadesc: null, tags_internos: [] }; }) as unknown as ClassifyCallFn;
+
+    const shortText = "Buzón de voz.";
+    assert.ok(shortText.length < VOZ_BAND_LOW_THRESHOLD);
+
+    const result = await maybeReclassifyVozEstado("buzon_voz", shortText, fakeCuenta(), "[test]", spy);
+
+    assert.equal(result.estadoFinal, "buzon_voz");
+    assert.equal(result.reclassified, false, "buzon_voz → buzon_voz is not a change");
+    assert.equal(called, false);
+  });
+
+  test("borde: transcript exactamente 149 chars (< 150) → banda baja, sin IA", async () => {
+    let called = false;
+    const spy = (async () => { called = true; return { buzon: null, estado: null, iadesc: null, tags_internos: [] }; }) as unknown as ClassifyCallFn;
+
+    const text = "A".repeat(149);
+    assert.equal(text.length, 149);
+
+    const result = await maybeReclassifyVozEstado("no_interesado", text, fakeCuenta(), "[test]", spy);
+
+    assert.equal(result.estadoFinal, "buzon_voz");
+    assert.ok(result.motivo?.includes("banda_baja_determinista"));
+    assert.equal(called, false);
+  });
+
+  test("borde: transcript exactamente 150 chars (≥ 150) → banda IA, SÍ llama clasificador", async () => {
+    let called = false;
+    const classifier = (async () => {
+      called = true;
+      return { buzon: false, estado: "no_interesado", iadesc: "Rechazó", tags_internos: [] };
+    }) as unknown as ClassifyCallFn;
+
+    const text = "A".repeat(150);
+    assert.equal(text.length, 150);
+
+    const result = await maybeReclassifyVozEstado("no_interesado", text, fakeCuenta(), "[test]", classifier);
+
+    assert.equal(called, true, "IA classifier MUST be called for transcript ≥ 150");
+    assert.equal(result.estadoFinal, "no_interesado");
+    assert.ok(result.motivo?.includes("confirmado"));
+  });
+
+  test("borde: transcript 151 chars → banda IA", async () => {
+    let called = false;
+    const classifier = (async () => {
+      called = true;
+      return { buzon: true, estado: "seguimiento", iadesc: "Buzón", tags_internos: [] };
+    }) as unknown as ClassifyCallFn;
+
+    const text = "A".repeat(151);
+
+    const result = await maybeReclassifyVozEstado("no_interesado", text, fakeCuenta(), "[test]", classifier);
+
+    assert.equal(called, true, "IA classifier MUST be called for transcript > 150");
+    assert.equal(result.estadoFinal, "buzon_voz");
+    assert.equal(result.reclassified, true);
+  });
+
+  test("banda IA: transcript largo + no_interesado → IA reclasifica a interesado", async () => {
+    const classifier = fakeClassifier({ buzon: false, estado: "interesado", iadesc: "Interés real", tags_internos: [] });
+
+    const longText = "A".repeat(200);
+    assert.ok(longText.length >= VOZ_BAND_LOW_THRESHOLD);
+
+    const result = await maybeReclassifyVozEstado("no_interesado", longText, fakeCuenta(), "[test]", classifier);
+
+    assert.equal(result.reclassified, true);
+    assert.equal(result.estadoFinal, "interesado");
+    assert.ok(result.motivo?.includes("banda_ia"));
+  });
+
+  test("banda IA: fail-open preserva estado en banda media/alta", async () => {
+    const classifier = failingClassifier(new Error("OpenAI down"));
+
+    const longText = "A".repeat(200);
+
+    const result = await maybeReclassifyVozEstado("no_interesado", longText, fakeCuenta(), "[test]", classifier);
+
+    assert.equal(result.reclassified, false);
+    assert.equal(result.estadoFinal, "no_interesado");
+    assert.ok(result.motivo?.includes("fail-open"));
   });
 });
