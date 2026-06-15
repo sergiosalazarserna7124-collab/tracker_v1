@@ -1,19 +1,21 @@
 /**
- * AUT-341: Recovery de webhooks efectivos sin procesar.
+ * AUT-341 / AUT-940: Recovery de webhooks sin procesar.
  *
- * Cloud Run puede terminar una instancia mientras processEffectiveCall() está en vuelo.
+ * Cloud Run puede terminar una instancia mientras el procesamiento está en vuelo.
  * El callback .then(logWebhookResult) nunca se ejecuta → procesado=false queda en BD.
  *
  * Este cron recupera esas entradas:
- *  - Reintentar el procesamiento para entradas twilio/efectiva con <1h de antigüedad
+ *  - Reintentar twilio/efectiva y voz-callai con <1h de antigüedad
  *  - Marcar como procesado=true + error='cloud-run-timeout' para las >1h (irrecuperables)
  */
 
 import { db as pgPool } from "../../config/database.js";
 import { processEffectiveCall } from "../webhooks/twilio.service.js";
+import { processVozWebhook } from "../webhooks/voz.service.js";
 import { logWebhookResult } from "../../utils/webhook-logger.js";
 import { extractWebhookBody } from "../../utils/payload.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
+import type { VozCallCompletedPayload } from "../../schemas/webhooks/voz.schema.js";
 
 const MAX_RECOVERY_PER_RUN = 20;
 
@@ -69,36 +71,67 @@ export async function runWebhookRecovery(): Promise<WebhookRecoveryResult> {
     const edadMin = Math.round(edadMs / 60_000);
     const esIrrecuperable = edadMs > 60 * 60 * 1000; // >1h
 
-    // Solo hacemos retry de webhooks twilio/efectiva — los demás no tienen procesamiento recuperable
-    if (row.fuente === "twilio" && row.tipo_evento === "efectiva" && !esIrrecuperable) {
-      const eventBody = extractWebhookBody<TwilioEventBody>(row.payload_raw);
+    const esRecuperable =
+      (row.fuente === "twilio" && row.tipo_evento === "efectiva") ||
+      row.fuente === "voz-callai";
 
-      if (!eventBody) {
-        console.warn(`[webhook-recovery] id=${row.id}: payload_raw no parseable — marcando timeout`);
-        await markTimeout(row.id, "cloud-run-timeout: payload inválido");
-        result.marcados_timeout++;
-        continue;
-      }
-
+    if (esRecuperable && !esIrrecuperable) {
       const t0 = Date.now();
-      try {
-        const res = await processEffectiveCall(eventBody);
-        const errorMsg = res?.success ? null : (res?.error ?? "error en recovery");
-        await logWebhookResult(row.id, res?.data ?? null, errorMsg, Date.now() - t0);
-        console.log(`[webhook-recovery] id=${row.id} (${edadMin}min): ${res?.success ? "ok" : "error"}`);
-        if (res?.success) {
-          result.recuperados++;
-        } else {
+
+      if (row.fuente === "twilio" && row.tipo_evento === "efectiva") {
+        const eventBody = extractWebhookBody<TwilioEventBody>(row.payload_raw);
+
+        if (!eventBody) {
+          console.warn(`[webhook-recovery] id=${row.id}: payload_raw no parseable — marcando timeout`);
+          await markTimeout(row.id, "cloud-run-timeout: payload inválido");
+          result.marcados_timeout++;
+          continue;
+        }
+
+        try {
+          const res = await processEffectiveCall(eventBody);
+          const errorMsg = res?.success ? null : (res?.error ?? "error en recovery");
+          await logWebhookResult(row.id, res?.data ?? null, errorMsg, Date.now() - t0);
+          console.log(`[webhook-recovery] id=${row.id} (${edadMin}min): ${res?.success ? "ok" : "error"}`);
+          if (res?.success) {
+            result.recuperados++;
+          } else {
+            result.errores++;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[webhook-recovery] id=${row.id}: excepción en processEffectiveCall: ${msg}`);
+          await logWebhookResult(row.id, null, `recovery-error: ${msg}`, Date.now() - t0);
           result.errores++;
         }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[webhook-recovery] id=${row.id}: excepción en processEffectiveCall: ${msg}`);
-        await logWebhookResult(row.id, null, `recovery-error: ${msg}`, Date.now() - t0);
-        result.errores++;
+      } else if (row.fuente === "voz-callai") {
+        const eventBody = extractWebhookBody<VozCallCompletedPayload>(row.payload_raw);
+
+        if (!eventBody) {
+          console.warn(`[webhook-recovery] id=${row.id}: payload_raw voz no parseable — marcando timeout`);
+          await markTimeout(row.id, "cloud-run-timeout: payload inválido");
+          result.marcados_timeout++;
+          continue;
+        }
+
+        try {
+          const res = await processVozWebhook(eventBody);
+          const errorMsg = res?.success ? null : (res?.error ?? "error en recovery");
+          await logWebhookResult(row.id, res?.data ?? null, errorMsg, Date.now() - t0);
+          console.log(`[webhook-recovery] id=${row.id} voz-callai (${edadMin}min): ${res?.success ? "ok" : "error"}`);
+          if (res?.success) {
+            result.recuperados++;
+          } else {
+            result.errores++;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[webhook-recovery] id=${row.id}: excepción en processVozWebhook: ${msg}`);
+          await logWebhookResult(row.id, null, `recovery-error: ${msg}`, Date.now() - t0);
+          result.errores++;
+        }
       }
     } else {
-      // Irrecuperable (>1h) o tipo distinto de twilio/efectiva
       const razon = esIrrecuperable
         ? `cloud-run-timeout (${edadMin}min sin procesar)`
         : `tipo no recuperable: ${row.fuente}/${row.tipo_evento ?? "desconocido"}`;
