@@ -10,6 +10,8 @@ const VozEstado = Type.Union([
   Type.Literal("colgo_temprano"),
   Type.Literal("error"),
   Type.Literal("desconocido"),
+  Type.Literal("agendado"),
+  Type.Literal("confirmado"),
 ]);
 
 const VozReagendamiento = Type.Object(
@@ -53,6 +55,7 @@ export const VozCallCompletedBody = Type.Object(
     // (hoy solo "afiliado_imexico", pero el array es extensible).
     etiquetas: Type.Optional(Type.Array(Type.String())),
     ya_afiliado: Type.Optional(Type.Union([VozYaAfiliado, Type.Null()])),
+    agentid: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     transcript: Type.Optional(Type.String()),
     short_summary: Type.Optional(Type.String()),
     ended_at: Type.Optional(Type.String()),

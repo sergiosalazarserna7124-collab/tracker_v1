@@ -79,6 +79,8 @@ export const llamadas = pgTable("registros_de_llamada", {
   // ── AUT-221: speed-to-lead alerts ──────────────────────────────────────────
   speed_to_lead_alerted_at: timestamp("speed_to_lead_alerted_at", { withTimezone: true }),
   speed_to_lead_4h_alerted_at: timestamp("speed_to_lead_4h_alerted_at", { withTimezone: true }),
+  // ── AUT-1028: agentid del Voice Agent (multi-tenant routing) ──────────────
+  agentid: text("agentid"),
 });
 
 /**
@@ -109,6 +111,8 @@ export const logLlamadas = pgTable("log_llamadas", {
   tags_internos: jsonb("tags_internos"),
   // ── V4: resultado de clasificación del embudo personalizado por IA ─────────
   lead_embudo_personalizado: jsonb("lead_embudo_personalizado"),
+  // ── AUT-1028: agentid del Voice Agent (multi-tenant routing) ──────────────
+  agentid: text("agentid"),
 });
 
 /**

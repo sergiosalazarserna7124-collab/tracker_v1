@@ -26,6 +26,11 @@ interface ServiceResult {
 
 // ─── Tags nuevos para Call AI ────────────────────────────────────────────────
 
+// ─── Alias accountid string → id_cuenta numérico (§14 multi-tenant) ─────────
+const ACCOUNT_ALIAS: Record<string, number> = {
+  zolutium: 40,
+};
+
 const VOZ_TAG_MAP: Record<string, string> = {
   interesado: GHL_TAGS.interesado_callai,
   no_interesado: GHL_TAGS.no_interesado_callai,
@@ -34,6 +39,8 @@ const VOZ_TAG_MAP: Record<string, string> = {
   no_contesto: GHL_TAGS.no_contestada_llamada,
   buzon_voz: GHL_TAGS.no_contestada_llamada,
   colgo_temprano: GHL_TAGS.no_contestada_llamada,
+  agendado: GHL_TAGS.reagenda,
+  confirmado: GHL_TAGS.interesado_callai,
 };
 
 function mapVozEstadoToTag(estado: string): string | null {
@@ -64,7 +71,9 @@ type VozEstadoValue =
   | "reagendado"
   | "no_contesto"
   | "buzon_voz"
-  | "colgo_temprano";
+  | "colgo_temprano"
+  | "agendado"
+  | "confirmado";
 
 export function mapClassifierToVozEstado(
   buzon: boolean | null,
@@ -230,12 +239,19 @@ async function processVozInternal(
   label: string,
 ): Promise<ServiceResult> {
   // ── 1. Validar y resolver cuenta ───────────────────────────────────────────
-  const rawAccountId = Number(body.accountid);
+  const rawAccountStr = String(body.accountid).trim().toLowerCase();
+  const aliasResolved = ACCOUNT_ALIAS[rawAccountStr];
+  const rawAccountId = aliasResolved ?? Number(body.accountid);
   if (!Number.isFinite(rawAccountId) || rawAccountId <= 0) {
     console.warn(`${label} accountid no numérico o inválido: ${body.accountid}`);
     await saveOrphanEvent(body, null, `accountid inválido: ${body.accountid}`);
     return { success: true, data: { path: "orphan", reason: "invalid_accountid" } };
   }
+  if (aliasResolved) {
+    console.info(`${label} accountid alias "${rawAccountStr}" → ${aliasResolved}`);
+  }
+
+  const agentid = typeof body.agentid === "string" && body.agentid.trim() ? body.agentid.trim() : null;
 
   const cuenta = await getAccountFullById(rawAccountId);
   if (!cuenta) {
@@ -245,7 +261,7 @@ async function processVozInternal(
   }
 
   const idCuenta = cuenta.id_cuenta;
-  console.info(`${label} Procesando para cuenta=${idCuenta} (${cuenta.nombre_cuenta}) estado=${body.estado}`);
+  console.info(`${label} Procesando para cuenta=${idCuenta} (${cuenta.nombre_cuenta}) estado=${body.estado}${agentid ? ` agentid=${agentid}` : ""}`);
 
   // ── 2. Estados error/desconocido → huérfano directo ────────────────────────
   if (body.estado === "error" || body.estado === "desconocido") {
@@ -278,7 +294,7 @@ async function processVozInternal(
   // ya_afiliado: respuestas textuales del prospecto ya afiliado a otra red.
   const yaAfiliado = body.ya_afiliado ?? null;
 
-  // reagendamiento (solo en estado="reagendado"): persistir la cita.
+  // reagendamiento: persistir la cita (reagendado, agendado, confirmado).
   const reagendamiento = body.reagendamiento ?? null;
   let fechaSeguimiento: Date | null = null;
   if (reagendamiento?.scheduled_for) {
@@ -352,6 +368,7 @@ async function processVozInternal(
             ghl_contact_id: ghlContactIdPayload,
             fecha_y_hora_de_seguimiento: fechaSeguimiento,
             tags_internos: tagsInternos,
+            agentid,
           })
           .where(eq(llamadas.id_registro, existingByCallId[0].id_registro)),
       { label: "Voz/updateByCallId" },
@@ -383,6 +400,7 @@ async function processVozInternal(
             id_user_ghl: idUserGhl,
             ghl_contact_id: ghlContactIdPayload,
             tags_internos: tagsInternos,
+            agentid,
           })
           .returning({ id_registro: llamadas.id_registro }),
       { label: "Voz/insert" },
@@ -413,6 +431,7 @@ async function processVozInternal(
           creativo_origen: null,
           speed_to_lead: null,
           tags_internos: tagsInternos,
+          agentid,
         }),
       { label: "Voz/logLlamadas" },
     );
@@ -549,6 +568,7 @@ async function processVozInternal(
       reclassified: reclassify.reclassified,
       reclassify_motivo: reclassify.motivo,
       ghl_contact_id: ghlContactIdPayload,
+      agentid,
       reagendado: reagendamiento ? true : false,
       ya_afiliado: yaAfiliado ? true : false,
       etiquetas_payload: etiquetasPayload,
