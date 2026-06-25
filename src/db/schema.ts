@@ -145,6 +145,9 @@ export const cuentas = pgTable("cuentas", {
   // ── V6: métricas manuales y config ────────────────────────────────────────
   metricas_config: jsonb("metricas_config"),
   metricas_manual_data: jsonb("metricas_manual_data"),
+  // ── Razones de pérdida (AUT-1061) ─────────────────────────────────────────
+  razones_perdida_config: jsonb("razones_perdida_config"),
+  razones_perdida_data: jsonb("razones_perdida_data"),
   // ── Estado de la cuenta (activo | cancelado | trial | etc.) ───────────────
   estado_cuenta: text("estado_cuenta"),
   // ── V7: detección de transferencia chatbot→humano para primer_msg_lead_at ──

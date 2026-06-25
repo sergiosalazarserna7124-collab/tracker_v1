@@ -469,6 +469,9 @@ async function handlePerdido(body: GhlBodyPayload): Promise<AgendaResult> {
     `→ chats=${updatedChats} llamadas=${updatedLlamadas}`,
   );
 
+  // ── AUT-1061: capturar razón de pérdida y guardar en razones_perdida_data ──
+  await appendRazonPerdida(body, fields);
+
   const tagged = await applyGhlTag(
     fields.locationId,
     fields.contactId,
@@ -482,6 +485,62 @@ async function handlePerdido(body: GhlBodyPayload): Promise<AgendaResult> {
     action: "updated",
     tagged,
   };
+}
+
+// ─── Helper: append razón de pérdida a cuentas.razones_perdida_data ─────────
+
+async function appendRazonPerdida(
+  body: GhlBodyPayload,
+  fields: ReturnType<typeof extractFields>,
+): Promise<void> {
+  const cdRaw = body.customData as Record<string, unknown>;
+
+  const razonId =
+    (typeof cdRaw.razon_perdida === "string" ? cdRaw.razon_perdida.trim() : null) ||
+    (typeof cdRaw.razon_perdida_id === "string" ? cdRaw.razon_perdida_id.trim() : null) ||
+    (typeof cdRaw.loss_reason === "string" ? cdRaw.loss_reason.trim() : null);
+
+  if (!razonId) {
+    console.info(
+      `[GHL handlePerdido] Sin razón de pérdida en customData — cuenta=${fields.idCuenta} contacto=${fields.contactId}`,
+    );
+    return;
+  }
+
+  const notas =
+    (typeof cdRaw.razon_perdida_notas === "string" ? cdRaw.razon_perdida_notas.trim() : null) ||
+    (typeof cdRaw.loss_reason_notes === "string" ? cdRaw.loss_reason_notes.trim() : null) ||
+    null;
+
+  const entry = {
+    razon_id: razonId,
+    contact_id: fields.contactId ?? undefined,
+    contact_name: fields.nombreLead !== "sin nombre" ? fields.nombreLead : undefined,
+    closer_email: fields.closer ?? undefined,
+    fecha: new Date().toISOString(),
+    notas: notas ?? undefined,
+  };
+
+  try {
+    await withRetry(
+      () =>
+        db.query(
+          `UPDATE cuentas
+           SET razones_perdida_data = COALESCE(razones_perdida_data, '[]'::jsonb) || $2::jsonb
+           WHERE id_cuenta = $1`,
+          [fields.idCuenta, JSON.stringify([entry])],
+        ),
+      { label: "appendRazonPerdida" },
+    );
+    console.log(
+      `[GHL handlePerdido] Razón de pérdida guardada — cuenta=${fields.idCuenta} razon_id="${razonId}"`,
+    );
+  } catch (err) {
+    console.error(
+      `[GHL handlePerdido] Error al guardar razón de pérdida — cuenta=${fields.idCuenta}:`,
+      err,
+    );
+  }
 }
 
 // ─── Dispatcher principal ─────────────────────────────────────────────────────
