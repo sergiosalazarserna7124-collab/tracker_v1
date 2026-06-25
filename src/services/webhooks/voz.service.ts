@@ -39,8 +39,8 @@ const VOZ_TAG_MAP: Record<string, string> = {
   no_contesto: GHL_TAGS.no_contestada_llamada,
   buzon_voz: GHL_TAGS.no_contestada_llamada,
   colgo_temprano: GHL_TAGS.no_contestada_llamada,
-  agendado: GHL_TAGS.reagenda,
-  confirmado: GHL_TAGS.interesado_callai,
+  agendado: GHL_TAGS.agendado_callai,
+  confirmado: GHL_TAGS.confirmado_callai,
 };
 
 function mapVozEstadoToTag(estado: string): string | null {
