@@ -25,6 +25,7 @@ import { asesoresMergeSuggestionsRoute } from "./routes/data/merge-suggestions.r
 import { criteriosCalificacionRoute } from "./routes/data/criterios-calificacion.route.js";
 import { contactIntakeRoute } from "./routes/webhooks/contact-intake.route.js";
 import { metricsRoute } from "./routes/data/metrics.route.js";
+import { contactoTranscripcionesRoute } from "./routes/data/contacto-transcripciones.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -60,6 +61,7 @@ export async function buildApp() {
   await app.register(asesoresMergeSuggestionsRoute, { prefix: "/api/data/asesores" });
   await app.register(criteriosCalificacionRoute, { prefix: "/api" });
   await app.register(metricsRoute, { prefix: "/api/v1/metrics" });
+  await app.register(contactoTranscripcionesRoute, { prefix: "/data" });
 
   return app;
 }
