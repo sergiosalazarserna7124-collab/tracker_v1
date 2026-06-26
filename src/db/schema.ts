@@ -273,6 +273,21 @@ export const metrics = pgTable("metrics", {
   index("idx_metrics_cuenta").on(table.id_cuenta),
 ]);
 
+// ── Tabla: mapeo ID externo del cliente → contacto GHL ──────────────────────
+export const mapeoIdExterno = pgTable("mapeo_id_externo", {
+  id: serial("id").primaryKey(),
+  id_cuenta: integer("id_cuenta").notNull().references(() => cuentas.id_cuenta, { onDelete: "cascade" }),
+  id_cliente_interno: text("id_cliente_interno").notNull(),
+  ghl_contact_id: text("ghl_contact_id").notNull(),
+  telefono: text("telefono"),
+  email: text("email"),
+  nombre: text("nombre"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index("idx_mapeo_cuenta_cliente").on(table.id_cuenta, table.id_cliente_interno),
+  index("idx_mapeo_cuenta_ghl").on(table.id_cuenta, table.ghl_contact_id),
+]);
+
 export const metricDataPoints = pgTable("metric_data_points", {
   id:        uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   metric_id: uuid("metric_id").notNull().references(() => metrics.id, { onDelete: "cascade" }),

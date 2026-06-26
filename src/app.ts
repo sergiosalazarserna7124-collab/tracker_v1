@@ -23,6 +23,7 @@ import { ghlCallbackRoute } from "./routes/oauth/ghl-callback.route.js";
 import { dataChatsRoute } from "./routes/data/chats.route.js";
 import { asesoresMergeSuggestionsRoute } from "./routes/data/merge-suggestions.route.js";
 import { criteriosCalificacionRoute } from "./routes/data/criterios-calificacion.route.js";
+import { contactIntakeRoute } from "./routes/webhooks/contact-intake.route.js";
 import { metricsRoute } from "./routes/data/metrics.route.js";
 
 export async function buildApp() {
@@ -39,6 +40,7 @@ export async function buildApp() {
   await app.register(ghlWebhookRoute, { prefix: "/webhooks" });
   await app.register(twilioWebhookRoute, { prefix: "/webhooks" });
   await app.register(externalDataRoute, { prefix: "/webhooks" });
+  await app.register(contactIntakeRoute, { prefix: "/webhooks" });
   await app.register(orphanRoute, { prefix: "/webhooks" });
   await app.register(reasignacionRoute, { prefix: "/webhooks" });
   await app.register(reasignacionRoute); // alias: acepta /reasignacion además de /webhooks/reasignacion

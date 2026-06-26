@@ -285,6 +285,122 @@ export async function getGhlUser(
   };
 }
 
+// ─── GHL API: buscar contacto por teléfono en una ubicación ─────────────────
+
+export async function searchContactByPhone(
+  locationId: string,
+  phone: string,
+  bearerToken: string,
+): Promise<GhlContact | null> {
+  const url = new URL("https://services.leadconnectorhq.com/contacts/");
+  url.searchParams.set("locationId", locationId);
+  url.searchParams.set("query", phone);
+
+  const response = await fetchWithTimeout(
+    url.toString(),
+    {
+      method: "GET",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        Version: "2021-07-28",
+      },
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`GHL contacts search (phone) responded ${response.status}: ${text}`);
+  }
+
+  const data = (await response.json()) as {
+    contacts?: Array<{
+      id: string;
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+      phone?: string;
+      assignedTo?: string;
+    }>;
+  };
+
+  const contact = data.contacts?.[0];
+  if (!contact) return null;
+
+  return {
+    id: contact.id,
+    firstName: contact.firstName ?? null,
+    lastName: contact.lastName ?? null,
+    email: contact.email ?? null,
+    assignedTo: contact.assignedTo ?? null,
+    utmContent: null,
+  };
+}
+
+// ─── GHL API: crear contacto en una ubicación ───────────────────────────────
+
+export interface CreateContactPayload {
+  firstName: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
+  customFields?: Array<{ id: string; field_value: string }>;
+}
+
+export interface CreateContactResult {
+  id: string;
+}
+
+export async function createContact(
+  locationId: string,
+  bearerToken: string,
+  payload: CreateContactPayload,
+): Promise<CreateContactResult> {
+  const body: Record<string, unknown> = {
+    locationId,
+    firstName: payload.firstName,
+  };
+  if (payload.lastName) body.lastName = payload.lastName;
+  if (payload.phone) body.phone = payload.phone;
+  if (payload.email) body.email = payload.email;
+  if (payload.customFields?.length) body.customFields = payload.customFields;
+
+  const response = await fetchWithTimeout(
+    "https://services.leadconnectorhq.com/contacts/",
+    {
+      method: "POST",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+      body: JSON.stringify(body),
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    if (response.status === 401) {
+      throwTokenInvalid(`GHL_TOKEN_INVALID: create contact API 401`);
+    }
+    if (response.status === 403 && isLocationLevelDenied(text)) {
+      throwTokenInvalid(`GHL_TOKEN_INVALID: create contact API 403 location-level denial`);
+    }
+    throw new Error(`GHL create contact API responded ${response.status}: ${text}`);
+  }
+
+  const data = (await response.json()) as { contact?: { id: string } };
+  const contactId = data.contact?.id;
+  if (!contactId) {
+    throw new Error("GHL create contact: response missing contact.id");
+  }
+
+  return { id: contactId };
+}
+
 // ─── POST a GHL API: agregar tag al contacto ─────────────────────────────────
 
 export async function addContactTag(
