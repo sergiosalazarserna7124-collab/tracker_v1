@@ -5,7 +5,6 @@ import { mapeoIdExterno } from "../../db/schema.js";
 import {
   getAccountById,
   searchContactByEmail,
-  searchContactByPhone,
 } from "../ghl-api.service.js";
 
 type TipoFuente = "chat" | "llamada" | "videollamada";
@@ -21,7 +20,7 @@ interface TranscripcionItem {
 interface ContactoTranscripcionesResult {
   id_cliente_interno: string;
   ghl_contact_id: string;
-  resolucion: "mapeo_local" | "ghl_custom_field" | "ghl_email";
+  resolucion: "mapeo_local" | "ghl_email";
   transcripciones: TranscripcionItem[];
 }
 
