@@ -22,6 +22,7 @@ import {
 import {
   transcribeAudio,
   classifyCall,
+  applyAnsweredCallGuard,
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
@@ -749,6 +750,8 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
       console.error("[Effective/GHL] Error clasificando con IA:", err);
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, null, "Effective/GHL");
     }
+    // AUT-1083: guard defensivo contra falso buzón en llamadas contestadas cortas
+    classification = applyAnsweredCallGuard(classification, fields.preTranscript, "[Effective/GHL]");
     if (classification.buzon === true || classification.buzon === null) {
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
     }
@@ -882,6 +885,9 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
   }
 
   // ── Fase 4: Routing según resultado IA ─────────────────────────────────────
+
+  // AUT-1083: guard defensivo contra falso buzón en llamadas contestadas cortas
+  classification = applyAnsweredCallGuard(classification, transcript, "[Effective]");
 
   if (classification.buzon === true || classification.buzon === null) {
     return followUpPath(

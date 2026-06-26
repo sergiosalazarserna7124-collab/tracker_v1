@@ -386,6 +386,65 @@ export async function classifyCall(
   };
 }
 
+// ─── AUT-1083: Guard defensivo contra falsos "buzón" en llamadas contestadas ──
+// El clasificador IA (gpt-4o-mini) a veces marca buzon=true en llamadas CORTAS
+// donde el lead SÍ contestó y mantuvo un intercambio humano real (saludó +
+// respondió / rechazó / preguntó). Eso las enruta al bucket "no contestada"
+// (followUpPath) y las subcuenta como contestadas (caso reportado: Shark re,
+// log_llamadas 129191).
+//
+// Este guard es DETERMINISTA (sin IA → 100% predecible y testeable) y
+// CONSERVADOR por diseño: solo reclasifica buzon:true → false cuando hay
+// evidencia fuerte de conversación humana Y NINGÚN marcador de buzón/screening.
+// Ante cualquier duda, preserva el buzon original. NO inventa estado: deja el
+// que trajo el clasificador (que en buzon=true suele ser "seguimiento"/null),
+// de modo que effectivePath produce `efectiva_seguimiento` (cuenta como
+// contestada) sin afirmar una etapa de embudo que podría ser incorrecta.
+
+export const BUZON_GUARD_MIN_CHARS = Number(
+  process.env.BUZON_GUARD_MIN_CHARS ?? "120",
+);
+
+// Marcadores INEQUÍVOCOS de buzón de voz / screening automático / recepcionista
+// de máquina. Si aparece CUALQUIERA, el guard NO actúa (se respeta buzon=true).
+const VOICEMAIL_MARKERS =
+  /deja(?:r|s)?\s+(?:tu|un|su)\s+(?:mensaje|nombre)|deje\s+su\s+mensaje|leave\s+(?:a|your)\s+message|after\s+the\s+(?:beep|tone)|despu[eé]s\s+del\s+(?:tono|bip)|buz[oó]n\s+de\s+voz|voice\s?mail|mailbox|no\s+est[aá]\s+disponible|not\s+available|reenvi[oó]\s+al\s+(?:buz[oó]n|bot[oó]n)|tu\s+llamada\s+se\s+reenvi|please\s+state\s+your\s+name|state\s+your\s+name\s+and\s+(?:phone|number)|how\s+to\s+reach|revisar[eé]\s+si.*disponible|persona\s+est[aá]\s+disponible|can'?t\s+come\s+to\s+the\s+phone/i;
+
+// Frases que SOLO aporta un lead humano en un intercambio real (rechazo,
+// interés, o reconocimiento de la conversación). Requerimos al menos una.
+const LEAD_ENGAGEMENT_MARKERS =
+  /\bno me interesa\b|\bno,?\s*(?:disculp\w*|gracias)\b|\bya tengo\b|\bno estoy buscando\b|\bqu[ií]tenme de la lista\b|\bno me llamen\b|\bno pasa nada\b|\bno recuerdo\b|\bno me acuerdo\b|\bme interesa\b|\bm[aá]ndame\b|\bquiero (?:saber|ver|m[aá]s)\b|\bcu[aá]ndo puedo\b|\bag[eé]nd\w*\b|\bcu[aá]nto cuesta\b|\bd[oó]nde queda\b|\bde parte de qui[eé]n\b|\bqui[eé]n habla\b|\bme gustar[ií]a\b/i;
+
+// ¿La transcripción evidencia que el lead contestó y conversó de verdad?
+export function looksLikeAnsweredConversation(
+  transcript: string | null | undefined,
+): boolean {
+  const t = (transcript ?? "").trim();
+  if (t.length < BUZON_GUARD_MIN_CHARS) return false; // muy corta → no arriesgar
+  if (VOICEMAIL_MARKERS.test(t)) return false; // buzón/screening claro → respetar
+  return LEAD_ENGAGEMENT_MARKERS.test(t); // hubo contenido real del lead
+}
+
+// Aplica el guard sobre el resultado del clasificador. Solo toca el caso
+// buzon===true (no null: null = llamada fallida/cortada, se respeta).
+export function applyAnsweredCallGuard(
+  classification: CallClassification,
+  transcript: string | null | undefined,
+  label = "[BuzonGuard]",
+): CallClassification {
+  if (classification.buzon !== true) return classification;
+  if (!looksLikeAnsweredConversation(transcript)) return classification;
+
+  console.warn(
+    `${label} AUT-1083: buzon=true reclasificado a contestada (estado=${classification.estado ?? "seguimiento"}) — transcripción con conversación humana real y sin marcadores de buzón.`,
+  );
+  return {
+    ...classification,
+    buzon: false,
+    estado: classification.estado ?? "seguimiento",
+  };
+}
+
 // ─── Mapeo estado IA → tag GHL ───────────────────────────────────────────────
 // "seguimiento" cuando buzon=false significa que la persona SÍ contestó pero
 // no hubo resultado comercial claro → tag propio, NO el de "no contestó".
