@@ -136,4 +136,21 @@ describe("POST /webhooks/voz", () => {
     const res = await sendVoz(makePayload({ accountid: "abc" }));
     assert.equal(res.statusCode, 200);
   });
+
+  test("agendado con reagendamiento.cita_datetime_ghl → 200 y acepta el campo", async () => {
+    const res = await sendVoz(
+      makePayload({
+        estado: "agendado",
+        reagendamiento: {
+          scheduled_for: "2026-07-01T10:00:00-06:00",
+          timezone: "America/Mexico_City",
+          when_text: "mañana a las 10",
+          cita_datetime_ghl: "2026-07-01T16:00:00+00:00",
+        },
+      }),
+    );
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body);
+    assert.equal(body.success, true);
+  });
 });

@@ -21,6 +21,7 @@ const VozReagendamiento = Type.Object(
     when_text: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     notes: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     modo: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    cita_datetime_ghl: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   },
   { additionalProperties: true },
 );

@@ -401,6 +401,40 @@ export async function createContact(
   return { id: contactId };
 }
 
+// ─── PUT a GHL API: actualizar custom fields de un contacto ─────────────────
+
+export async function updateContactCustomFields(
+  contactId: string,
+  bearerToken: string,
+  customFields: Array<{ key: string; field_value: string }>,
+): Promise<void> {
+  const response = await fetchWithTimeout(
+    `https://services.leadconnectorhq.com/contacts/${contactId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+      body: JSON.stringify({ customFields }),
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    if (response.status === 401) {
+      throwTokenInvalid(`GHL_TOKEN_INVALID: update contact custom fields API 401`);
+    }
+    if (response.status === 403 && isLocationLevelDenied(text)) {
+      throwTokenInvalid(`GHL_TOKEN_INVALID: update contact custom fields API 403 location-level denial`);
+    }
+    throw new Error(`GHL update contact custom fields API responded ${response.status}: ${text}`);
+  }
+}
+
 // ─── POST a GHL API: agregar tag al contacto ─────────────────────────────────
 
 export async function addContactTag(

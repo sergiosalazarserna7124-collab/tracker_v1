@@ -7,6 +7,7 @@ import {
   safeAddContactTags,
   createLocationTag,
   addContactNote,
+  updateContactCustomFields,
   GHL_TAGS,
   type CuentaFullRow,
 } from "../ghl-api.service.js";
@@ -520,6 +521,21 @@ async function processVozInternal(
           } else {
             console.error(`${label} Error aplicando tags GHL:`, err);
           }
+        }
+      }
+
+      // Custom field fecha_y_hora_cita_call_ai para agendado/reagendado (best-effort)
+      if (
+        (estadoFinal === "agendado" || estadoFinal === "reagendado") &&
+        reagendamiento?.cita_datetime_ghl
+      ) {
+        try {
+          await updateContactCustomFields(ghlContactId, tokenGhl, [
+            { key: "fecha_y_hora_cita_call_ai", field_value: reagendamiento.cita_datetime_ghl },
+          ]);
+          console.info(`${label} Custom field fecha_y_hora_cita_call_ai escrito en GHL`);
+        } catch (err) {
+          console.error(`${label} Error escribiendo custom field fecha_y_hora_cita_call_ai (best-effort):`, err);
         }
       }
 
