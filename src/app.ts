@@ -12,6 +12,7 @@ import { cronSpeedToLeadAlertsRoute } from "./routes/cron/speed-to-lead-alerts.r
 import { cronSpeedToLeadChatAlertsRoute } from "./routes/cron/speed-to-lead-chat-alerts.route.js";
 import { cronWebhookRecoveryRoute } from "./routes/cron/webhook-recovery.route.js";
 import { cronBatchAnalysisRoute } from "./routes/cron/batch-analysis.route.js";
+import { cronChatSinResponderTagsRoute } from "./routes/cron/chat-sin-responder-tags.route.js";
 import { externalDataRoute } from "./routes/webhooks/external-data.route.js";
 import { orphanRoute } from "./routes/webhooks/orphan.route.js";
 import { reasignacionRoute } from "./routes/webhooks/reasignacion.route.js";
@@ -52,6 +53,7 @@ export async function buildApp() {
   await app.register(cronSpeedToLeadChatAlertsRoute, { prefix: "/cron" });
   await app.register(cronWebhookRecoveryRoute, { prefix: "/cron" });
   await app.register(cronBatchAnalysisRoute, { prefix: "/cron" });
+  await app.register(cronChatSinResponderTagsRoute, { prefix: "/cron" });
   await app.register(videoRecoveryRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatRecoveryRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatWebhookRoute, { prefix: "/webhooks" });

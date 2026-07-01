@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { db } from "../../config/database.js";
 import { cuentas, eventosHuerfanos } from "../../db/schema.js";
-import { getAccountByLocationId, getGhlUser, getContactById } from "../ghl-api.service.js";
+import { getAccountByLocationId, getGhlUser, getContactById, removeContactTag } from "../ghl-api.service.js";
 import { fetchWithTimeout } from "../../utils/fetch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { ChatWebhookBody } from "../../schemas/webhooks/chat.schema.js";
@@ -544,6 +544,30 @@ export async function processChatWebhook(
   );
 
   console.log(`[Chat] ✅ Upsert OK — conversationId="${conversationId}" | id_cuenta=${idCuenta} | primer_msg_at=${primerMsgAt} | dateAdded=${dateAdded}`);
+
+  // ── 11. Auto-remove tag sin_responder_chat cuando un agente responde ──────
+  if (senderRole === "agent" && contactId && tokenGhl) {
+    void (async () => {
+      try {
+        const { rows } = await db.query<{ id_evento: number }>(
+          `UPDATE chats_logs
+           SET chat_sin_responder_removed_at = NOW(),
+               chat_sin_responder_tagged_at  = NULL
+           WHERE chatid = $1
+             AND chat_sin_responder_tagged_at IS NOT NULL
+             AND chat_sin_responder_removed_at IS NULL
+           RETURNING id_evento`,
+          [conversationId],
+        );
+        if (rows.length > 0) {
+          await removeContactTag(contactId, tokenGhl, "sin_responder_chat");
+          console.info(`[Chat] Removed tag sin_responder_chat — evento=${rows[0].id_evento} conversationId="${conversationId}"`);
+        }
+      } catch (err) {
+        console.error(`[Chat] Error removing sin_responder_chat tag for conversationId="${conversationId}":`, err);
+      }
+    })();
+  }
 
   // Guardar raw para diagnóstico (processed = true)
   void saveRawWebhook(body, locationId, true, null);
