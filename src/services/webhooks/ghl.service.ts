@@ -487,6 +487,47 @@ async function handlePerdido(body: GhlBodyPayload): Promise<AgendaResult> {
   };
 }
 
+// ─── Handler: descartar lead (excluir de dashboard) ─────────────────────────
+
+async function handleDescartar(body: GhlBodyPayload): Promise<AgendaResult> {
+  const fields = extractFields(body);
+
+  let updatedChats = 0;
+
+  if (fields.contactId) {
+    const { rowCount } = await withRetry(
+      () =>
+        db.query(
+          `UPDATE chats_logs
+           SET excluida_dashboard = true
+           WHERE id_cuenta = $1 AND id_lead = $2 AND excluida_dashboard = false`,
+          [fields.idCuenta, fields.contactId],
+        ),
+      { label: "handleDescartar/chats" },
+    );
+    updatedChats = rowCount ?? 0;
+  }
+
+  console.log(
+    `[GHL handleDescartar] cuenta=${fields.idCuenta} contacto=${fields.contactId} ` +
+    `→ chats_excluidos=${updatedChats}`,
+  );
+
+  const tagged = await applyGhlTag(
+    fields.locationId,
+    fields.contactId,
+    GHL_TAGS.descartar,
+    "handleDescartar",
+  );
+
+  return {
+    id_registro_agenda: 0,
+    categoria: "descartar",
+    action: "updated",
+    tagged,
+  };
+}
+
 // ─── Helper: append razón de pérdida a cuentas.razones_perdida_data ─────────
 
 async function appendRazonPerdida(
@@ -621,6 +662,12 @@ export async function processGhlWebhook(
       case "perdido": {
         console.log("🔀 [GHL webhook] Entrando a handlePerdido");
         const data = await handlePerdido(body);
+        return { success: true, data: { ...data, id_cuenta: idCuentaGhl } };
+      }
+
+      case "descartar": {
+        console.log("🔀 [GHL webhook] Entrando a handleDescartar");
+        const data = await handleDescartar(body);
         return { success: true, data: { ...data, id_cuenta: idCuentaGhl } };
       }
 

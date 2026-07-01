@@ -89,6 +89,7 @@ export const GHL_TAGS = {
   agendado_callai: "agendadocallai",
   confirmado_callai: "confirmadocallai",
   perdido: "perdidoautoia",
+  descartar: "descartarautoia",
 } as const;
 
 // ─── Consulta a BD: buscar cuenta por locationid (match exacto) ───────────────

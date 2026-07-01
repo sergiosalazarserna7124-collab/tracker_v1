@@ -524,7 +524,8 @@ export async function processChatWebhook(
            -- Inmutable: solo se escribe si aún no existe (primer mensaje lead)
            primer_msg_lead_at = COALESCE(chats_logs.primer_msg_lead_at, EXCLUDED.primer_msg_lead_at),
            -- Inmutable: solo se escribe si aún no existe (primer mensaje cualquier dir.)
-           primer_msg_at = COALESCE(chats_logs.primer_msg_at, EXCLUDED.primer_msg_at)`,
+           primer_msg_at = COALESCE(chats_logs.primer_msg_at, EXCLUDED.primer_msg_at),
+           excluida_dashboard = chats_logs.excluida_dashboard`,
         [
           idCuenta,
           contactName,

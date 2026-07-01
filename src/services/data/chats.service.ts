@@ -160,7 +160,7 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
   );
 
   // ── 2. Obtener chats_logs ───────────────────────────────────────────────
-  const conditions: string[] = ["id_cuenta = $1"];
+  const conditions: string[] = ["id_cuenta = $1", "excluida_dashboard = false"];
   const values: unknown[] = [idCuenta];
 
   if (desde) {
