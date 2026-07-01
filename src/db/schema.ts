@@ -140,6 +140,8 @@ export const cuentas = pgTable("cuentas", {
   prompt_videollamadas: text("prompt_videollamadas"),
   prompt_llamadas: text("prompt_llamadas"),
   reglas_etiquetas: jsonb("reglas_etiquetas"),
+  // ── V11: categorías de llamada con prompt por categoría (AUT-1143) ────────
+  categorias_llamadas: jsonb("categorias_llamadas"),
   // ── V5: configuración de integraciones de Ads ─────────────────────────────
   configuracion_ads: jsonb("configuracion_ads"),
   // ── V6: métricas manuales y config ────────────────────────────────────────

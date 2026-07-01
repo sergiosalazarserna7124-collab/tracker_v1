@@ -326,12 +326,34 @@ Si ninguno aplica claramente, elige el más cercano de los proporcionados.`;
   return prompt;
 }
 
+// ─── Helper: resolver prompt de categoría (AUT-1143) ────────────────────────
+
+interface CategoriaLlamada {
+  id: string;
+  nombre: string;
+  temas: string[];
+  prompt: string;
+}
+
+function resolveCategoryPrompt(
+  categoria: string | null | undefined,
+  categoriasLlamadas: unknown,
+): string | null {
+  if (!categoria || !Array.isArray(categoriasLlamadas)) return null;
+  const match = (categoriasLlamadas as CategoriaLlamada[]).find(
+    (c) => c.id === categoria,
+  );
+  return match?.prompt || null;
+}
+
 // ─── Helper: inyectar contexto de empresa + prompt específico de llamadas ────
 
 function withFullContext(
   basePrompt: string,
   promptVentas: string | null | undefined,
   promptLlamadas: string | null | undefined,
+  categoria?: string | null,
+  categoriasLlamadas?: unknown,
 ): string {
   const parts: string[] = [];
 
@@ -339,8 +361,10 @@ function withFullContext(
     parts.push(`CONTEXTO DE LA EMPRESA:\n${promptVentas}\n\nUsa este contexto para entender el negocio y decidir si el lead cumple las condiciones del embudo.`);
   }
 
-  if (promptLlamadas) {
-    parts.push(`INSTRUCCIONES ESPECÍFICAS PARA EVALUAR LLAMADAS TELEFÓNICAS:\n${promptLlamadas}`);
+  const effectivePromptLlamadas = resolveCategoryPrompt(categoria, categoriasLlamadas) ?? promptLlamadas;
+
+  if (effectivePromptLlamadas) {
+    parts.push(`INSTRUCCIONES ESPECÍFICAS PARA EVALUAR LLAMADAS TELEFÓNICAS:\n${effectivePromptLlamadas}`);
   }
 
   if (parts.length === 0) return basePrompt;
@@ -356,6 +380,8 @@ export async function classifyCall(
   promptVentas?: string | null,
   promptLlamadas?: string | null,
   idCuenta?: number | null,
+  categoria?: string | null,
+  categoriasLlamadas?: unknown,
 ): Promise<CallClassification> {
   const { model } = resolveClients(openaiApiKey);
 
@@ -368,6 +394,8 @@ export async function classifyCall(
     buildSystemPrompt(embudoPersonalizado),
     promptVentas,
     promptLlamadas,
+    categoria,
+    categoriasLlamadas,
   );
 
   const { object, usage } = await generateObject({
