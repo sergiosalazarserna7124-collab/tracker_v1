@@ -16,6 +16,7 @@ import {
   GHL_TAGS,
 } from "../ghl-api.service.js";
 import { analyzeCall } from "../ai/call-analysis.service.js";
+import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { FathomEventBody } from "../../schemas/webhooks/fathom.schema.js";
@@ -397,8 +398,12 @@ export async function processFathomCall(
   const tagsInternos = reglasResult.matched_tags;
 
   // Si alguna regla tiene funnelStage, la regla explícita del cliente sobreescribe la clasificación IA
-  const funnelStageFromReglas = reglasResult.matched_rules
-    .find((r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage)?.funnelStage ?? null;
+  const funnelStageFromReglas = collectFunnelStages(reglasResult.matched_rules);
+
+  // Aplicar acciones incrementar_metrica de reglas matcheadas
+  if (reglasResult.matched_rules.length > 0 && idCuenta) {
+    await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[Fathom]");
+  }
 
   // ── Fase 5: Sync final (GHL tag + DB update) ─────────────────────────────
 

@@ -35,7 +35,8 @@ export interface ReglaEtiqueta {
   id: string;
   tag: string;
   condition: string;
-  source: string;
+  source?: string;
+  fuentes?: string[];
 }
 
 export interface ObjecionDetectada {
@@ -160,7 +161,12 @@ Como no hay embudo personalizado, usa estas categorías generales: "interesado",
 
   if (reglas_etiquetas.length > 0) {
     const reglasStr = reglas_etiquetas
-      .filter((r) => !r.source || r.source === "chats" || r.source === "todos")
+      .filter((r) => {
+        if (r.fuentes && r.fuentes.length > 0) {
+          return r.fuentes.includes("todas") || r.fuentes.includes("chat") || r.fuentes.includes("chats");
+        }
+        return !r.source || r.source === "chats" || r.source === "todos" || r.source === "todas";
+      })
       .map((r) => `- Tag: "${r.tag}" | Condición: ${r.condition}`)
       .join("\n");
 

@@ -18,17 +18,31 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
-export interface ReglaEtiqueta {
+export interface AccionRegla {
+  tipo: "cambiar_estado" | "asignar_etiqueta" | "etapa_cambiada" | "incrementar_metrica";
+  valor?: string;
+  funnelStage?: string;
+  metrica_id?: string;
+  metrica_incremento?: number;
+}
+
+export interface ReglaEtiquetaNormalized {
+  id: string;
+  condition: string;
+  acciones: AccionRegla[];
+  fuentes: string[];
+}
+
+export interface MatchedRule {
   id: string;
   tag: string;
-  source: string;
-  condition: string;
   funnelStage?: string;
+  acciones: AccionRegla[];
 }
 
 export interface ReglasEvalResult {
   matched_tags: string[];
-  matched_rules: { id: string; tag: string; funnelStage?: string }[];
+  matched_rules: MatchedRule[];
 }
 
 // ─── Schema de salida IA ─────────────────────────────────────────────────────
@@ -64,34 +78,69 @@ REGLAS ESTRICTAS:
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function parseReglas(raw: unknown): ReglaEtiqueta[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (r): r is ReglaEtiqueta =>
-      typeof r === "object" &&
-      r !== null &&
-      typeof r.id === "string" &&
-      typeof r.tag === "string" &&
-      typeof r.source === "string" &&
-      typeof r.condition === "string",
-  );
-}
-
-// Normaliza alias en español (guardados por el Admin Panel) a los valores canónicos
-// que usa el evaluador: "call" y "meeting".
 const SOURCE_ALIASES: Record<string, string> = {
   llamadas: "call",
   videollamadas: "meeting",
+  chats: "chat",
 };
 
-function normalizeSource(raw: string): string {
+function normalizeSourceValue(raw: string): string {
   const lower = raw.toLowerCase();
   return SOURCE_ALIASES[lower] ?? lower;
 }
 
-function filterBySource(reglas: ReglaEtiqueta[], source: string): ReglaEtiqueta[] {
-  const normalizedTarget = source.toLowerCase();
-  return reglas.filter((r) => normalizeSource(r.source) === normalizedTarget);
+function normalizeRegla(raw: Record<string, unknown>): ReglaEtiquetaNormalized | null {
+  const id = raw.id as string | undefined;
+  const condition = (raw.condicion ?? raw.condition) as string | undefined;
+  if (typeof id !== "string" || typeof condition !== "string") return null;
+
+  // Normalize acciones: prefer new shape, fall back to legacy single-action
+  let acciones: AccionRegla[];
+  if (Array.isArray(raw.acciones) && raw.acciones.length > 0) {
+    acciones = raw.acciones as AccionRegla[];
+  } else {
+    const tipo = (raw.accion ?? "asignar_etiqueta") as AccionRegla["tipo"];
+    acciones = [{
+      tipo,
+      valor: (raw.valor ?? raw.tag) as string | undefined,
+      funnelStage: raw.funnelStage as string | undefined,
+      metrica_id: raw.metrica_id as string | undefined,
+      metrica_incremento: raw.metrica_incremento as number | undefined,
+    }];
+  }
+
+  // Normalize fuentes: prefer new shape, fall back to legacy single source
+  let fuentes: string[];
+  if (Array.isArray(raw.fuentes) && raw.fuentes.length > 0) {
+    fuentes = (raw.fuentes as string[]).map(normalizeSourceValue);
+  } else {
+    const legacy = (raw.fuente ?? raw.source) as string | undefined;
+    if (legacy && legacy.toLowerCase() !== "todas") {
+      fuentes = [normalizeSourceValue(legacy)];
+    } else {
+      fuentes = ["todas"];
+    }
+  }
+
+  return { id, condition, acciones, fuentes };
+}
+
+function parseAndNormalizeReglas(raw: unknown): ReglaEtiquetaNormalized[] {
+  if (!Array.isArray(raw)) return [];
+  const result: ReglaEtiquetaNormalized[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const normalized = normalizeRegla(item as Record<string, unknown>);
+    if (normalized) result.push(normalized);
+  }
+  return result;
+}
+
+function filterBySource(reglas: ReglaEtiquetaNormalized[], source: string): ReglaEtiquetaNormalized[] {
+  const target = source.toLowerCase();
+  return reglas.filter((r) =>
+    r.fuentes.includes("todas") || r.fuentes.includes(target),
+  );
 }
 
 // ─── Función principal ───────────────────────────────────────────────────────
@@ -104,7 +153,7 @@ export async function evaluateReglas(
   openaiApiKey?: string | null,
   idCuenta?: number | null,
 ): Promise<ReglasEvalResult> {
-  const allReglas = parseReglas(reglasRaw);
+  const allReglas = parseAndNormalizeReglas(reglasRaw);
   const reglas = filterBySource(allReglas, source);
 
   if (!reglas.length || !transcript.trim()) {
@@ -136,12 +185,27 @@ export async function evaluateReglas(
   const matchedIds = new Set(object.matched_rule_ids);
   const matched = reglas.filter((r) => matchedIds.has(r.id));
 
+  // Collect tags from all asignar_etiqueta actions across all matched rules
+  const tags: string[] = [];
+  for (const rule of matched) {
+    for (const accion of rule.acciones) {
+      if (accion.tipo === "asignar_etiqueta" && accion.valor && accion.valor.trim() !== "") {
+        tags.push(accion.valor);
+      }
+    }
+  }
+
   return {
-    matched_tags: matched.map((r) => r.tag).filter((t) => t.trim() !== ""),
-    matched_rules: matched.map((r) => ({
-      id: r.id,
-      tag: r.tag,
-      ...(r.funnelStage && { funnelStage: r.funnelStage }),
-    })),
+    matched_tags: tags,
+    matched_rules: matched.map((r) => {
+      const tagAction = r.acciones.find((a) => a.tipo === "asignar_etiqueta");
+      const stageAction = r.acciones.find((a) => a.funnelStage);
+      return {
+        id: r.id,
+        tag: tagAction?.valor ?? "",
+        ...(stageAction?.funnelStage && { funnelStage: stageAction.funnelStage }),
+        acciones: r.acciones,
+      };
+    }),
   };
 }

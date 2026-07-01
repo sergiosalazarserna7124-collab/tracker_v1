@@ -451,7 +451,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
     cuenta: CuentaAnalisisRow;
     chats: ChatLogRow[];
     embudo: Array<{ id: string; nombre: string; condition?: string }>;
-    reglas_etiquetas: Array<{ id: string; tag: string; condition: string; source: string }>;
+    reglas_etiquetas: Array<{ id: string; tag: string; condition: string; source?: string; fuentes?: string[] }>;
   }
 
   const cuentasConChats: CuentaConChats[] = [];
@@ -482,7 +482,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
         ? (cuenta.embudo_personalizado as Array<{ id: string; nombre: string; condition?: string }>)
         : [],
       reglas_etiquetas: Array.isArray(cuenta.reglas_etiquetas)
-        ? (cuenta.reglas_etiquetas as Array<{ id: string; tag: string; condition: string; source: string }>)
+        ? (cuenta.reglas_etiquetas as Array<{ id: string; tag: string; condition: string; source?: string; fuentes?: string[] }>)
         : [],
     });
   }

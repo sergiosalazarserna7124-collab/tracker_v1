@@ -13,6 +13,7 @@ import {
 } from "../ghl-api.service.js";
 import { savePendingTag } from "../ghl-token-guard.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
+import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
 import { classifyCall } from "../ai/call-classification.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { VozCallCompletedPayload } from "../../schemas/webhooks/voz.schema.js";
@@ -307,7 +308,6 @@ async function processVozInternal(
 
   // ── 4. Evaluar reglas de etiquetas (si hay transcript) ─────────────────────
   let reglasMatchedTags: string[] = [];
-  let reglasMatchedRules: Array<{ id: string; tag: string; funnelStage?: string }> = [];
 
   if (transcript.trim()) {
     try {
@@ -320,7 +320,10 @@ async function processVozInternal(
         idCuenta,
       );
       reglasMatchedTags = reglasResult.matched_tags;
-      reglasMatchedRules = reglasResult.matched_rules;
+
+      if (reglasResult.matched_rules.length > 0 && idCuenta) {
+        await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, label);
+      }
     } catch (err) {
       console.error(`${label} Error evaluando reglas de etiquetas:`, err);
     }

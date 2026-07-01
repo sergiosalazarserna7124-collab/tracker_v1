@@ -35,6 +35,7 @@ import {
 } from "../ai/call-classification.service.js";
 import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
+import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
@@ -548,13 +549,12 @@ async function effectivePath(
   // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador
   const iadesc = analysisText ?? classification.iadesc ?? null;
 
-  const reglasMatchedTags: string[] = reglasResult.matched_tags;
-  const funnelStageFromReglas: string | null =
-    reglasResult.matched_rules.find(
-      (r: { id: string; tag: string; funnelStage?: string }) => r.funnelStage,
-    )?.funnelStage ?? null;
+  const tagsInternos: string[] = reglasResult.matched_tags;
+  const funnelStageFromReglas = collectFunnelStages(reglasResult.matched_rules);
 
-  const tagsInternos = reglasMatchedTags;
+  if (reglasResult.matched_rules.length > 0 && idCuenta) {
+    await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[GhlCalls/Effective]");
+  }
   const effectiveEstado = funnelStageFromReglas ?? aiEstado;
   const leadEmbudoData = embudoPersonalizado
     ? { estado_ia: effectiveEstado, embudo_origen: "embudo_personalizado", timestamp: now.toISOString() }
