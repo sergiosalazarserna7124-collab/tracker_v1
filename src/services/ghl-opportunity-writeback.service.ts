@@ -33,7 +33,7 @@ export function buildOpportunityFieldValues(
   analysisText: string | null,
   iadesc: string | null,
   config: OpportunityFieldsConfig,
-): Array<{ key: string; field_value: string }> | null {
+): Array<{ id: string; field_value: string }> | null {
   const maxChars = config.max_chars ?? 255;
 
   const CALIFICADOS = ["calificado", "interesado", "agendado", "reagendado", "venta"];
@@ -49,11 +49,11 @@ export function buildOpportunityFieldValues(
   if (!sourceText) return null;
 
   if (isCalificado && config.tipo_de_interes_field_key) {
-    return [{ key: config.tipo_de_interes_field_key, field_value: truncate(sourceText, maxChars) }];
+    return [{ id: config.tipo_de_interes_field_key, field_value: truncate(sourceText, maxChars) }];
   }
 
   if (isNoCalificado && config.razon_de_no_calificado_field_key) {
-    return [{ key: config.razon_de_no_calificado_field_key, field_value: truncate(sourceText, maxChars) }];
+    return [{ id: config.razon_de_no_calificado_field_key, field_value: truncate(sourceText, maxChars) }];
   }
 
   return null;
@@ -87,8 +87,8 @@ export async function writebackOpportunityFields(opts: {
     const opp = await getOpportunityById(oppId, tokenGhl);
     if (opp?.customFields) {
       const nonEmpty = fieldsToWrite.filter((f) => {
-        const existing = opp.customFields?.find((cf) => cf.key === f.key || cf.id === f.key);
-        return !existing?.field_value;
+        const existing = opp.customFields?.find((cf) => cf.id === f.id);
+        return !existing?.fieldValue;
       });
       if (nonEmpty.length === 0) {
         console.info(`${label} Opp writeback: fields already populated for opp=${oppId}, skipping (idempotency)`);

@@ -888,7 +888,7 @@ export async function updateOpportunityStage(
 export async function updateOpportunityCustomFields(
   opportunityId: string,
   bearerToken: string,
-  customFields: Array<{ key: string; field_value: string }>,
+  customFields: Array<{ id: string; field_value: string }>,
 ): Promise<void> {
   const response = await fetchWithTimeout(
     `https://services.leadconnectorhq.com/opportunities/${opportunityId}`,
@@ -916,7 +916,7 @@ export async function updateOpportunityCustomFields(
 export async function getOpportunityById(
   opportunityId: string,
   bearerToken: string,
-): Promise<{ customFields?: Array<{ id: string; key?: string; field_value?: string }> } | null> {
+): Promise<{ customFields?: Array<{ id: string; fieldValue?: string }> } | null> {
   try {
     const response = await fetchWithTimeout(
       `https://services.leadconnectorhq.com/opportunities/${opportunityId}`,
@@ -937,7 +937,7 @@ export async function getOpportunityById(
       return null;
     }
 
-    const data = (await response.json()) as { opportunity?: { customFields?: Array<{ id: string; key?: string; field_value?: string }> } };
+    const data = (await response.json()) as { opportunity?: { customFields?: Array<{ id: string; fieldValue?: string }> } };
     return data.opportunity ?? null;
   } catch {
     return null;
