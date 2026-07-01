@@ -15,6 +15,7 @@ import { savePendingTag } from "../ghl-token-guard.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import { classifyCall } from "../ai/call-classification.service.js";
+import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { VozCallCompletedPayload } from "../../schemas/webhooks/voz.schema.js";
 
@@ -346,6 +347,29 @@ async function processVozInternal(
     );
   }
 
+  // ── 4c. Extracción de cita/tarea (feature-gated por cuenta) ────────────────
+  const CITA_TAREA_ACCOUNTS = new Set([36]);
+  let citaTareaResult: CitaTareaExtraction | null = null;
+
+  if (CITA_TAREA_ACCOUNTS.has(idCuenta) && transcript.trim().length >= 100) {
+    try {
+      citaTareaResult = await extractCitaTarea(
+        transcript,
+        now,
+        "America/Mexico_City",
+        cuenta.openai_api_key,
+        idCuenta,
+      );
+      if (citaTareaResult) {
+        console.info(
+          `${label} CitaTarea: cita=${citaTareaResult.cita.detectada} tarea=${citaTareaResult.tarea.detectada}`,
+        );
+      }
+    } catch (err) {
+      console.warn(`${label} CitaTarea extraction error (fail-open):`, err instanceof Error ? err.message : err);
+    }
+  }
+
   // ── 5. Persistir en registros_de_llamada (idempotente por call_id) ─────────
   let idRegistro: number | null = null;
 
@@ -547,6 +571,59 @@ async function processVozInternal(
         }
       }
 
+      // Custom fields de cita/tarea extraídos por IA (best-effort, no sobreescribir)
+      if (citaTareaResult && ghlContactId) {
+        const customFieldsToWrite: Array<{ key: string; field_value: string }> = [];
+
+        if (citaTareaResult.cita.detectada && citaTareaResult.cita.fecha_hora) {
+          customFieldsToWrite.push({
+            key: "fecha_y_hora_de_la_cita",
+            field_value: citaTareaResult.cita.fecha_hora,
+          });
+        }
+
+        if (citaTareaResult.tarea.detectada) {
+          if (citaTareaResult.tarea.titulo) {
+            customFieldsToWrite.push({
+              key: "titulo_de_la_tarea",
+              field_value: citaTareaResult.tarea.titulo,
+            });
+          }
+          if (citaTareaResult.tarea.descripcion) {
+            customFieldsToWrite.push({
+              key: "descripcion_de_la_tarea",
+              field_value: citaTareaResult.tarea.descripcion,
+            });
+          }
+          if (citaTareaResult.tarea.fecha_vencimiento) {
+            customFieldsToWrite.push({
+              key: "fecha_de_vencimiento_de_la_tarea",
+              field_value: citaTareaResult.tarea.fecha_vencimiento,
+            });
+          }
+        }
+
+        if (customFieldsToWrite.length > 0) {
+          try {
+            await updateContactCustomFields(ghlContactId, tokenGhl, customFieldsToWrite);
+            console.info(`${label} CitaTarea: wrote ${customFieldsToWrite.length} custom fields to GHL`);
+          } catch (err) {
+            console.error(`${label} CitaTarea: error writing custom fields (best-effort):`, err);
+          }
+        }
+
+        if (citaTareaResult.tarea.detectada) {
+          try {
+            await createLocationTag(locationId, tokenGhl, "tarea_registradaai");
+            await safeAddContactTags(ghlContactId, tokenGhl, ["tarea_registradaai"], locationId);
+            tagsAplicados.push("tarea_registradaai");
+            console.info(`${label} CitaTarea: applied tag tarea_registradaai`);
+          } catch (err) {
+            console.error(`${label} CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+          }
+        }
+      }
+
       // Nota en GHL con resumen + reagendamiento + transcript (best-effort)
       try {
         const noteLines: string[] = [`📞 Agente de voz - Auto KPI — estado: ${estadoFinal}`];
@@ -598,6 +675,10 @@ async function processVozInternal(
       etiquetas_payload: etiquetasPayload,
       nota_aplicada: notaAplicada,
       tags_applied: tagsAplicados,
+      cita_tarea: citaTareaResult ? {
+        cita_detectada: citaTareaResult.cita.detectada,
+        tarea_detectada: citaTareaResult.tarea.detectada,
+      } : undefined,
     },
   };
 }
