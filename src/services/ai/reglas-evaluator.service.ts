@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
+import { getContactById } from "../ghl-api.service.js";
 
 // ─── Clientes IA ─────────────────────────────────────────────────────────────
 
@@ -27,11 +28,30 @@ export interface AccionRegla {
   categoria_id?: string;
 }
 
+export interface DynamicValueRange {
+  min: number;
+  label: string;
+}
+
+export interface DynamicValueConfig {
+  fuente: "custom_field" | "formula";
+  fieldId?: string;
+  formula?: string;
+  ranges?: DynamicValueRange[];
+  mode?: "exacto" | "aproximado";
+}
+
+export interface DynamicValueContext {
+  contactId?: string | null;
+  bearerToken?: string | null;
+}
+
 export interface ReglaEtiquetaNormalized {
   id: string;
   condition: string;
   acciones: AccionRegla[];
   fuentes: string[];
+  dynamicValue?: DynamicValueConfig;
 }
 
 export interface MatchedRule {
@@ -96,7 +116,6 @@ function normalizeRegla(raw: Record<string, unknown>): ReglaEtiquetaNormalized |
   const condition = (raw.condicion ?? raw.condition) as string | undefined;
   if (typeof id !== "string" || typeof condition !== "string") return null;
 
-  // Normalize acciones: prefer new shape, fall back to legacy single-action
   let acciones: AccionRegla[];
   if (Array.isArray(raw.acciones) && raw.acciones.length > 0) {
     acciones = raw.acciones as AccionRegla[];
@@ -111,7 +130,6 @@ function normalizeRegla(raw: Record<string, unknown>): ReglaEtiquetaNormalized |
     }];
   }
 
-  // Normalize fuentes: prefer new shape, fall back to legacy single source
   let fuentes: string[];
   if (Array.isArray(raw.fuentes) && raw.fuentes.length > 0) {
     fuentes = (raw.fuentes as string[]).map(normalizeSourceValue);
@@ -124,7 +142,23 @@ function normalizeRegla(raw: Record<string, unknown>): ReglaEtiquetaNormalized |
     }
   }
 
-  return { id, condition, acciones, fuentes };
+  const dv = raw.dynamicValue as Record<string, unknown> | undefined;
+  let dynamicValue: DynamicValueConfig | undefined;
+  if (dv && typeof dv === "object" && (dv.fuente === "custom_field" || dv.fuente === "formula")) {
+    dynamicValue = {
+      fuente: dv.fuente as DynamicValueConfig["fuente"],
+      ...(typeof dv.fieldId === "string" && { fieldId: dv.fieldId }),
+      ...(typeof dv.formula === "string" && { formula: dv.formula }),
+      ...(Array.isArray(dv.ranges) && {
+        ranges: (dv.ranges as DynamicValueRange[]).filter(
+          (r) => typeof r.min === "number" && typeof r.label === "string",
+        ),
+      }),
+      ...(dv.mode === "exacto" || dv.mode === "aproximado" ? { mode: dv.mode } : {}),
+    };
+  }
+
+  return { id, condition, acciones, fuentes, ...(dynamicValue && { dynamicValue }) };
 }
 
 function parseAndNormalizeReglas(raw: unknown): ReglaEtiquetaNormalized[] {
@@ -145,6 +179,46 @@ function filterBySource(reglas: ReglaEtiquetaNormalized[], source: string): Regl
   );
 }
 
+// ─── Dynamic value resolution ───────────────────────────────────────────────
+
+function resolveRangeLabel(value: number, ranges: DynamicValueRange[]): string {
+  const sorted = [...ranges].sort((a, b) => b.min - a.min);
+  for (const r of sorted) {
+    if (value >= r.min) return r.label;
+  }
+  return sorted.at(-1)?.label ?? String(value);
+}
+
+async function resolveDynamicValue(
+  config: DynamicValueConfig,
+  ctx: DynamicValueContext,
+): Promise<string | null> {
+  if (config.fuente === "custom_field") {
+    if (!config.fieldId || !ctx.contactId || !ctx.bearerToken) return null;
+    const contact = await getContactById(ctx.contactId, ctx.bearerToken);
+    if (!contact?.customFields) return null;
+    const field = contact.customFields.find(
+      (f) => f.id === config.fieldId || f.key === config.fieldId,
+    );
+    if (!field || !field.value) return null;
+
+    let resolved = String(field.value);
+    if (config.ranges?.length) {
+      const num = parseFloat(resolved);
+      if (!isNaN(num)) {
+        resolved = resolveRangeLabel(num, config.ranges);
+      }
+    }
+    if (config.mode) {
+      const prefix = config.mode === "exacto" ? "exacto" : "aprox";
+      resolved = `${prefix}: ${resolved}`;
+    }
+    return resolved;
+  }
+
+  return null;
+}
+
 // ─── Función principal ───────────────────────────────────────────────────────
 
 export async function evaluateReglas(
@@ -154,6 +228,7 @@ export async function evaluateReglas(
   promptVentas: string | null,
   openaiApiKey?: string | null,
   idCuenta?: number | null,
+  dynamicCtx?: DynamicValueContext,
 ): Promise<ReglasEvalResult> {
   const allReglas = parseAndNormalizeReglas(reglasRaw);
   const reglas = filterBySource(allReglas, source);
@@ -187,13 +262,37 @@ export async function evaluateReglas(
   const matchedIds = new Set(object.matched_rule_ids);
   const matched = reglas.filter((r) => matchedIds.has(r.id));
 
-  // Collect tags and categoria from matched rules
+  // Resolve dynamic values for matched rules
+  const dynamicResolutions = new Map<string, string>();
+  if (dynamicCtx) {
+    const dynamicRules = matched.filter((r) => r.dynamicValue);
+    if (dynamicRules.length > 0) {
+      const results = await Promise.allSettled(
+        dynamicRules.map(async (r) => {
+          const val = await resolveDynamicValue(r.dynamicValue!, dynamicCtx);
+          if (val) dynamicResolutions.set(r.id, val);
+        }),
+      );
+      for (const r of results) {
+        if (r.status === "rejected") {
+          console.error("[ReglaEval] Error resolviendo dynamic value:", r.reason);
+        }
+      }
+    }
+  }
+
   const tags: string[] = [];
   let matchedCategoria: string | null = null;
   for (const rule of matched) {
+    const dynamicVal = dynamicResolutions.get(rule.id);
     for (const accion of rule.acciones) {
-      if (accion.tipo === "asignar_etiqueta" && accion.valor && accion.valor.trim() !== "") {
-        tags.push(accion.valor);
+      if (accion.tipo === "asignar_etiqueta") {
+        if (dynamicVal) {
+          const baseTag = accion.valor?.trim() ? `${accion.valor}: ${dynamicVal}` : dynamicVal;
+          tags.push(baseTag);
+        } else if (accion.valor && accion.valor.trim() !== "") {
+          tags.push(accion.valor);
+        }
       }
       if (accion.tipo === "asignar_categoria" && accion.categoria_id && !matchedCategoria) {
         matchedCategoria = accion.categoria_id;
@@ -206,9 +305,14 @@ export async function evaluateReglas(
     matched_rules: matched.map((r) => {
       const tagAction = r.acciones.find((a) => a.tipo === "asignar_etiqueta");
       const stageAction = r.acciones.find((a) => a.funnelStage);
+      const dynamicVal = dynamicResolutions.get(r.id);
+      let tag = tagAction?.valor ?? "";
+      if (dynamicVal) {
+        tag = tag.trim() ? `${tag}: ${dynamicVal}` : dynamicVal;
+      }
       return {
         id: r.id,
-        tag: tagAction?.valor ?? "",
+        tag,
         ...(stageAction?.funnelStage && { funnelStage: stageAction.funnelStage }),
         acciones: r.acciones,
       };

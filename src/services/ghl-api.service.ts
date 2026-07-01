@@ -691,11 +691,17 @@ export async function safeAddContactTags(
  * Obtiene los appointments de un contacto en GHL.
  * Retorna el startTime del más cercano a la fecha dada, o null si no hay.
  */
-// ─── GHL API: obtener contacto por ID (para assignedTo) ──────────────────────
+// ─── GHL API: obtener contacto por ID (para assignedTo + customFields) ──────
+export interface GhlCustomField {
+  id: string;
+  key: string;
+  value: string;
+}
+
 export async function getContactById(
   contactId: string,
   bearerToken: string,
-): Promise<{ assignedTo: string | null } | null> {
+): Promise<{ assignedTo: string | null; customFields?: GhlCustomField[] } | null> {
   try {
     const token = bearerToken.startsWith("Bearer ") ? bearerToken : `Bearer ${bearerToken}`;
     const res = await fetchWithTimeout(
@@ -711,8 +717,19 @@ export async function getContactById(
       GHL_TIMEOUT_MS,
     );
     if (!res.ok) return null;
-    const data = (await res.json()) as { contact?: { assignedTo?: string } };
-    return { assignedTo: data.contact?.assignedTo ?? null };
+    const data = (await res.json()) as {
+      contact?: {
+        assignedTo?: string;
+        customFields?: Array<{ id: string; key?: string; value?: string; field_value?: string }>;
+      };
+    };
+    const rawFields = data.contact?.customFields;
+    const customFields: GhlCustomField[] | undefined = rawFields?.map((f) => ({
+      id: f.id,
+      key: f.key ?? f.id,
+      value: f.value ?? f.field_value ?? "",
+    }));
+    return { assignedTo: data.contact?.assignedTo ?? null, customFields };
   } catch {
     return null;
   }

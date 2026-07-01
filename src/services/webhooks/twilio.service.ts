@@ -27,7 +27,7 @@ import {
   type CallClassification,
 } from "../ai/call-classification.service.js";
 import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-analysis.service.js";
-import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
+import { evaluateReglas, type DynamicValueContext } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
@@ -752,7 +752,8 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     let preReglasResult: ReglasEvalResult = { matched_tags: [], matched_rules: [], matched_categoria: null };
     if (fields.preTranscript.trim()) {
       try {
-        preReglasResult = await evaluateReglas(fields.preTranscript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta);
+        const dynCtxPre: DynamicValueContext = { contactId: fields.contactId, bearerToken: tokenGhl };
+        preReglasResult = await evaluateReglas(fields.preTranscript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta, dynCtxPre);
       } catch (err) {
         console.error("[Effective/GHL] Error evaluando reglas pre-clasificación:", err);
       }
@@ -896,7 +897,8 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
   let mainReglasResult: ReglasEvalResult = { matched_tags: [], matched_rules: [], matched_categoria: null };
   if (transcript.trim()) {
     try {
-      mainReglasResult = await evaluateReglas(transcript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta);
+      const dynCtxMain: DynamicValueContext = { contactId: fields.contactId, bearerToken: tokenGhl };
+      mainReglasResult = await evaluateReglas(transcript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta, dynCtxMain);
     } catch (err) {
       console.error("[Effective] Error evaluando reglas pre-clasificación:", err);
     }
@@ -988,6 +990,8 @@ async function effectivePath(
           "call",
           promptVentas ?? null,
           openaiApiKey,
+          idCuenta,
+          { contactId, bearerToken: tokenGhl },
         ).catch((err) => {
           console.error("[Effective] Error evaluando reglas de etiquetas:", err);
           return { matched_tags: [] as string[], matched_rules: [] as MatchedRule[], matched_categoria: null };
