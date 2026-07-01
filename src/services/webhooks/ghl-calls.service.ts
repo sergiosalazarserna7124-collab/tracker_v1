@@ -35,7 +35,8 @@ import {
 } from "../ai/call-classification.service.js";
 import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
-import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
+import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.service.js";
+import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
@@ -192,6 +193,7 @@ async function resolveAccountFull(
   promptLlamadas: string | null;
   reglasEtiquetas: unknown;
   configLlamadas: unknown;
+  categoriasLlamadas: unknown;
   isCancelled: boolean;
 }> {
   const empty = {
@@ -203,6 +205,7 @@ async function resolveAccountFull(
     promptLlamadas: null,
     reglasEtiquetas: null,
     configLlamadas: null,
+    categoriasLlamadas: null,
     isCancelled: false,
   };
 
@@ -216,6 +219,7 @@ async function resolveAccountFull(
       promptLlamadas: account.prompt_llamadas,
       reglasEtiquetas: account.reglas_etiquetas,
       configLlamadas: account.config_llamadas,
+      categoriasLlamadas: account.categorias_llamadas,
       isCancelled: false,
     };
   }
@@ -516,12 +520,13 @@ async function effectivePath(
   promptVentas?: string | null,
   reglasEtiquetas?: unknown,
   promptLlamadas?: string | null,
+  preComputedReglas?: ReglasEvalResult,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
   const aiEstado = classification.estado ?? "seguimiento";
 
-  // Generar análisis enriquecido + evaluar reglas en paralelo (son independientes)
+  // AUT-1144: si las reglas ya se evaluaron antes de clasificar, reutilizar
   const [analysisText, reglasResult] = await Promise.all([
     (promptLlamadas || promptVentas)
       ? generateLlamadaAnalysisText(
@@ -534,16 +539,18 @@ async function effectivePath(
           return null;
         })
       : Promise.resolve(null),
-    evaluateReglas(
-      transcript,
-      reglasEtiquetas,
-      "call",
-      promptVentas ?? null,
-      openaiApiKey,
-    ).catch((err) => {
-      console.error("[GhlCalls/Effective] Error evaluando reglas de etiquetas:", err);
-      return { matched_tags: [], matched_rules: [] };
-    }),
+    preComputedReglas
+      ? Promise.resolve(preComputedReglas)
+      : evaluateReglas(
+          transcript,
+          reglasEtiquetas,
+          "call",
+          promptVentas ?? null,
+          openaiApiKey,
+        ).catch((err) => {
+          console.error("[GhlCalls/Effective] Error evaluando reglas de etiquetas:", err);
+          return { matched_tags: [] as string[], matched_rules: [] as MatchedRule[], matched_categoria: null };
+        }),
   ]);
 
   // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador
@@ -968,6 +975,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     promptLlamadas,
     reglasEtiquetas,
     configLlamadas,
+    categoriasLlamadas,
     isCancelled,
   } = await resolveAccountFull(fields.locationId, "GhlCalls/Effective", fields.idCuentaFromPayload);
   if (isCancelled) return { success: true };
@@ -1009,6 +1017,17 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     );
   }
 
+  // AUT-1144: evaluar reglas ANTES de clasificar para resolver categoría → prompt correcto
+  let ghlReglasResult: ReglasEvalResult = { matched_tags: [], matched_rules: [], matched_categoria: null };
+  if (transcript.trim()) {
+    try {
+      ghlReglasResult = await evaluateReglas(transcript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta);
+    } catch (err) {
+      console.error("[GhlCalls/Effective] Error evaluando reglas pre-clasificación:", err);
+    }
+  }
+  const categoriaGhl = collectCategoria(ghlReglasResult.matched_rules) ?? ghlReglasResult.matched_categoria;
+
   // Clasificar con IA
   let classification: CallClassification;
   try {
@@ -1019,6 +1038,8 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
       promptVentas,
       promptLlamadas,
       idCuenta,
+      categoriaGhl,
+      categoriasLlamadas,
     );
   } catch (err) {
     console.error("[GhlCalls/Effective] Error clasificando con IA:", err);
@@ -1048,5 +1069,6 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     promptVentas,
     reglasEtiquetas,
     promptLlamadas,
+    ghlReglasResult,
   );
 }

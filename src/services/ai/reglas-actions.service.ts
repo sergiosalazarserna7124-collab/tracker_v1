@@ -66,3 +66,14 @@ export function collectFunnelStages(matchedRules: MatchedRule[]): string | null 
   }
   return null;
 }
+
+export function collectCategoria(matchedRules: MatchedRule[]): string | null {
+  for (const rule of matchedRules) {
+    for (const accion of rule.acciones) {
+      if (accion.tipo === "asignar_categoria" && accion.categoria_id) {
+        return accion.categoria_id;
+      }
+    }
+  }
+  return null;
+}

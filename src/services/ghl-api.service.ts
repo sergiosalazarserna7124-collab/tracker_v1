@@ -50,6 +50,7 @@ export interface CuentaFullRow extends CuentaRow {
   prompt_llamadas: string | null;
   reglas_etiquetas: unknown;
   config_llamadas: unknown;
+  categorias_llamadas: unknown;
 }
 
 export interface GhlContact {
@@ -155,6 +156,7 @@ export async function getAccountFullById(idCuenta: number): Promise<CuentaFullRo
           prompt_llamadas: cuentas.prompt_llamadas,
           reglas_etiquetas: cuentas.reglas_etiquetas,
           config_llamadas: cuentas.config_llamadas,
+          categorias_llamadas: cuentas.categorias_llamadas,
         })
         .from(cuentas)
         .where(eq(cuentas.id_cuenta, idCuenta))
@@ -185,6 +187,7 @@ export async function getAccountFullByLocationId(locationId: string): Promise<Cu
           prompt_llamadas: cuentas.prompt_llamadas,
           reglas_etiquetas: cuentas.reglas_etiquetas,
           config_llamadas: cuentas.config_llamadas,
+          categorias_llamadas: cuentas.categorias_llamadas,
         })
         .from(cuentas)
         .where(eq(cuentas.locationid, locationId))

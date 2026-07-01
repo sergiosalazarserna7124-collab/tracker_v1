@@ -28,7 +28,8 @@ import {
 } from "../ai/call-classification.service.js";
 import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
-import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
+import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
+import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingNote, savePendingTag } from "../ghl-token-guard.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
@@ -199,9 +200,10 @@ async function resolveAccountFull(
   promptLlamadas: string | null;
   reglasEtiquetas: unknown;
   configLlamadas: unknown;
+  categoriasLlamadas: unknown;
   isCancelled: boolean;
 }> {
-  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, configLlamadas: null, isCancelled: false };
+  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, configLlamadas: null, categoriasLlamadas: null, isCancelled: false };
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
     return empty;
@@ -233,6 +235,7 @@ async function resolveAccountFull(
       promptLlamadas: account.prompt_llamadas,
       reglasEtiquetas: account.reglas_etiquetas,
       configLlamadas: account.config_llamadas,
+      categoriasLlamadas: account.categorias_llamadas,
       isCancelled: false,
     };
   } catch (err) {
@@ -722,7 +725,7 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
 export async function processEffectiveCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
-  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, configLlamadas, isCancelled } =
+  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, configLlamadas, categoriasLlamadas, isCancelled } =
     await resolveAccountFull(fields.locationId, "Effective", fields.locationIdFallback);
   if (isCancelled) return { success: true, data: { id_cuenta: idCuenta, cancelled: true } };
 
@@ -744,9 +747,21 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
   // ── Bypass Twilio: transcripción ya viene en el payload (cuentas GHL sin Twilio) ──
   if (fields.preTranscript) {
     console.log("[Effective] Transcript pre-generado recibido — saltando pipeline Twilio/Whisper");
+
+    // AUT-1144: evaluar reglas ANTES de clasificar para resolver categoría → prompt correcto
+    let preReglasResult: ReglasEvalResult = { matched_tags: [], matched_rules: [], matched_categoria: null };
+    if (fields.preTranscript.trim()) {
+      try {
+        preReglasResult = await evaluateReglas(fields.preTranscript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta);
+      } catch (err) {
+        console.error("[Effective/GHL] Error evaluando reglas pre-clasificación:", err);
+      }
+    }
+    const categoriaGhl = collectCategoria(preReglasResult.matched_rules) ?? preReglasResult.matched_categoria;
+
     let classification: CallClassification;
     try {
-      classification = await classifyCall(fields.preTranscript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, idCuenta);
+      classification = await classifyCall(fields.preTranscript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, idCuenta, categoriaGhl, categoriasLlamadas);
     } catch (err) {
       console.error("[Effective/GHL] Error clasificando con IA:", err);
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, null, "Effective/GHL");
@@ -756,7 +771,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     if (classification.buzon === true || classification.buzon === null) {
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
     }
-    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas);
+    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas, preReglasResult);
   }
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
@@ -875,11 +890,22 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     return followUpPath(fields, idCuenta, tokenGhl, callSid, transcript, "Transcripción demasiado corta para ser una conversación real.", "Effective/short-transcript");
   }
 
-  // ── Fase 3: Clasificación IA ───────────────────────────────────────────────
+  // ── Fase 3: Evaluar reglas + Clasificación IA ──────────────────────────────
+
+  // AUT-1144: evaluar reglas ANTES de clasificar para resolver categoría → prompt correcto
+  let mainReglasResult: ReglasEvalResult = { matched_tags: [], matched_rules: [], matched_categoria: null };
+  if (transcript.trim()) {
+    try {
+      mainReglasResult = await evaluateReglas(transcript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta);
+    } catch (err) {
+      console.error("[Effective] Error evaluando reglas pre-clasificación:", err);
+    }
+  }
+  const categoriaMain = collectCategoria(mainReglasResult.matched_rules) ?? mainReglasResult.matched_categoria;
 
   let classification: CallClassification;
   try {
-    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, idCuenta);
+    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, idCuenta, categoriaMain, categoriasLlamadas);
   } catch (err) {
     console.error("[Effective] Error clasificando llamada con IA:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, transcript, null, "Effective");
@@ -916,6 +942,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     promptVentas,
     reglasEtiquetas,
     promptLlamadas,
+    mainReglasResult,
   );
 }
 
@@ -933,12 +960,14 @@ async function effectivePath(
   promptVentas?: string | null,
   reglasEtiquetas?: unknown,
   promptLlamadas?: string | null,
+  preComputedReglas?: ReglasEvalResult,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
   const aiEstado = classification.estado ?? "seguimiento";
 
-  // Generar análisis enriquecido + evaluar reglas en paralelo (son independientes)
+  // AUT-1144: si las reglas ya se evaluaron antes de clasificar, reutilizar;
+  // si no, evaluar ahora (fallback retrocompatible)
   const [analysisText, reglasResult] = await Promise.all([
     (promptLlamadas || promptVentas)
       ? generateLlamadaAnalysisText(
@@ -951,16 +980,18 @@ async function effectivePath(
           return null;
         })
       : Promise.resolve(null),
-    evaluateReglas(
-      transcript,
-      reglasEtiquetas,
-      "call",
-      promptVentas ?? null,
-      openaiApiKey,
-    ).catch((err) => {
-      console.error("[Effective] Error evaluando reglas de etiquetas:", err);
-      return { matched_tags: [], matched_rules: [] };
-    }),
+    preComputedReglas
+      ? Promise.resolve(preComputedReglas)
+      : evaluateReglas(
+          transcript,
+          reglasEtiquetas,
+          "call",
+          promptVentas ?? null,
+          openaiApiKey,
+        ).catch((err) => {
+          console.error("[Effective] Error evaluando reglas de etiquetas:", err);
+          return { matched_tags: [] as string[], matched_rules: [] as MatchedRule[], matched_categoria: null };
+        }),
   ]);
 
   // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador

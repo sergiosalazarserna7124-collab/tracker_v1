@@ -19,11 +19,12 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
 export interface AccionRegla {
-  tipo: "cambiar_estado" | "asignar_etiqueta" | "etapa_cambiada" | "incrementar_metrica";
+  tipo: "cambiar_estado" | "asignar_etiqueta" | "etapa_cambiada" | "incrementar_metrica" | "asignar_categoria";
   valor?: string;
   funnelStage?: string;
   metrica_id?: string;
   metrica_incremento?: number;
+  categoria_id?: string;
 }
 
 export interface ReglaEtiquetaNormalized {
@@ -43,6 +44,7 @@ export interface MatchedRule {
 export interface ReglasEvalResult {
   matched_tags: string[];
   matched_rules: MatchedRule[];
+  matched_categoria: string | null;
 }
 
 // ─── Schema de salida IA ─────────────────────────────────────────────────────
@@ -157,7 +159,7 @@ export async function evaluateReglas(
   const reglas = filterBySource(allReglas, source);
 
   if (!reglas.length || !transcript.trim()) {
-    return { matched_tags: [], matched_rules: [] };
+    return { matched_tags: [], matched_rules: [], matched_categoria: null };
   }
 
   const model = resolveModel(openaiApiKey);
@@ -185,12 +187,16 @@ export async function evaluateReglas(
   const matchedIds = new Set(object.matched_rule_ids);
   const matched = reglas.filter((r) => matchedIds.has(r.id));
 
-  // Collect tags from all asignar_etiqueta actions across all matched rules
+  // Collect tags and categoria from matched rules
   const tags: string[] = [];
+  let matchedCategoria: string | null = null;
   for (const rule of matched) {
     for (const accion of rule.acciones) {
       if (accion.tipo === "asignar_etiqueta" && accion.valor && accion.valor.trim() !== "") {
         tags.push(accion.valor);
+      }
+      if (accion.tipo === "asignar_categoria" && accion.categoria_id && !matchedCategoria) {
+        matchedCategoria = accion.categoria_id;
       }
     }
   }
@@ -207,5 +213,6 @@ export async function evaluateReglas(
         acciones: r.acciones,
       };
     }),
+    matched_categoria: matchedCategoria,
   };
 }

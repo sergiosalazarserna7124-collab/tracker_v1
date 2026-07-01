@@ -13,7 +13,7 @@ import {
 } from "../ghl-api.service.js";
 import { savePendingTag } from "../ghl-token-guard.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
-import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
+import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import { classifyCall } from "../ai/call-classification.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { VozCallCompletedPayload } from "../../schemas/webhooks/voz.schema.js";
@@ -114,6 +114,7 @@ export async function maybeReclassifyVozEstado(
   cuenta: CuentaFullRow,
   label: string,
   classifier: ClassifyCallFn = classifyCall,
+  categoria?: string | null,
 ): Promise<ReclassifyResult> {
   const base: ReclassifyResult = {
     estadoFinal: estado,
@@ -166,6 +167,8 @@ export async function maybeReclassifyVozEstado(
         cuenta.prompt_ventas ?? null,
         cuenta.prompt_llamadas ?? null,
         cuenta.id_cuenta,
+        categoria,
+        cuenta.categorias_llamadas,
       ),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("timeout")), 8_000),
@@ -308,6 +311,7 @@ async function processVozInternal(
 
   // ── 4. Evaluar reglas de etiquetas (si hay transcript) ─────────────────────
   let reglasMatchedTags: string[] = [];
+  let categoriaFromReglas: string | null = null;
 
   if (transcript.trim()) {
     try {
@@ -320,6 +324,7 @@ async function processVozInternal(
         idCuenta,
       );
       reglasMatchedTags = reglasResult.matched_tags;
+      categoriaFromReglas = collectCategoria(reglasResult.matched_rules) ?? reglasResult.matched_categoria;
 
       if (reglasResult.matched_rules.length > 0 && idCuenta) {
         await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, label);
@@ -332,7 +337,7 @@ async function processVozInternal(
   const tagsInternos = reglasMatchedTags;
 
   // ── 4b. Capa defensiva: reclasificación IA si estado sospechoso o transcript corto
-  const reclassify = await maybeReclassifyVozEstado(estado, transcript, cuenta, label);
+  const reclassify = await maybeReclassifyVozEstado(estado, transcript, cuenta, label, classifyCall, categoriaFromReglas);
   const estadoFinal = reclassify.estadoFinal;
 
   if (reclassify.reclassified) {

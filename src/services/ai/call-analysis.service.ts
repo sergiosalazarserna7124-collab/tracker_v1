@@ -438,7 +438,7 @@ export async function analyzeCall(
     reglasResult:
       reglasSettled.status === "fulfilled"
         ? reglasSettled.value
-        : { matched_tags: [], matched_rules: [] },
+        : { matched_tags: [], matched_rules: [], matched_categoria: null },
   };
 }
 
