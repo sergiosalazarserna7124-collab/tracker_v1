@@ -32,6 +32,7 @@ import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from 
 import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingNote, savePendingTag } from "../ghl-token-guard.service.js";
+import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
@@ -201,9 +202,10 @@ async function resolveAccountFull(
   reglasEtiquetas: unknown;
   configLlamadas: unknown;
   categoriasLlamadas: unknown;
+  ghlOpportunityFieldsConfig: unknown;
   isCancelled: boolean;
 }> {
-  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, configLlamadas: null, categoriasLlamadas: null, isCancelled: false };
+  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, configLlamadas: null, categoriasLlamadas: null, ghlOpportunityFieldsConfig: null, isCancelled: false };
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
     return empty;
@@ -236,6 +238,7 @@ async function resolveAccountFull(
       reglasEtiquetas: account.reglas_etiquetas,
       configLlamadas: account.config_llamadas,
       categoriasLlamadas: account.categorias_llamadas,
+      ghlOpportunityFieldsConfig: account.ghl_opportunity_fields_config,
       isCancelled: false,
     };
   } catch (err) {
@@ -725,7 +728,7 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
 export async function processEffectiveCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
-  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, configLlamadas, categoriasLlamadas, isCancelled } =
+  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, configLlamadas, categoriasLlamadas, ghlOpportunityFieldsConfig, isCancelled } =
     await resolveAccountFull(fields.locationId, "Effective", fields.locationIdFallback);
   if (isCancelled) return { success: true, data: { id_cuenta: idCuenta, cancelled: true } };
 
@@ -772,7 +775,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     if (classification.buzon === true || classification.buzon === null) {
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
     }
-    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas, preReglasResult);
+    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas, preReglasResult, ghlOpportunityFieldsConfig);
   }
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
@@ -945,6 +948,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     reglasEtiquetas,
     promptLlamadas,
     mainReglasResult,
+    ghlOpportunityFieldsConfig,
   );
 }
 
@@ -963,6 +967,7 @@ async function effectivePath(
   reglasEtiquetas?: unknown,
   promptLlamadas?: string | null,
   preComputedReglas?: ReglasEvalResult,
+  ghlOpportunityFieldsConfig?: unknown,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
@@ -1302,6 +1307,20 @@ async function effectivePath(
         console.error(`[Effective] Error actualizando pipeline GHL para contact=${contactId}:`, err);
       }
     }
+  }
+
+  // ── Write-back de resumen IA a custom fields de oportunidad (AUT-1157) ──
+  if (contactId && tokenGhl && fields.locationId) {
+    await writebackOpportunityFields({
+      contactId,
+      locationId: fields.locationId,
+      tokenGhl,
+      estadoFinal: effectiveEstado,
+      analysisText: analysisText,
+      iadesc: classification.iadesc ?? null,
+      rawConfig: ghlOpportunityFieldsConfig,
+      label: "[Effective]",
+    });
   }
 
   const stlForLog = existing

@@ -166,6 +166,8 @@ export const cuentas = pgTable("cuentas", {
   // NULL = comportamiento actual (80-chars guard, backward compat).
   // Estructura: {"min_palabras": 15, "requiere_conversacion_real": true}
   config_llamadas: jsonb("config_llamadas"),
+  // ── V12: write-back de resumen IA a custom fields de oportunidad GHL (AUT-1157) ──
+  ghl_opportunity_fields_config: jsonb("ghl_opportunity_fields_config"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

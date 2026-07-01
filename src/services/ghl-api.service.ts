@@ -51,6 +51,7 @@ export interface CuentaFullRow extends CuentaRow {
   reglas_etiquetas: unknown;
   config_llamadas: unknown;
   categorias_llamadas: unknown;
+  ghl_opportunity_fields_config: unknown;
 }
 
 export interface GhlContact {
@@ -158,6 +159,7 @@ export async function getAccountFullById(idCuenta: number): Promise<CuentaFullRo
           reglas_etiquetas: cuentas.reglas_etiquetas,
           config_llamadas: cuentas.config_llamadas,
           categorias_llamadas: cuentas.categorias_llamadas,
+          ghl_opportunity_fields_config: cuentas.ghl_opportunity_fields_config,
         })
         .from(cuentas)
         .where(eq(cuentas.id_cuenta, idCuenta))
@@ -189,6 +191,7 @@ export async function getAccountFullByLocationId(locationId: string): Promise<Cu
           reglas_etiquetas: cuentas.reglas_etiquetas,
           config_llamadas: cuentas.config_llamadas,
           categorias_llamadas: cuentas.categorias_llamadas,
+          ghl_opportunity_fields_config: cuentas.ghl_opportunity_fields_config,
         })
         .from(cuentas)
         .where(eq(cuentas.locationid, locationId))
@@ -877,6 +880,67 @@ export async function updateOpportunityStage(
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`GHL opportunity update responded ${response.status}: ${text}`);
+  }
+}
+
+// ─── GHL API: actualizar custom fields de un opportunity ────────────────────
+
+export async function updateOpportunityCustomFields(
+  opportunityId: string,
+  bearerToken: string,
+  customFields: Array<{ key: string; field_value: string }>,
+): Promise<void> {
+  const response = await fetchWithTimeout(
+    `https://services.leadconnectorhq.com/opportunities/${opportunityId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+      body: JSON.stringify({ customFields }),
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`GHL opportunity custom fields update responded ${response.status}: ${text}`);
+  }
+}
+
+// ─── GHL API: leer custom fields de un opportunity ──────────────────────────
+
+export async function getOpportunityById(
+  opportunityId: string,
+  bearerToken: string,
+): Promise<{ customFields?: Array<{ id: string; key?: string; field_value?: string }> } | null> {
+  try {
+    const response = await fetchWithTimeout(
+      `https://services.leadconnectorhq.com/opportunities/${opportunityId}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: buildBearerAuth(bearerToken),
+          Accept: "application/json",
+          Version: "2021-07-28",
+        },
+      },
+      GHL_TIMEOUT_MS,
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.warn(`[GHL getOpportunityById] ${response.status}: ${text}`);
+      return null;
+    }
+
+    const data = (await response.json()) as { opportunity?: { customFields?: Array<{ id: string; key?: string; field_value?: string }> } };
+    return data.opportunity ?? null;
+  } catch {
+    return null;
   }
 }
 

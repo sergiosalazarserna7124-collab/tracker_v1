@@ -12,6 +12,7 @@ import {
   type CuentaFullRow,
 } from "../ghl-api.service.js";
 import { savePendingTag } from "../ghl-token-guard.service.js";
+import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import { classifyCall } from "../ai/call-classification.service.js";
@@ -651,6 +652,17 @@ async function processVozInternal(
       } catch (err) {
         console.error(`${label} Error agregando nota GHL (best-effort):`, err);
       }
+      // ── Write-back de resumen IA a custom fields de oportunidad (AUT-1157) ──
+      await writebackOpportunityFields({
+        contactId: ghlContactId,
+        locationId,
+        tokenGhl,
+        estadoFinal,
+        analysisText: null,
+        iadesc: iadescripcion,
+        rawConfig: cuenta.ghl_opportunity_fields_config,
+        label,
+      });
     } else {
       console.warn(`${label} No se encontró contacto GHL — tags/nota sin aplicar`);
     }

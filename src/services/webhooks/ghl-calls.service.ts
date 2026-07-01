@@ -42,6 +42,7 @@ import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
 import type { GhlCallEventBody } from "../../schemas/webhooks/ghl-calls.schema.js";
 import type { ServiceResult } from "../../types/index.js";
+import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service.js";
 
 // Estados activos (solo para decidir transición de estado, NO para lookup)
 const ESTADOS_ACTIVOS = ["pdte", "seguimiento", "programado", "no_contestada", "no_contestado"] as const;
@@ -194,6 +195,7 @@ async function resolveAccountFull(
   reglasEtiquetas: unknown;
   configLlamadas: unknown;
   categoriasLlamadas: unknown;
+  ghlOpportunityFieldsConfig: unknown;
   isCancelled: boolean;
 }> {
   const empty = {
@@ -206,6 +208,7 @@ async function resolveAccountFull(
     reglasEtiquetas: null,
     configLlamadas: null,
     categoriasLlamadas: null,
+    ghlOpportunityFieldsConfig: null,
     isCancelled: false,
   };
 
@@ -220,6 +223,7 @@ async function resolveAccountFull(
       reglasEtiquetas: account.reglas_etiquetas,
       configLlamadas: account.config_llamadas,
       categoriasLlamadas: account.categorias_llamadas,
+      ghlOpportunityFieldsConfig: account.ghl_opportunity_fields_config,
       isCancelled: false,
     };
   }
@@ -521,6 +525,7 @@ async function effectivePath(
   reglasEtiquetas?: unknown,
   promptLlamadas?: string | null,
   preComputedReglas?: ReglasEvalResult,
+  ghlOpportunityFieldsConfig?: unknown,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
@@ -765,6 +770,20 @@ async function effectivePath(
     }
   }
 
+  // ── Write-back de resumen IA a custom fields de oportunidad (AUT-1157) ──
+  if (contactId && tokenGhl && fields.locationId) {
+    await writebackOpportunityFields({
+      contactId,
+      locationId: fields.locationId,
+      tokenGhl,
+      estadoFinal: effectiveEstado,
+      analysisText: analysisText ?? null,
+      iadesc: classification.iadesc ?? null,
+      rawConfig: ghlOpportunityFieldsConfig,
+      label: "[GhlCalls/Effective]",
+    });
+  }
+
   const stlForLog = existing
     ? calcSpeedToLead(existing.estado, existing.fecha_evento, now)
     : "0";
@@ -976,6 +995,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     reglasEtiquetas,
     configLlamadas,
     categoriasLlamadas,
+    ghlOpportunityFieldsConfig,
     isCancelled,
   } = await resolveAccountFull(fields.locationId, "GhlCalls/Effective", fields.idCuentaFromPayload);
   if (isCancelled) return { success: true };
@@ -1070,5 +1090,6 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     reglasEtiquetas,
     promptLlamadas,
     ghlReglasResult,
+    ghlOpportunityFieldsConfig,
   );
 }
