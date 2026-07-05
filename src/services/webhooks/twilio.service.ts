@@ -33,6 +33,8 @@ import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.servi
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingNote, savePendingTag } from "../ghl-token-guard.service.js";
 import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service.js";
+import { extractCitaTarea, CITA_TAREA_ACCOUNTS, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
+import { updateContactCustomFields, createLocationTag } from "../ghl-api.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
@@ -1015,6 +1017,27 @@ async function effectivePath(
   // Regla explícita del cliente tiene mayor prioridad que clasificación IA
   const effectiveEstado = funnelStageFromReglas ?? aiEstado;
 
+  // ── Extracción de cita/tarea (feature-gated por cuenta) ────────────────────
+  let citaTareaResult: CitaTareaExtraction | null = null;
+  if (idCuenta && CITA_TAREA_ACCOUNTS.has(idCuenta) && transcript.trim().length >= 100) {
+    try {
+      citaTareaResult = await extractCitaTarea(
+        transcript,
+        now,
+        "America/Mexico_City",
+        openaiApiKey,
+        idCuenta,
+      );
+      if (citaTareaResult) {
+        console.info(
+          `[Effective] CitaTarea: cita=${citaTareaResult.cita.detectada} tarea=${citaTareaResult.tarea.detectada}`,
+        );
+      }
+    } catch (err) {
+      console.warn(`[Effective] CitaTarea extraction error (fail-open):`, err instanceof Error ? err.message : err);
+    }
+  }
+
   // Construir objeto lead_embudo_personalizado si hay embudo configurado
   const leadEmbudoData = embudoPersonalizado
     ? { estado_ia: effectiveEstado, embudo_origen: "embudo_personalizado", timestamp: now.toISOString() }
@@ -1321,6 +1344,58 @@ async function effectivePath(
       rawConfig: ghlOpportunityFieldsConfig,
       label: "[Effective]",
     });
+  }
+
+  // ── Write-back de cita/tarea a custom fields + tag en GHL ──────────────────
+  if (citaTareaResult && contactId && tokenGhl) {
+    const customFieldsToWrite: Array<{ key: string; field_value: string }> = [];
+
+    if (citaTareaResult.cita.detectada && citaTareaResult.cita.fecha_hora) {
+      customFieldsToWrite.push({
+        key: "fecha_y_hora_de_la_cita",
+        field_value: citaTareaResult.cita.fecha_hora,
+      });
+    }
+
+    if (citaTareaResult.tarea.detectada) {
+      if (citaTareaResult.tarea.titulo) {
+        customFieldsToWrite.push({
+          key: "titulo_de_la_tarea",
+          field_value: citaTareaResult.tarea.titulo,
+        });
+      }
+      if (citaTareaResult.tarea.descripcion) {
+        customFieldsToWrite.push({
+          key: "descripcion_de_la_tarea",
+          field_value: citaTareaResult.tarea.descripcion,
+        });
+      }
+      if (citaTareaResult.tarea.fecha_vencimiento) {
+        customFieldsToWrite.push({
+          key: "fecha_de_vencimiento_de_la_tarea",
+          field_value: citaTareaResult.tarea.fecha_vencimiento,
+        });
+      }
+    }
+
+    if (customFieldsToWrite.length > 0) {
+      try {
+        await updateContactCustomFields(contactId, tokenGhl, customFieldsToWrite);
+        console.info(`[Effective] CitaTarea: wrote ${customFieldsToWrite.length} custom fields to GHL`);
+      } catch (err) {
+        console.error(`[Effective] CitaTarea: error writing custom fields (best-effort):`, err);
+      }
+    }
+
+    if (citaTareaResult.tarea.detectada && fields.locationId) {
+      try {
+        await createLocationTag(fields.locationId, tokenGhl, "tarea_registradaai");
+        await safeAddContactTags(contactId, tokenGhl, ["tarea_registradaai"], fields.locationId);
+        console.info(`[Effective] CitaTarea: applied tag tarea_registradaai`);
+      } catch (err) {
+        console.error(`[Effective] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+      }
+    }
   }
 
   const stlForLog = existing
