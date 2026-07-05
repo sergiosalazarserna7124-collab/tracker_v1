@@ -16,6 +16,11 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
   return defaultModel;
 }
 
+// ─── Feature gate por cuenta ─────────────────────────────────────────────────
+
+/** Cuentas con extracción de cita/tarea habilitada (feature-gated). */
+export const CITA_TAREA_ACCOUNTS = new Set<number>([36]);
+
 // ─── Tipos ──────────────────────────────────────────────────────────────────
 
 export interface CitaTareaExtraction {

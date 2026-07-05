@@ -16,7 +16,7 @@ import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import { classifyCall } from "../ai/call-classification.service.js";
-import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
+import { extractCitaTarea, CITA_TAREA_ACCOUNTS, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { VozCallCompletedPayload } from "../../schemas/webhooks/voz.schema.js";
 
@@ -349,7 +349,6 @@ async function processVozInternal(
   }
 
   // ── 4c. Extracción de cita/tarea (feature-gated por cuenta) ────────────────
-  const CITA_TAREA_ACCOUNTS = new Set([36]);
   let citaTareaResult: CitaTareaExtraction | null = null;
 
   if (CITA_TAREA_ACCOUNTS.has(idCuenta) && transcript.trim().length >= 100) {
@@ -557,18 +556,22 @@ async function processVozInternal(
         }
       }
 
-      // Custom field fecha_y_hora_cita_call_ai para agendado/reagendado (best-effort)
+      // Custom field de cita voz para agendado/reagendado (best-effort)
       if (
         (estadoFinal === "agendado" || estadoFinal === "reagendado") &&
         reagendamiento?.cita_datetime_ghl
       ) {
+        const citaFieldKey =
+          idCuenta === 30 && agentid === "citas"
+            ? "fecha_y_hora_de_la_cita"
+            : "fecha_y_hora_cita_call_ai";
         try {
           await updateContactCustomFields(ghlContactId, tokenGhl, [
-            { key: "fecha_y_hora_cita_call_ai", field_value: reagendamiento.cita_datetime_ghl },
+            { key: citaFieldKey, field_value: reagendamiento.cita_datetime_ghl },
           ]);
-          console.info(`${label} Custom field fecha_y_hora_cita_call_ai escrito en GHL`);
+          console.info(`${label} Custom field ${citaFieldKey} escrito en GHL`);
         } catch (err) {
-          console.error(`${label} Error escribiendo custom field fecha_y_hora_cita_call_ai (best-effort):`, err);
+          console.error(`${label} Error escribiendo custom field ${citaFieldKey} (best-effort):`, err);
         }
       }
 
