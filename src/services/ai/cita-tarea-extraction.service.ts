@@ -4,9 +4,6 @@ import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
 
-// ─── Feature gate: cuentas habilitadas para extracción cita/tarea ───────────
-export const CITA_TAREA_ACCOUNTS = new Set([36]);
-
 // ─── Clientes IA ────────────────────────────────────────────────────────────
 
 const defaultProvider = createOpenAI({ apiKey: env.OPENAI_API_KEY });
