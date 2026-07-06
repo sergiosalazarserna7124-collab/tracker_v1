@@ -29,6 +29,7 @@ import { criteriosCalificacionRoute } from "./routes/data/criterios-calificacion
 import { contactIntakeRoute } from "./routes/webhooks/contact-intake.route.js";
 import { metricsRoute } from "./routes/data/metrics.route.js";
 import { contactoTranscripcionesRoute } from "./routes/data/contacto-transcripciones.route.js";
+import { ghlMarketplaceShadowRoute } from "./routes/webhooks/ghl-marketplace-shadow.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -68,6 +69,7 @@ export async function buildApp() {
   await app.register(criteriosCalificacionRoute, { prefix: "/api" });
   await app.register(metricsRoute, { prefix: "/api/v1/metrics" });
   await app.register(contactoTranscripcionesRoute, { prefix: "/data" });
+  await app.register(ghlMarketplaceShadowRoute, { prefix: "/webhooks" });
 
   return app;
 }

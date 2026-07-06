@@ -292,6 +292,20 @@ export const mapeoIdExterno = pgTable("mapeo_id_externo", {
   index("idx_mapeo_cuenta_ghl").on(table.id_cuenta, table.ghl_contact_id),
 ]);
 
+// ── Tabla: shadow log de eventos GHL Marketplace (F1: solo observar) ────────
+export const ghlMarketplaceShadow = pgTable("ghl_marketplace_shadow", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  event_type: text("event_type"),
+  location_id: text("location_id"),
+  headers: jsonb("headers").notNull().default({}),
+  payload: jsonb("payload").notNull().default({}),
+  received_at: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  signature_ok: boolean("signature_ok"),
+}, (table) => [
+  index("idx_ghl_shadow_location").on(table.location_id),
+  index("idx_ghl_shadow_received").on(table.received_at),
+]);
+
 export const metricDataPoints = pgTable("metric_data_points", {
   id:        uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   metric_id: uuid("metric_id").notNull().references(() => metrics.id, { onDelete: "cascade" }),
