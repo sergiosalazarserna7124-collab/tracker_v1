@@ -4,6 +4,11 @@ import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
 import { getContactById } from "../ghl-api.service.js";
+import {
+  resolveCustomFieldValue,
+  type DynamicValueRange,
+  type DynamicValueConfig,
+} from "./dynamic-value.utils.js";
 
 // ─── Clientes IA ─────────────────────────────────────────────────────────────
 
@@ -28,18 +33,7 @@ export interface AccionRegla {
   categoria_id?: string;
 }
 
-export interface DynamicValueRange {
-  min: number;
-  label: string;
-}
-
-export interface DynamicValueConfig {
-  fuente: "custom_field" | "formula";
-  fieldId?: string;
-  formula?: string;
-  ranges?: DynamicValueRange[];
-  mode?: "exacto" | "aproximado";
-}
+export type { DynamicValueRange, DynamicValueConfig } from "./dynamic-value.utils.js";
 
 export interface DynamicValueContext {
   contactId?: string | null;
@@ -145,16 +139,24 @@ function normalizeRegla(raw: Record<string, unknown>): ReglaEtiquetaNormalized |
   const dv = raw.dynamicValue as Record<string, unknown> | undefined;
   let dynamicValue: DynamicValueConfig | undefined;
   if (dv && typeof dv === "object" && (dv.fuente === "custom_field" || dv.fuente === "formula")) {
+    const validTipos = ["numero", "si_no", "texto", "fecha"] as const;
+    const tipoRaw = dv.tipo as string | undefined;
+    const tipo = validTipos.includes(tipoRaw as typeof validTipos[number])
+      ? (tipoRaw as DynamicValueConfig["tipo"])
+      : undefined;
+
     dynamicValue = {
       fuente: dv.fuente as DynamicValueConfig["fuente"],
       ...(typeof dv.fieldId === "string" && { fieldId: dv.fieldId }),
       ...(typeof dv.formula === "string" && { formula: dv.formula }),
+      ...(tipo && { tipo }),
       ...(Array.isArray(dv.ranges) && {
         ranges: (dv.ranges as DynamicValueRange[]).filter(
           (r) => typeof r.min === "number" && typeof r.label === "string",
         ),
       }),
-      ...(dv.mode === "exacto" || dv.mode === "aproximado" ? { mode: dv.mode } : {}),
+      ...(typeof dv.labelSi === "string" && { labelSi: dv.labelSi }),
+      ...(typeof dv.labelNo === "string" && { labelNo: dv.labelNo }),
     };
   }
 
@@ -181,14 +183,6 @@ function filterBySource(reglas: ReglaEtiquetaNormalized[], source: string): Regl
 
 // ─── Dynamic value resolution ───────────────────────────────────────────────
 
-function resolveRangeLabel(value: number, ranges: DynamicValueRange[]): string {
-  const sorted = [...ranges].sort((a, b) => b.min - a.min);
-  for (const r of sorted) {
-    if (value >= r.min) return r.label;
-  }
-  return sorted.at(-1)?.label ?? String(value);
-}
-
 async function resolveDynamicValue(
   config: DynamicValueConfig,
   ctx: DynamicValueContext,
@@ -202,18 +196,7 @@ async function resolveDynamicValue(
     );
     if (!field || !field.value) return null;
 
-    let resolved = String(field.value);
-    if (config.ranges?.length) {
-      const num = parseFloat(resolved);
-      if (!isNaN(num)) {
-        resolved = resolveRangeLabel(num, config.ranges);
-      }
-    }
-    if (config.mode) {
-      const prefix = config.mode === "exacto" ? "exacto" : "aprox";
-      resolved = `${prefix}: ${resolved}`;
-    }
-    return resolved;
+    return resolveCustomFieldValue(config, String(field.value), field.value);
   }
 
   return null;
