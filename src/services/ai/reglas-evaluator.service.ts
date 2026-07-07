@@ -1,4 +1,4 @@
-import { generateObject, jsonSchema } from "ai";
+import { generateObject, generateText, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
@@ -25,9 +25,10 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
 export interface AccionRegla {
-  tipo: "cambiar_estado" | "asignar_etiqueta" | "etapa_cambiada" | "incrementar_metrica" | "asignar_categoria" | "escribir_campo_ghl";
+  tipo: "cambiar_estado" | "asignar_etiqueta" | "etapa_cambiada" | "incrementar_metrica" | "asignar_categoria" | "escribir_campo_ghl" | "escribir_campo_ghl_ia";
   valor?: string;
   fieldId?: string;
+  prompt?: string;
   funnelStage?: string;
   metrica_id?: string;
   metrica_incremento?: number;
@@ -120,6 +121,7 @@ function normalizeRegla(raw: Record<string, unknown>): ReglaEtiquetaNormalized |
       tipo,
       valor: (raw.valor ?? raw.tag) as string | undefined,
       ...(typeof raw.fieldId === "string" && { fieldId: raw.fieldId }),
+      ...(typeof raw.prompt === "string" && { prompt: raw.prompt }),
       funnelStage: raw.funnelStage as string | undefined,
       metrica_id: raw.metrica_id as string | undefined,
       metrica_incremento: raw.metrica_incremento as number | undefined,
@@ -299,6 +301,38 @@ export async function evaluateReglas(
         await updateContactCustomFields(dynamicCtx.contactId, dynamicCtx.bearerToken, ghlWrites);
       } catch (err) {
         console.error("[ReglaEval] Error escribiendo campos GHL:", err);
+      }
+    }
+
+    // ── escribir_campo_ghl_ia: generate value with AI then write to GHL ──
+    const iaWrites: Array<{ key: string; field_value: string }> = [];
+    for (const rule of matched) {
+      for (const accion of rule.acciones) {
+        if (accion.tipo === "escribir_campo_ghl_ia" && accion.fieldId && accion.prompt) {
+          try {
+            const iaModel = resolveModel(openaiApiKey);
+            const { text: generatedValue, usage: iaUsage } = await generateText({
+              model: iaModel,
+              system: "Eres un asistente que genera valores concisos para campos de CRM a partir de transcripciones de ventas. Responde SOLO con el valor solicitado, sin explicaciones ni formato adicional.",
+              prompt: `Instrucción: ${accion.prompt}\n\nTranscripción:\n${transcript}`,
+              temperature: 0,
+            });
+            void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, iaUsage.totalTokens ?? 0);
+            const trimmed = generatedValue.trim();
+            if (trimmed) {
+              iaWrites.push({ key: accion.fieldId, field_value: trimmed });
+            }
+          } catch (err) {
+            console.error("[ReglaEval] Error generando valor IA para campo GHL:", err);
+          }
+        }
+      }
+    }
+    if (iaWrites.length > 0) {
+      try {
+        await updateContactCustomFields(dynamicCtx.contactId, dynamicCtx.bearerToken, iaWrites);
+      } catch (err) {
+        console.error("[ReglaEval] Error escribiendo campos GHL (IA):", err);
       }
     }
   }
