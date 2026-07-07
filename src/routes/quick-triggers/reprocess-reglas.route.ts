@@ -58,6 +58,7 @@ export async function reprocessReglasRoute(app: FastifyInstance) {
           prompt_ventas: cuentas.prompt_ventas,
           openai_api_key: cuentas.openai_api_key,
           reglas_etiquetas: cuentas.reglas_etiquetas,
+          locationid: cuentas.locationid,
         })
         .from(cuentas)
         .where(eq(cuentas.id_cuenta, record.id_cuenta))
@@ -70,6 +71,7 @@ export async function reprocessReglasRoute(app: FastifyInstance) {
       const dynCtx: DynamicValueContext = {
         contactId: record.ghl_contact_id,
         bearerToken: account.token_ghl,
+        locationId: account.locationid,
       };
 
       const result = await evaluateReglas(

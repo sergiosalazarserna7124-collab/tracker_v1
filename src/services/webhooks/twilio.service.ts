@@ -757,7 +757,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     let preReglasResult: ReglasEvalResult = { matched_tags: [], matched_rules: [], matched_categoria: null };
     if (fields.preTranscript.trim()) {
       try {
-        const dynCtxPre: DynamicValueContext = { contactId: fields.contactId, bearerToken: tokenGhl };
+        const dynCtxPre: DynamicValueContext = { contactId: fields.contactId, bearerToken: tokenGhl, locationId: fields.locationId };
         preReglasResult = await evaluateReglas(fields.preTranscript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta, dynCtxPre);
       } catch (err) {
         console.error("[Effective/GHL] Error evaluando reglas pre-clasificación:", err);
@@ -902,7 +902,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
   let mainReglasResult: ReglasEvalResult = { matched_tags: [], matched_rules: [], matched_categoria: null };
   if (transcript.trim()) {
     try {
-      const dynCtxMain: DynamicValueContext = { contactId: fields.contactId, bearerToken: tokenGhl };
+      const dynCtxMain: DynamicValueContext = { contactId: fields.contactId, bearerToken: tokenGhl, locationId: fields.locationId };
       mainReglasResult = await evaluateReglas(transcript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta, dynCtxMain);
     } catch (err) {
       console.error("[Effective] Error evaluando reglas pre-clasificación:", err);
@@ -998,7 +998,7 @@ async function effectivePath(
           promptVentas ?? null,
           openaiApiKey,
           idCuenta,
-          { contactId, bearerToken: tokenGhl },
+          { contactId, bearerToken: tokenGhl, locationId: fields.locationId },
         ).catch((err) => {
           console.error("[Effective] Error evaluando reglas de etiquetas:", err);
           return { matched_tags: [] as string[], matched_rules: [] as MatchedRule[], matched_categoria: null };

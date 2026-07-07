@@ -3,7 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
-import { getContactById, updateContactCustomFields } from "../ghl-api.service.js";
+import { getContactById, updateContactCustomFields, ensureCustomField } from "../ghl-api.service.js";
 import {
   resolveCustomFieldValue,
   type DynamicValueRange,
@@ -40,6 +40,7 @@ export type { DynamicValueRange, DynamicValueConfig } from "./dynamic-value.util
 export interface DynamicValueContext {
   contactId?: string | null;
   bearerToken?: string | null;
+  locationId?: string | null;
 }
 
 export interface ReglaEtiquetaNormalized {
@@ -297,6 +298,17 @@ export async function evaluateReglas(
       }
     }
     if (ghlWrites.length > 0) {
+      if (dynamicCtx.locationId) {
+        for (const w of ghlWrites) {
+          try {
+            await ensureCustomField(dynamicCtx.locationId, dynamicCtx.bearerToken, {
+              key: w.key,
+              name: w.key.replace(/^contact\./, ""),
+              dataType: "TEXT",
+            });
+          } catch { /* best-effort */ }
+        }
+      }
       try {
         await updateContactCustomFields(dynamicCtx.contactId, dynamicCtx.bearerToken, ghlWrites);
       } catch (err) {
@@ -329,6 +341,17 @@ export async function evaluateReglas(
       }
     }
     if (iaWrites.length > 0) {
+      if (dynamicCtx.locationId) {
+        for (const w of iaWrites) {
+          try {
+            await ensureCustomField(dynamicCtx.locationId, dynamicCtx.bearerToken, {
+              key: w.key,
+              name: w.key.replace(/^contact\./, ""),
+              dataType: "TEXT",
+            });
+          } catch { /* best-effort */ }
+        }
+      }
       try {
         await updateContactCustomFields(dynamicCtx.contactId, dynamicCtx.bearerToken, iaWrites);
       } catch (err) {

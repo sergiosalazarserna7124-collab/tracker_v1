@@ -944,6 +944,171 @@ export async function getOpportunityById(
   }
 }
 
+// ─── GHL API: listar custom fields de una location ─────────────────────────
+
+export interface GhlCustomFieldDefinition {
+  id: string;
+  name: string;
+  fieldKey: string;
+  dataType: string;
+}
+
+export async function getLocationCustomFields(
+  locationId: string,
+  bearerToken: string,
+): Promise<GhlCustomFieldDefinition[]> {
+  const url = `https://services.leadconnectorhq.com/locations/${locationId}/customFields`;
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        Version: "2021-07-28",
+      },
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`GHL list custom fields responded ${response.status}: ${text}`);
+  }
+
+  const data = (await response.json()) as {
+    customFields?: Array<{ id: string; name?: string; fieldKey?: string; dataType?: string }>;
+  };
+
+  return (data.customFields ?? []).map((f) => ({
+    id: f.id,
+    name: f.name ?? "",
+    fieldKey: f.fieldKey ?? "",
+    dataType: f.dataType ?? "TEXT",
+  }));
+}
+
+// ─── GHL API: crear custom field en una location ────────────────────────────
+
+export async function createLocationCustomField(
+  locationId: string,
+  bearerToken: string,
+  field: { name: string; dataType?: string },
+): Promise<GhlCustomFieldDefinition> {
+  const url = `https://services.leadconnectorhq.com/locations/${locationId}/customFields`;
+  const body = {
+    name: field.name,
+    dataType: field.dataType ?? "TEXT",
+    model: "contact",
+  };
+
+  console.log(`[GHL createLocationCustomField] Creating field "${field.name}" (${body.dataType}) in location ${locationId}`);
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+      body: JSON.stringify(body),
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    if (response.status === 401) {
+      throwTokenInvalid(`GHL_TOKEN_INVALID: create custom field API 401`);
+    }
+    if (response.status === 403 && isLocationLevelDenied(text)) {
+      throwTokenInvalid(`GHL_TOKEN_INVALID: create custom field API 403 location-level denial`);
+    }
+    throw new Error(`GHL create custom field API responded ${response.status}: ${text}`);
+  }
+
+  const data = (await response.json()) as {
+    customField?: { id: string; name?: string; fieldKey?: string; dataType?: string };
+  };
+
+  const cf = data.customField;
+  if (!cf?.id) {
+    throw new Error("GHL create custom field: response missing customField.id");
+  }
+
+  console.log(`[GHL createLocationCustomField] Created field "${field.name}" → id=${cf.id} key=${cf.fieldKey}`);
+
+  return {
+    id: cf.id,
+    name: cf.name ?? field.name,
+    fieldKey: cf.fieldKey ?? "",
+    dataType: cf.dataType ?? body.dataType,
+  };
+}
+
+// ─── GHL API: ensure custom field exists (idempotent) ───────────────────────
+// Checks if a field with the given key exists; creates it if not.
+// Returns the field's key (fieldKey) for use in updateContactCustomFields.
+
+const _customFieldCache = new Map<string, Map<string, GhlCustomFieldDefinition>>();
+
+export async function ensureCustomField(
+  locationId: string,
+  bearerToken: string,
+  field: { key: string; name: string; dataType?: string },
+): Promise<string> {
+  const cacheKey = `${locationId}`;
+  let locationCache = _customFieldCache.get(cacheKey);
+
+  const cachedHit = locationCache?.get(field.key);
+  if (cachedHit) {
+    return cachedHit.fieldKey;
+  }
+
+  if (!locationCache) {
+    try {
+      const existing = await getLocationCustomFields(locationId, bearerToken);
+      locationCache = new Map<string, GhlCustomFieldDefinition>();
+      for (const f of existing) {
+        locationCache.set(f.fieldKey, f);
+      }
+      _customFieldCache.set(cacheKey, locationCache);
+    } catch (err) {
+      console.warn(`[GHL ensureCustomField] Failed to list fields for location ${locationId}:`, err);
+      return field.key;
+    }
+  }
+
+  const existingHit = locationCache.get(field.key);
+  if (existingHit) {
+    return existingHit.fieldKey;
+  }
+
+  const byName = [...locationCache.values()].find(
+    (f) => f.name.toLowerCase() === field.name.toLowerCase(),
+  );
+  if (byName) {
+    locationCache.set(field.key, byName);
+    return byName.fieldKey;
+  }
+
+  try {
+    const created = await createLocationCustomField(locationId, bearerToken, {
+      name: field.name,
+      dataType: field.dataType ?? "TEXT",
+    });
+    locationCache.set(created.fieldKey, created);
+    return created.fieldKey;
+  } catch (err) {
+    console.warn(`[GHL ensureCustomField] Failed to create field "${field.name}" — will attempt write anyway:`, err);
+    return field.key;
+  }
+}
+
 // ─── Helper: extraer mapa funnelStage → stageId de embudo_personalizado ──────
 // El Admin Panel configura embudo_personalizado.funnel_stage_map como un objeto
 // { "nombre_funnelStage": "stageId_ghl" } para cada cuenta.
