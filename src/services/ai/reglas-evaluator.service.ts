@@ -3,7 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
-import { getContactById } from "../ghl-api.service.js";
+import { getContactById, updateContactCustomFields } from "../ghl-api.service.js";
 import {
   resolveCustomFieldValue,
   type DynamicValueRange,
@@ -25,8 +25,9 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
 export interface AccionRegla {
-  tipo: "cambiar_estado" | "asignar_etiqueta" | "etapa_cambiada" | "incrementar_metrica" | "asignar_categoria";
+  tipo: "cambiar_estado" | "asignar_etiqueta" | "etapa_cambiada" | "incrementar_metrica" | "asignar_categoria" | "escribir_campo_ghl";
   valor?: string;
+  fieldId?: string;
   funnelStage?: string;
   metrica_id?: string;
   metrica_incremento?: number;
@@ -118,6 +119,7 @@ function normalizeRegla(raw: Record<string, unknown>): ReglaEtiquetaNormalized |
     acciones = [{
       tipo,
       valor: (raw.valor ?? raw.tag) as string | undefined,
+      ...(typeof raw.fieldId === "string" && { fieldId: raw.fieldId }),
       funnelStage: raw.funnelStage as string | undefined,
       metrica_id: raw.metrica_id as string | undefined,
       metrica_incremento: raw.metrica_incremento as number | undefined,
@@ -279,6 +281,24 @@ export async function evaluateReglas(
       }
       if (accion.tipo === "asignar_categoria" && accion.categoria_id && !matchedCategoria) {
         matchedCategoria = accion.categoria_id;
+      }
+    }
+  }
+
+  if (dynamicCtx?.contactId && dynamicCtx.bearerToken) {
+    const ghlWrites: Array<{ key: string; field_value: string }> = [];
+    for (const rule of matched) {
+      for (const accion of rule.acciones) {
+        if (accion.tipo === "escribir_campo_ghl" && accion.fieldId && accion.valor) {
+          ghlWrites.push({ key: accion.fieldId, field_value: accion.valor });
+        }
+      }
+    }
+    if (ghlWrites.length > 0) {
+      try {
+        await updateContactCustomFields(dynamicCtx.contactId, dynamicCtx.bearerToken, ghlWrites);
+      } catch (err) {
+        console.error("[ReglaEval] Error escribiendo campos GHL:", err);
       }
     }
   }
