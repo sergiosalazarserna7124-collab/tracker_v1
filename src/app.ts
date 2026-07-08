@@ -24,6 +24,8 @@ import { chatWebhookRoute } from "./routes/webhooks/chat.route.js";
 import { vozWebhookRoute } from "./routes/webhooks/voz.route.js";
 import { ghlCallbackRoute } from "./routes/oauth/ghl-callback.route.js";
 import { dataChatsRoute } from "./routes/data/chats.route.js";
+import { dataLlamadasRoute } from "./routes/data/llamadas.route.js";
+import { dataVideollamadasRoute } from "./routes/data/videollamadas.route.js";
 import { asesoresMergeSuggestionsRoute } from "./routes/data/merge-suggestions.route.js";
 import { criteriosCalificacionRoute } from "./routes/data/criterios-calificacion.route.js";
 import { canalesActivosRoute } from "./routes/data/canales-activos.route.js";
@@ -67,6 +69,8 @@ export async function buildApp() {
   await app.register(vozWebhookRoute, { prefix: "/webhooks" });
   await app.register(ghlCallbackRoute);
   await app.register(dataChatsRoute, { prefix: "/api/data" });
+  await app.register(dataLlamadasRoute, { prefix: "/api/data" });
+  await app.register(dataVideollamadasRoute, { prefix: "/api/data" });
   await app.register(asesoresMergeSuggestionsRoute, { prefix: "/api/data/asesores" });
   await app.register(criteriosCalificacionRoute, { prefix: "/api" });
   await app.register(canalesActivosRoute, { prefix: "/api" });
