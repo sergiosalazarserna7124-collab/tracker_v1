@@ -26,8 +26,6 @@ h1{font-size:1.5rem;color:#ef4444;margin-bottom:.5rem;}p{color:#888;font-size:.9
 
 interface OAuthCallbackQuery {
   code?: string;
-  locationId?: string;
-  location_id?: string;
 }
 
 export async function ghlCallbackRoute(app: FastifyInstance): Promise<void> {
@@ -37,23 +35,22 @@ export async function ghlCallbackRoute(app: FastifyInstance): Promise<void> {
       request: FastifyRequest<{ Querystring: OAuthCallbackQuery }>,
       reply: FastifyReply,
     ) => {
-      const { code, locationId, location_id } = request.query;
-      const resolvedLocationId = locationId ?? location_id ?? "";
+      const { code } = request.query;
 
-      if (!code || !resolvedLocationId) {
-        const missing = !code ? "code" : "locationId";
-        request.log.warn(`[OAuthCallback] Parámetro faltante: ${missing}`);
+      // GHL solo envía `code` en el redirect. El locationId se obtiene del token exchange.
+      if (!code) {
+        request.log.warn(`[OAuthCallback] Parámetro faltante: code`);
         return reply
           .code(400)
           .header("Content-Type", "text/html; charset=utf-8")
-          .send(buildHtmlError(`Parámetro requerido faltante: ${missing}`));
+          .send(buildHtmlError(`Parámetro requerido faltante: code`));
       }
 
       try {
-        await exchangeCodeForTokens(code, resolvedLocationId, env.GHL_OAUTH_REDIRECT_URI);
+        const tokenData = await exchangeCodeForTokens(code, env.GHL_OAUTH_REDIRECT_URI);
 
         request.log.info(
-          `[OAuthCallback] ✅ Tokens guardados — locationId="${resolvedLocationId}"`,
+          `[OAuthCallback] ✅ Tokens guardados — locationId="${tokenData.locationId ?? "?"}"`,
         );
 
         return reply

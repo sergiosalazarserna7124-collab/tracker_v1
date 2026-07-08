@@ -29,10 +29,14 @@ interface GhlTokenResponse {
  * Intercambia el code de OAuth por access_token + refresh_token.
  * Guarda/actualiza en ghl_oauth_tokens. Si encuentra la cuenta por locationId,
  * linkea id_cuenta automáticamente.
+ *
+ * IMPORTANTE: GHL NO envía locationId en el redirect del OAuth — el redirect solo
+ * trae `code`. El locationId (y companyId) vienen DENTRO de la respuesta del token
+ * exchange. Por eso el locationId se resuelve aquí a partir de `tokenData`, no como
+ * parámetro de entrada.
  */
 export async function exchangeCodeForTokens(
   code: string,
-  locationId: string,
   redirectUri: string,
 ): Promise<GhlTokenResponse> {
   const body = new URLSearchParams({
@@ -55,6 +59,15 @@ export async function exchangeCodeForTokens(
   }
 
   const tokenData = (await res.json()) as GhlTokenResponse;
+
+  // El locationId viene en la respuesta del token, NO en el redirect del OAuth.
+  const locationId = tokenData.locationId ?? null;
+  if (!locationId) {
+    throw new Error(
+      `La respuesta de GHL no incluyó locationId (userType=${tokenData.userType ?? "desconocido"}). ` +
+        `La app debe instalarse a nivel Sub-cuenta (Location), no Agencia.`,
+    );
+  }
 
   // Calcular expires_at
   const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
