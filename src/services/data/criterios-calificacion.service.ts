@@ -13,8 +13,8 @@ import {
 } from "./criterios-calificacion.utils.js";
 
 // Re-export types and pure utils so callers only need one import
-export { parseCriteriosCalificacion, esCalificado } from "./criterios-calificacion.utils.js";
-export type { CriteriosCalificacion } from "./criterios-calificacion.utils.js";
+export { parseCriteriosCalificacion, esCalificado, resolverCriterios } from "./criterios-calificacion.utils.js";
+export type { CriteriosCalificacion, CriteriosCanal, Canal } from "./criterios-calificacion.utils.js";
 
 // ─── Operaciones de BD ────────────────────────────────────────────────────────
 

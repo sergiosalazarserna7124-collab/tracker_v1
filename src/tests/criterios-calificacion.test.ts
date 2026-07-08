@@ -2,6 +2,7 @@
  * Tests unitarios para criterios de calificación configurables.
  *
  * AUT-413: criterios de calificación configurables por cuenta.
+ * AUT-1327: criterios por canal (chats, llamadas, videollamadas).
  * Ejecutar con: node --import tsx/esm --test src/tests/criterios-calificacion.test.ts
  */
 
@@ -10,6 +11,7 @@ import assert from "node:assert/strict";
 import {
   parseCriteriosCalificacion,
   esCalificado,
+  resolverCriterios,
 } from "../services/data/criterios-calificacion.utils.js";
 
 // ─── parseCriteriosCalificacion ───────────────────────────────────────────────
@@ -72,6 +74,119 @@ describe("parseCriteriosCalificacion — validación", () => {
   });
 });
 
+// ─── parseCriteriosCalificacion — canales ─────────────────────────────────────
+
+describe("parseCriteriosCalificacion — canales", () => {
+  test("acepta estructura con canales válidos", () => {
+    const result = parseCriteriosCalificacion({
+      categorias_calificadas: ["presupuesto"],
+      canales: {
+        chats: { categorias_calificadas: ["urgencia", "cliente_ganado"] },
+        llamadas: { categorias_calificadas: ["presupuesto"], umbral_minimo: 2 },
+      },
+    });
+    assert.deepEqual(result.canales?.chats?.categorias_calificadas, ["urgencia", "cliente_ganado"]);
+    assert.equal(result.canales?.chats?.umbral_minimo, 1);
+    assert.deepEqual(result.canales?.llamadas?.categorias_calificadas, ["presupuesto"]);
+    assert.equal(result.canales?.llamadas?.umbral_minimo, 2);
+    assert.equal(result.canales?.videollamadas, undefined);
+  });
+
+  test("estructura legacy sin canales sigue funcionando", () => {
+    const result = parseCriteriosCalificacion({
+      categorias_calificadas: ["presupuesto"],
+    });
+    assert.equal(result.canales, undefined);
+  });
+
+  test("canales vacío no se incluye en resultado", () => {
+    const result = parseCriteriosCalificacion({
+      categorias_calificadas: ["presupuesto"],
+      canales: {},
+    });
+    assert.equal(result.canales, undefined);
+  });
+
+  test("lanza error si canales no es objeto", () => {
+    assert.throws(
+      () =>
+        parseCriteriosCalificacion({
+          categorias_calificadas: ["presupuesto"],
+          canales: "chats",
+        }),
+      /canales debe ser un objeto/,
+    );
+  });
+
+  test("lanza error si canales tiene clave desconocida", () => {
+    assert.throws(
+      () =>
+        parseCriteriosCalificacion({
+          categorias_calificadas: ["presupuesto"],
+          canales: { emails: { categorias_calificadas: ["test"] } },
+        }),
+      /claves no válidas: emails/,
+    );
+  });
+
+  test("lanza error si canal tiene categorias_calificadas inválidas", () => {
+    assert.throws(
+      () =>
+        parseCriteriosCalificacion({
+          categorias_calificadas: ["presupuesto"],
+          canales: { chats: { categorias_calificadas: "test" } },
+        }),
+      /canales\.chats\.categorias_calificadas debe ser un array/,
+    );
+  });
+
+  test("normaliza strings en canales", () => {
+    const result = parseCriteriosCalificacion({
+      categorias_calificadas: ["presupuesto"],
+      canales: {
+        videollamadas: { categorias_calificadas: ["  urgencia  ", " test "] },
+      },
+    });
+    assert.deepEqual(result.canales?.videollamadas?.categorias_calificadas, ["urgencia", "test"]);
+  });
+});
+
+// ─── resolverCriterios ────────────────────────────────────────────────────────
+
+describe("resolverCriterios", () => {
+  const criteriosConCanales = parseCriteriosCalificacion({
+    categorias_calificadas: ["presupuesto", "urgencia"],
+    canales: {
+      chats: { categorias_calificadas: ["cliente_ganado"] },
+      llamadas: { categorias_calificadas: ["no_interesado"], umbral_minimo: 3 },
+    },
+  });
+
+  test("sin canal → devuelve global", () => {
+    const ef = resolverCriterios(criteriosConCanales);
+    assert.deepEqual(ef.categorias_calificadas, ["presupuesto", "urgencia"]);
+    assert.equal(ef.umbral_minimo, 1);
+  });
+
+  test("canal con criterios propios → devuelve los del canal", () => {
+    const ef = resolverCriterios(criteriosConCanales, "chats");
+    assert.deepEqual(ef.categorias_calificadas, ["cliente_ganado"]);
+  });
+
+  test("canal sin criterios propios → fallback a global", () => {
+    const ef = resolverCriterios(criteriosConCanales, "videollamadas");
+    assert.deepEqual(ef.categorias_calificadas, ["presupuesto", "urgencia"]);
+  });
+
+  test("criterios sin canales + canal especificado → global", () => {
+    const sinCanales = parseCriteriosCalificacion({
+      categorias_calificadas: ["presupuesto"],
+    });
+    const ef = resolverCriterios(sinCanales, "chats");
+    assert.deepEqual(ef.categorias_calificadas, ["presupuesto"]);
+  });
+});
+
 // ─── esCalificado ─────────────────────────────────────────────────────────────
 
 describe("esCalificado — lógica de calificación", () => {
@@ -100,5 +215,35 @@ describe("esCalificado — lógica de calificación", () => {
 
   test("ia_categoria null con criterios definidos → false", () => {
     assert.equal(esCalificado(null, criterios), false);
+  });
+});
+
+// ─── esCalificado — con canal ─────────────────────────────────────────────────
+
+describe("esCalificado — con canal", () => {
+  const criterios = parseCriteriosCalificacion({
+    categorias_calificadas: ["presupuesto", "urgencia"],
+    canales: {
+      chats: { categorias_calificadas: ["cliente_ganado", "presupuesto"] },
+    },
+  });
+
+  test("canal con criterios propios usa esos criterios", () => {
+    assert.equal(esCalificado("cliente_ganado", criterios, "chats"), true);
+    assert.equal(esCalificado("urgencia", criterios, "chats"), false);
+  });
+
+  test("canal sin criterios propios usa global", () => {
+    assert.equal(esCalificado("urgencia", criterios, "llamadas"), true);
+    assert.equal(esCalificado("cliente_ganado", criterios, "llamadas"), false);
+  });
+
+  test("sin canal usa global (backward compat)", () => {
+    assert.equal(esCalificado("urgencia", criterios), true);
+    assert.equal(esCalificado("cliente_ganado", criterios), false);
+  });
+
+  test("criterios null + canal → siempre true", () => {
+    assert.equal(esCalificado("whatever", null, "chats"), true);
   });
 });
