@@ -43,11 +43,13 @@ export async function cronGeminiBackfillRoute(app: FastifyInstance) {
 
       const client = await pgPool.connect();
       try {
+        await client.query("BEGIN");
         const lockResult = await client.query<{ locked: boolean }>(
-          "SELECT pg_try_advisory_lock($1) AS locked",
+          "SELECT pg_try_advisory_xact_lock($1) AS locked",
           [BACKFILL_LOCK_ID],
         );
         if (!lockResult.rows[0]?.locked) {
+          await client.query("ROLLBACK");
           return reply.status(409).send({
             success: false,
             error: "backfill Gemini ya en curso (lock global)",
@@ -57,13 +59,13 @@ export async function cronGeminiBackfillRoute(app: FastifyInstance) {
         try {
           const { tabla = "all", account_ids, days_back = 60 } = request.body;
           const results = await runGeminiBackfill(tabla, account_ids, days_back);
+          await client.query("COMMIT");
           return reply.send({ success: true, results });
         } catch (err) {
+          await client.query("ROLLBACK").catch(() => {});
           const message = err instanceof Error ? err.message : "Error interno";
           console.error("[gemini-backfill] Error:", err);
           return reply.status(500).send({ success: false, error: message });
-        } finally {
-          await client.query("SELECT pg_advisory_unlock($1)", [BACKFILL_LOCK_ID]);
         }
       } finally {
         client.release();

@@ -2,7 +2,8 @@ import { db as pgPool } from "../../config/database.js";
 import { enrichWithGemini } from "../ai/gemini-enrichment.service.js";
 import { env } from "../../config/env.js";
 
-const MAX_RUNTIME_MS = 240_000;
+// 30s margin before Cloud Run's 240s request timeout
+const MAX_RUNTIME_MS = 210_000;
 const DELAY_MS = 300;
 const BATCH_SIZE = 50;
 
@@ -16,6 +17,7 @@ export interface GeminiBackfillResult {
   total_candidatos: number;
   procesados: number;
   enriquecidos: number;
+  skipped: number;
   errores: number;
   circuit_breaker: boolean;
 }
@@ -51,6 +53,7 @@ async function backfillLlamadas(
 
   let procesados = 0;
   let enriquecidos = 0;
+  let skipped = 0;
   let errores = 0;
 
   for (const row of candidates) {
@@ -61,6 +64,7 @@ async function backfillLlamadas(
         total_candidatos: candidates.length,
         procesados,
         enriquecidos,
+        skipped,
         errores,
         circuit_breaker: true,
       };
@@ -75,6 +79,8 @@ async function backfillLlamadas(
           [JSON.stringify(result), row.id],
         );
         enriquecidos++;
+      } else {
+        skipped++;
       }
     } catch (err) {
       errores++;
@@ -89,6 +95,7 @@ async function backfillLlamadas(
     total_candidatos: candidates.length,
     procesados,
     enriquecidos,
+    skipped,
     errores,
     circuit_breaker: false,
   };
@@ -128,6 +135,7 @@ async function backfillAgendas(
 
   let procesados = 0;
   let enriquecidos = 0;
+  let skipped = 0;
   let errores = 0;
 
   for (const row of candidates) {
@@ -138,6 +146,7 @@ async function backfillAgendas(
         total_candidatos: candidates.length,
         procesados,
         enriquecidos,
+        skipped,
         errores,
         circuit_breaker: true,
       };
@@ -153,6 +162,8 @@ async function backfillAgendas(
           [JSON.stringify(result), row.id_registro_agenda],
         );
         enriquecidos++;
+      } else {
+        skipped++;
       }
     } catch (err) {
       errores++;
@@ -167,6 +178,7 @@ async function backfillAgendas(
     total_candidatos: candidates.length,
     procesados,
     enriquecidos,
+    skipped,
     errores,
     circuit_breaker: false,
   };
@@ -203,6 +215,7 @@ async function backfillChats(
 
   let procesados = 0;
   let enriquecidos = 0;
+  let skipped = 0;
   let errores = 0;
 
   for (const row of candidates) {
@@ -213,6 +226,7 @@ async function backfillChats(
         total_candidatos: candidates.length,
         procesados,
         enriquecidos,
+        skipped,
         errores,
         circuit_breaker: true,
       };
@@ -224,7 +238,10 @@ async function backfillChats(
       .map((m) => `${m.role === "lead" ? "Lead" : "Asesor"}: ${m.message}`)
       .join("\n");
 
-    if (chatText.length < 50) continue;
+    if (chatText.length < 50) {
+      skipped++;
+      continue;
+    }
 
     try {
       const result = await enrichWithGemini(chatText, "chat", row.id_cuenta);
@@ -234,6 +251,8 @@ async function backfillChats(
           [JSON.stringify(result), row.id_evento],
         );
         enriquecidos++;
+      } else {
+        skipped++;
       }
     } catch (err) {
       errores++;
@@ -248,6 +267,7 @@ async function backfillChats(
     total_candidatos: candidates.length,
     procesados,
     enriquecidos,
+    skipped,
     errores,
     circuit_breaker: false,
   };
@@ -289,13 +309,14 @@ export async function runGeminiBackfill(
     (acc, r) => ({
       procesados: acc.procesados + r.procesados,
       enriquecidos: acc.enriquecidos + r.enriquecidos,
+      skipped: acc.skipped + r.skipped,
       errores: acc.errores + r.errores,
     }),
-    { procesados: 0, enriquecidos: 0, errores: 0 },
+    { procesados: 0, enriquecidos: 0, skipped: 0, errores: 0 },
   );
 
   console.info(
-    `[gemini-backfill] Finalizado: procesados=${totals.procesados} enriquecidos=${totals.enriquecidos} errores=${totals.errores}`,
+    `[gemini-backfill] Finalizado: procesados=${totals.procesados} enriquecidos=${totals.enriquecidos} skipped=${totals.skipped} errores=${totals.errores}`,
   );
 
   return results;
