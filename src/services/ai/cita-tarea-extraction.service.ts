@@ -16,10 +16,9 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
   return defaultModel;
 }
 
-// ─── Feature gate por cuenta ─────────────────────────────────────────────────
-
-/** Cuentas con extracción de cita/tarea habilitada (feature-gated). */
-export const CITA_TAREA_ACCOUNTS = new Set<number>([36]);
+// ─── Feature gate (GLOBAL — habilitado para todas las cuentas) ──────────────
+// Anteriormente gateado a cuentas específicas (Set<number>). Ahora global.
+// Exportado por retrocompatibilidad con los imports existentes — siempre true.
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
 

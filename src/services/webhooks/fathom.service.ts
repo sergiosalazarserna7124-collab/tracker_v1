@@ -12,10 +12,13 @@ import {
   removeContactTag,
   searchOpportunityByContact,
   updateOpportunityStage,
+  createContactTask,
+  updateContactCustomFields,
   parseFunnelStageMap,
   GHL_TAGS,
 } from "../ghl-api.service.js";
 import { analyzeCall } from "../ai/call-analysis.service.js";
+import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
 import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
@@ -397,6 +400,27 @@ export async function processFathomCall(
   const reglasResult = aiResult?.reglasResult ?? { matched_tags: [], matched_rules: [] };
   const tagsInternos = reglasResult.matched_tags;
 
+  // ── Fase 4b: Extracción cita/tarea desde videollamada ──────────────────────
+  let citaTareaResult: CitaTareaExtraction | null = null;
+  if (formattedTranscript && formattedTranscript.length >= 100) {
+    try {
+      citaTareaResult = await extractCitaTarea(
+        formattedTranscript,
+        meetingDate ?? new Date(),
+        "America/Mexico_City",
+        account.openai_api_key,
+        idCuenta,
+      );
+      if (citaTareaResult) {
+        console.info(
+          `[Fathom] CitaTarea: cita=${citaTareaResult.cita.detectada} tarea=${citaTareaResult.tarea.detectada}`,
+        );
+      }
+    } catch (err) {
+      console.warn(`[Fathom] CitaTarea extraction error (fail-open):`, err instanceof Error ? err.message : err);
+    }
+  }
+
   // Si alguna regla tiene funnelStage, la regla explícita del cliente sobreescribe la clasificación IA
   const funnelStageFromReglas = collectFunnelStages(reglasResult.matched_rules);
 
@@ -463,6 +487,74 @@ export async function processFathomCall(
         }
       } catch (err) {
         console.error(`[Fathom] Error actualizando pipeline GHL para contact=${contactId}:`, err);
+      }
+    }
+  }
+
+  // 5a-quinquies. Cita/tarea: custom fields + tarea GHL real + tag
+  if (citaTareaResult && contactId && account.token_ghl) {
+    const cfToWrite: Array<{ key: string; field_value: string }> = [];
+
+    if (citaTareaResult.cita.detectada && citaTareaResult.cita.fecha_hora) {
+      cfToWrite.push({ key: "fecha_y_hora_de_la_cita", field_value: citaTareaResult.cita.fecha_hora });
+    }
+    if (citaTareaResult.tarea.detectada) {
+      if (citaTareaResult.tarea.titulo) {
+        cfToWrite.push({ key: "titulo_de_la_tarea", field_value: citaTareaResult.tarea.titulo });
+      }
+      if (citaTareaResult.tarea.descripcion) {
+        cfToWrite.push({ key: "descripcion_de_la_tarea", field_value: citaTareaResult.tarea.descripcion });
+      }
+      if (citaTareaResult.tarea.fecha_vencimiento) {
+        cfToWrite.push({ key: "fecha_de_vencimiento_de_la_tarea", field_value: citaTareaResult.tarea.fecha_vencimiento });
+      }
+    }
+
+    if (cfToWrite.length > 0) {
+      try {
+        await updateContactCustomFields(contactId, account.token_ghl, cfToWrite);
+        console.info(`[Fathom] CitaTarea: wrote ${cfToWrite.length} custom fields to GHL`);
+      } catch (err) {
+        console.error(`[Fathom] CitaTarea: error writing custom fields (best-effort):`, err);
+      }
+    }
+
+    if (citaTareaResult.tarea.detectada) {
+      try {
+        await safeAddContactTag(contactId, account.token_ghl, "tarea_registradaai", locationId);
+        console.info(`[Fathom] CitaTarea: applied tag tarea_registradaai`);
+      } catch (err) {
+        console.error(`[Fathom] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+      }
+
+      try {
+        const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
+        const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
+        let dueDate = citaTareaResult.tarea.fecha_vencimiento;
+        if (!dueDate) {
+          const fallback = new Date((meetingDate ?? new Date()).getTime() + 7 * 24 * 60 * 60 * 1000);
+          dueDate = fallback.toISOString();
+        }
+
+        let assignedTo: string | undefined;
+        try {
+          const apptInfo = await getContactAppointmentInfo(contactId, account.token_ghl, new Date());
+          if (apptInfo?.assignedUserId) {
+            assignedTo = apptInfo.assignedUserId;
+          }
+        } catch { /* best-effort */ }
+
+        const taskResult = await createContactTask(contactId, account.token_ghl, {
+          title: tareaTitle,
+          body: tareaBody,
+          dueDate,
+          assignedTo,
+        });
+        if (taskResult) {
+          console.info(`[Fathom] CitaTarea: created GHL task id=${taskResult.id}`);
+        }
+      } catch (err) {
+        console.error(`[Fathom] CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
       }
     }
   }

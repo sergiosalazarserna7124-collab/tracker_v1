@@ -8,6 +8,9 @@ import {
   createLocationTag,
   addContactNote,
   updateContactCustomFields,
+  createContactTask,
+  contactHasTag,
+  getContactAppointmentInfo,
   GHL_TAGS,
   type CuentaFullRow,
 } from "../ghl-api.service.js";
@@ -16,7 +19,7 @@ import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import { classifyCall } from "../ai/call-classification.service.js";
-import { extractCitaTarea, CITA_TAREA_ACCOUNTS, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
+import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { VozCallCompletedPayload } from "../../schemas/webhooks/voz.schema.js";
 
@@ -351,7 +354,7 @@ async function processVozInternal(
   // ── 4c. Extracción de cita/tarea (feature-gated por cuenta) ────────────────
   let citaTareaResult: CitaTareaExtraction | null = null;
 
-  if (CITA_TAREA_ACCOUNTS.has(idCuenta) && transcript.trim().length >= 100) {
+  if (transcript.trim().length >= 100) {
     try {
       citaTareaResult = await extractCitaTarea(
         transcript,
@@ -617,13 +620,48 @@ async function processVozInternal(
         }
 
         if (citaTareaResult.tarea.detectada) {
-          try {
-            await createLocationTag(locationId, tokenGhl, "tarea_registradaai");
-            await safeAddContactTags(ghlContactId, tokenGhl, ["tarea_registradaai"], locationId);
-            tagsAplicados.push("tarea_registradaai");
-            console.info(`${label} CitaTarea: applied tag tarea_registradaai`);
-          } catch (err) {
-            console.error(`${label} CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+          const alreadyTagged = await contactHasTag(ghlContactId, tokenGhl, "tarea_registradaai");
+          if (alreadyTagged) {
+            console.info(`${label} CitaTarea: contacto ya tiene tag tarea_registradaai, skip task creation (idempotencia)`);
+          } else {
+            try {
+              await createLocationTag(locationId, tokenGhl, "tarea_registradaai");
+              await safeAddContactTags(ghlContactId, tokenGhl, ["tarea_registradaai"], locationId);
+              tagsAplicados.push("tarea_registradaai");
+              console.info(`${label} CitaTarea: applied tag tarea_registradaai`);
+            } catch (err) {
+              console.error(`${label} CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+            }
+
+            try {
+              const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
+              const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
+              let dueDate = citaTareaResult.tarea.fecha_vencimiento;
+              if (!dueDate) {
+                const fallback = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+                dueDate = fallback.toISOString();
+              }
+
+              let assignedTo: string | undefined;
+              try {
+                const apptInfo = await getContactAppointmentInfo(ghlContactId, tokenGhl, now);
+                if (apptInfo?.assignedUserId) {
+                  assignedTo = apptInfo.assignedUserId;
+                }
+              } catch { /* best-effort */ }
+
+              const taskResult = await createContactTask(ghlContactId, tokenGhl, {
+                title: tareaTitle,
+                body: tareaBody,
+                dueDate,
+                assignedTo,
+              });
+              if (taskResult) {
+                console.info(`${label} CitaTarea: created GHL task id=${taskResult.id}`);
+              }
+            } catch (err) {
+              console.error(`${label} CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
+            }
           }
         }
       }

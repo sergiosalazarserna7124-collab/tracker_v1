@@ -704,7 +704,7 @@ export interface GhlCustomField {
 export async function getContactById(
   contactId: string,
   bearerToken: string,
-): Promise<{ assignedTo: string | null; customFields?: GhlCustomField[] } | null> {
+): Promise<{ assignedTo: string | null; tags: string[]; customFields?: GhlCustomField[] } | null> {
   try {
     const token = bearerToken.startsWith("Bearer ") ? bearerToken : `Bearer ${bearerToken}`;
     const res = await fetchWithTimeout(
@@ -723,6 +723,7 @@ export async function getContactById(
     const data = (await res.json()) as {
       contact?: {
         assignedTo?: string;
+        tags?: string[];
         customFields?: Array<{ id: string; key?: string; value?: string; field_value?: string }>;
       };
     };
@@ -732,10 +733,23 @@ export async function getContactById(
       key: f.key ?? f.id,
       value: f.value ?? f.field_value ?? "",
     }));
-    return { assignedTo: data.contact?.assignedTo ?? null, customFields };
+    return {
+      assignedTo: data.contact?.assignedTo ?? null,
+      tags: data.contact?.tags ?? [],
+      customFields,
+    };
   } catch {
     return null;
   }
+}
+
+export async function contactHasTag(
+  contactId: string,
+  bearerToken: string,
+  tag: string,
+): Promise<boolean> {
+  const contact = await getContactById(contactId, bearerToken);
+  return contact?.tags.includes(tag) ?? false;
 }
 
 export async function getContactAppointmentDate(
@@ -1106,6 +1120,67 @@ export async function ensureCustomField(
   } catch (err) {
     console.warn(`[GHL ensureCustomField] Failed to create field "${field.name}" — will attempt write anyway:`, err);
     return field.key;
+  }
+}
+
+// ─── GHL API: crear tarea en un contacto ───────────────────────────────────
+
+export interface CreateContactTaskPayload {
+  title: string;
+  body?: string;
+  dueDate: string;
+  completed?: boolean;
+  assignedTo?: string;
+}
+
+export async function createContactTask(
+  contactId: string,
+  bearerToken: string,
+  task: CreateContactTaskPayload,
+): Promise<{ id: string } | null> {
+  const payload: Record<string, unknown> = {
+    title: task.title,
+    dueDate: task.dueDate,
+    completed: task.completed ?? false,
+  };
+  if (task.body) payload.body = task.body;
+  if (task.assignedTo) payload.assignedTo = task.assignedTo;
+
+  try {
+    const response = await fetchWithTimeout(
+      `https://services.leadconnectorhq.com/contacts/${contactId}/tasks`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: buildBearerAuth(bearerToken),
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Version: "2021-07-28",
+        },
+        body: JSON.stringify(payload),
+      },
+      GHL_TIMEOUT_MS,
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      if (response.status === 401) {
+        throwTokenInvalid(`GHL_TOKEN_INVALID: create task API 401`);
+      }
+      if (response.status === 403 && isLocationLevelDenied(text)) {
+        throwTokenInvalid(`GHL_TOKEN_INVALID: create task API 403 location-level denial`);
+      }
+      console.error(`[GHL createContactTask] ${response.status}: ${text}`);
+      return null;
+    }
+
+    const data = (await response.json()) as { task?: { id: string } };
+    return data.task?.id ? { id: data.task.id } : null;
+  } catch (err) {
+    const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+    if (isTokenInvalid) throw err;
+    console.error(`[GHL createContactTask] Error (best-effort):`, err instanceof Error ? err.message : err);
+    return null;
   }
 }
 

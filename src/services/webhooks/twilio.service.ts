@@ -33,8 +33,8 @@ import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.servi
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingNote, savePendingTag } from "../ghl-token-guard.service.js";
 import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service.js";
-import { extractCitaTarea, CITA_TAREA_ACCOUNTS, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
-import { updateContactCustomFields, createLocationTag } from "../ghl-api.service.js";
+import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
+import { updateContactCustomFields, createLocationTag, createContactTask, contactHasTag, getContactAppointmentInfo } from "../ghl-api.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
@@ -1019,7 +1019,7 @@ async function effectivePath(
 
   // ── Extracción de cita/tarea (feature-gated por cuenta) ────────────────────
   let citaTareaResult: CitaTareaExtraction | null = null;
-  if (idCuenta && CITA_TAREA_ACCOUNTS.has(idCuenta) && transcript.trim().length >= 100) {
+  if (idCuenta && transcript.trim().length >= 100) {
     try {
       citaTareaResult = await extractCitaTarea(
         transcript,
@@ -1388,12 +1388,47 @@ async function effectivePath(
     }
 
     if (citaTareaResult.tarea.detectada && fields.locationId) {
-      try {
-        await createLocationTag(fields.locationId, tokenGhl, "tarea_registradaai");
-        await safeAddContactTags(contactId, tokenGhl, ["tarea_registradaai"], fields.locationId);
-        console.info(`[Effective] CitaTarea: applied tag tarea_registradaai`);
-      } catch (err) {
-        console.error(`[Effective] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+      const alreadyTagged = await contactHasTag(contactId, tokenGhl, "tarea_registradaai");
+      if (alreadyTagged) {
+        console.info(`[Effective] CitaTarea: contacto ya tiene tag tarea_registradaai, skip task creation (idempotencia)`);
+      } else {
+        try {
+          await createLocationTag(fields.locationId, tokenGhl, "tarea_registradaai");
+          await safeAddContactTags(contactId, tokenGhl, ["tarea_registradaai"], fields.locationId);
+          console.info(`[Effective] CitaTarea: applied tag tarea_registradaai`);
+        } catch (err) {
+          console.error(`[Effective] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+        }
+
+        try {
+          const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
+          const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
+          let dueDate = citaTareaResult.tarea.fecha_vencimiento;
+          if (!dueDate) {
+            const fallback = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+            dueDate = fallback.toISOString();
+          }
+
+          let assignedTo: string | undefined;
+          try {
+            const apptInfo = await getContactAppointmentInfo(contactId, tokenGhl, now);
+            if (apptInfo?.assignedUserId) {
+              assignedTo = apptInfo.assignedUserId;
+            }
+          } catch { /* best-effort */ }
+
+          const taskResult = await createContactTask(contactId, tokenGhl, {
+            title: tareaTitle,
+            body: tareaBody,
+            dueDate,
+            assignedTo,
+          });
+          if (taskResult) {
+            console.info(`[Effective] CitaTarea: created GHL task id=${taskResult.id}`);
+          }
+        } catch (err) {
+          console.error(`[Effective] CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
+        }
       }
     }
   }
