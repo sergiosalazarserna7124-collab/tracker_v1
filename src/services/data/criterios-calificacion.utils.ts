@@ -141,17 +141,22 @@ export function resolverCriterios(
 /**
  * Determina si un chat/llamada/videollamada es calificado según los criterios.
  *
- * - criterios = null → es_calificado: true siempre (backward compat)
- * - criterios definido + canal → usa criterios del canal si existen, sino global
- * - criterios definido sin canal → usa criterios globales
+ * Aplica umbral_minimo: el lead debe cumplir >= umbral_minimo categorías
+ * calificadas. Con umbral_minimo=1 (default) basta con que una categoría
+ * coincida (mismo comportamiento anterior). Acepta string o string[] para
+ * soportar leads con múltiples categorías.
  */
 export function esCalificado(
-  iaCategoria: string | null,
+  iaCategoria: string | string[] | null,
   criterios: CriteriosCalificacion | null,
   canal?: Canal,
 ): boolean {
   if (criterios === null) return true;
   if (iaCategoria === null) return false;
   const efectivos = resolverCriterios(criterios, canal);
-  return efectivos.categorias_calificadas.includes(iaCategoria);
+  const categorias = Array.isArray(iaCategoria) ? iaCategoria : [iaCategoria];
+  const coincidencias = categorias.filter((c) =>
+    efectivos.categorias_calificadas.includes(c),
+  ).length;
+  return coincidencias >= efectivos.umbral_minimo;
 }
