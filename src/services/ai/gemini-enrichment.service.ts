@@ -2,7 +2,9 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "../../config/env.js";
 import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+// gemini-2.0-flash fue retirado por Google (generateContent → 404 "no longer available").
+// gemini-2.5-flash es el modelo flash estable vigente y verificado con la key de prod.
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 export interface GeminiEnrichment {
   tono_lead: "positivo" | "neutro" | "negativo" | "hostil";
