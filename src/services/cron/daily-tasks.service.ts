@@ -386,6 +386,7 @@ interface CuentaAnalisisRow {
   embudo_personalizado: unknown;
   reglas_etiquetas: unknown;
   prompt_ventas: string | null;
+  canales_activos: string[] | null;
 }
 
 interface AnalyzeChatsResult {
@@ -424,7 +425,8 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
 
   const cuentasQuery = `
     SELECT c.id_cuenta, c.token_ghl, c.openai_api_key,
-           c.embudo_personalizado, c.reglas_etiquetas, c.prompt_ventas
+           c.embudo_personalizado, c.reglas_etiquetas, c.prompt_ventas,
+           c.canales_activos
     FROM cuentas c
     WHERE c.embudo_personalizado IS NOT NULL
       AND jsonb_array_length(c.embudo_personalizado::jsonb) > 0
@@ -534,6 +536,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
           prompt_empresa: cuenta.prompt_ventas ?? undefined,
           openai_api_key: cuenta.openai_api_key ?? undefined,
           id_cuenta: cuenta.id_cuenta,
+          canales_activos: Array.isArray(cuenta.canales_activos) ? cuenta.canales_activos : null,
         });
 
         // ── 3b. Actualizar chats_logs ───────────────────────────────────────

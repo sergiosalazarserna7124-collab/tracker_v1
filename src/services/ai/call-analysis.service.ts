@@ -39,9 +39,16 @@ export interface CallAnalysisResult {
 
 // ─── Helper: inyectar contexto de empresa del tenant ─────────────────────────
 
-function withBusinessContext(basePrompt: string, promptVentas: string | null): string {
-  if (!promptVentas) return basePrompt;
-  return `CONTEXTO DE LA EMPRESA:\n${promptVentas}\n\nUsa este contexto para entender el negocio, los productos/servicios que se venden y las condiciones del embudo de ventas.\n\n${basePrompt}`;
+function withBusinessContext(basePrompt: string, promptVentas: string | null, canalesActivos?: string[] | null): string {
+  const parts: string[] = [];
+  if (promptVentas) {
+    parts.push(`CONTEXTO DE LA EMPRESA:\n${promptVentas}\n\nUsa este contexto para entender el negocio, los productos/servicios que se venden y las condiciones del embudo de ventas.`);
+  }
+  if (canalesActivos && canalesActivos.length > 0) {
+    parts.push(`CANALES ACTIVOS DEL CLIENTE:\nEste cliente tiene activos los siguientes canales de comunicación: ${canalesActivos.join(", ")}.\nLimita tus referencias y sugerencias a estos canales únicamente. No menciones canales que el cliente no utiliza.`);
+  }
+  if (parts.length === 0) return basePrompt;
+  return parts.join("\n\n") + "\n\n" + basePrompt;
 }
 
 // ─── Extracción segura de IDs desde embudo_personalizado ─────────────────────
@@ -190,6 +197,7 @@ Sé directo, preciso y sin relleno. Enfócate en información accionable para el
 function buildAnalysisSystemPrompt(
   promptVentas: string | null,
   promptVideollamadas: string | null,
+  canalesActivos?: string[] | null,
 ): string {
   const parts: string[] = [];
 
@@ -197,6 +205,10 @@ function buildAnalysisSystemPrompt(
 
   if (promptVentas) {
     parts.push(`\nCONTEXTO DE LA EMPRESA:\n${promptVentas}`);
+  }
+
+  if (canalesActivos && canalesActivos.length > 0) {
+    parts.push(`\nCANALES ACTIVOS DEL CLIENTE:\nEste cliente tiene activos los siguientes canales de comunicación: ${canalesActivos.join(", ")}.\nLimita tus referencias y sugerencias a estos canales únicamente.`);
   }
 
   if (promptVideollamadas) {
@@ -365,16 +377,18 @@ export async function analyzeCall(
   embudoPersonalizado?: unknown,
   reglasEtiquetas?: unknown,
   idCuenta?: number | null,
+  canalesActivos?: string[] | null,
 ): Promise<CallAnalysisResult> {
   const model = resolveModel(openaiApiKey);
 
   const classifierSystemPrompt = withBusinessContext(
     buildClassifierPrompt(embudoPersonalizado),
     promptVentas,
+    canalesActivos,
   );
   const classifierSch = buildClassifierSchema(embudoPersonalizado);
 
-  const analysisSystemPrompt = buildAnalysisSystemPrompt(promptVentas, promptVideollamadas);
+  const analysisSystemPrompt = buildAnalysisSystemPrompt(promptVentas, promptVideollamadas, canalesActivos);
 
   const [classifierSettled, analysisSettled, objectionsSettled, reglasSettled] =
     await Promise.allSettled([
@@ -399,7 +413,7 @@ export async function analyzeCall(
       generateObject({
         model,
         schema: objectionsSchema,
-        system: withBusinessContext(OBJECTIONS_PROMPT, promptVentas),
+        system: withBusinessContext(OBJECTIONS_PROMPT, promptVentas, canalesActivos),
         prompt: `Transcript:\n${formattedTranscript}`,
         temperature: 0,
       }),

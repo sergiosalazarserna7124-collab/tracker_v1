@@ -211,6 +211,7 @@ export async function processFathomCall(
     openai_api_key: string | null;
     embudo_personalizado: unknown;
     reglas_etiquetas: unknown;
+    canales_activos: unknown;
   } | null = null;
   // configuracion_ui no está en el schema Drizzle del Cerebro — se lee via pgPool
   let ghlNotasConfig: GhlNotasConfig = { ia: true, transcripcion: false };
@@ -227,6 +228,7 @@ export async function processFathomCall(
             openai_api_key: cuentas.openai_api_key,
             embudo_personalizado: cuentas.embudo_personalizado,
             reglas_etiquetas: cuentas.reglas_etiquetas,
+            canales_activos: cuentas.canales_activos,
           })
           .from(cuentas)
           .where(eq(cuentas.id_cuenta, idCuenta))
@@ -386,6 +388,7 @@ export async function processFathomCall(
         account.embudo_personalizado,
         account.reglas_etiquetas,
         idCuenta,
+        Array.isArray(account.canales_activos) ? account.canales_activos as string[] : null,
       );
     } else {
       console.warn(`[Fathom] Empty transcript for call ${shareUrl}. Skipping AI analysis.`);

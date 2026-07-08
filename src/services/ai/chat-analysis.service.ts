@@ -130,6 +130,7 @@ function buildSystemPrompt(
   embudo: EmbudoEtapa[],
   reglas_etiquetas: ReglaEtiqueta[],
   prompt_empresa?: string,
+  canales_activos?: string[] | null,
 ): string {
   const parts: string[] = [];
 
@@ -190,6 +191,12 @@ Detecta todas las objeciones que el lead haya expresado. Usa estas categorías:
 - "otra": cualquier otra objeción que no encaje en las anteriores
 Si no hay objeciones detectadas, devuelve [].`);
 
+  if (canales_activos && canales_activos.length > 0) {
+    parts.push(`## CANALES ACTIVOS DEL CLIENTE
+Este cliente tiene activos los siguientes canales de comunicación: ${canales_activos.join(", ")}.
+Limita tus referencias y sugerencias a estos canales únicamente. No menciones canales que el cliente no utiliza.`);
+  }
+
   parts.push(`## FORMATO DE RESPUESTA
 Devuelve ÚNICAMENTE este JSON (sin markdown, sin texto adicional):
 {
@@ -211,8 +218,9 @@ export async function analyzeChatWithAI(params: {
   prompt_empresa?: string;
   openai_api_key?: string;
   id_cuenta?: number | null;
+  canales_activos?: string[] | null;
 }): Promise<ChatAnalysisResult> {
-  const { messages, embudo, reglas_etiquetas, prompt_empresa, openai_api_key, id_cuenta } = params;
+  const { messages, embudo, reglas_etiquetas, prompt_empresa, openai_api_key, id_cuenta, canales_activos } = params;
 
   const model = resolveModel(openai_api_key);
   const embudoIds = embudo.map((e) => e.id);
@@ -220,7 +228,7 @@ export async function analyzeChatWithAI(params: {
   const estadosValidos = embudoIds.length > 0 ? embudoIds : fallbackIds;
 
   const schema = buildChatClassificationSchema(estadosValidos);
-  const systemPrompt = buildSystemPrompt(embudo, reglas_etiquetas, prompt_empresa);
+  const systemPrompt = buildSystemPrompt(embudo, reglas_etiquetas, prompt_empresa, canales_activos);
   const conversationText = truncateConversation(messages);
 
   if (!conversationText) {
