@@ -191,7 +191,7 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
   // ── 3. Enriquecer con es_calificado ─────────────────────────────────────
   const rows: ChatRow[] = rawRows.map((r) => ({
     ...r,
-    es_calificado: esCalificado(r.ia_categoria, criterios),
+    es_calificado: esCalificado(r.ia_categoria, criterios, "chats"),
   }));
 
   // ── 4. Calcular métricas custom ─────────────────────────────────────────

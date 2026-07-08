@@ -23,6 +23,20 @@ const paramsSchema = {
   },
 } as const;
 
+const criteriosCanalSchema = {
+  type: "object",
+  required: ["categorias_calificadas"],
+  properties: {
+    categorias_calificadas: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+      minItems: 1,
+    },
+    umbral_minimo: { type: "integer", minimum: 1 },
+  },
+  additionalProperties: false,
+} as const;
+
 const criteriosBodySchema = {
   oneOf: [
     {
@@ -35,6 +49,15 @@ const criteriosBodySchema = {
           minItems: 1,
         },
         umbral_minimo: { type: "integer", minimum: 1 },
+        canales: {
+          type: "object",
+          properties: {
+            chats: criteriosCanalSchema,
+            llamadas: criteriosCanalSchema,
+            videollamadas: criteriosCanalSchema,
+          },
+          additionalProperties: false,
+        },
       },
       additionalProperties: false,
     },

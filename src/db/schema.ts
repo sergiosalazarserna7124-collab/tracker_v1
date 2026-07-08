@@ -38,6 +38,10 @@ export const agendas = pgTable("resumenes_diarios_agendas", {
   // Solo se escribe cuando Fathom actualiza un registro existente Y cambia la categoría.
   fathom_reingest_at: timestamp("fathom_reingest_at", { withTimezone: true }),
   categoria_previa: text("categoria_previa"),
+  // ── AUT-1301: enriquecimiento IA (Gemini) + duración ────────────────────
+  ia_enriquecimiento: jsonb("ia_enriquecimiento"),
+  ia_enriquecido_at: timestamp("ia_enriquecido_at", { withTimezone: true }),
+  duracion_segundos: integer("duracion_segundos"),
 }, (table) => [
   // ── Índices parciales para lookup en effectivePath() (categoria = PDTE) ──
   index("idx_agendas_cuenta_contact_pdte")
@@ -81,6 +85,11 @@ export const llamadas = pgTable("registros_de_llamada", {
   speed_to_lead_4h_alerted_at: timestamp("speed_to_lead_4h_alerted_at", { withTimezone: true }),
   // ── AUT-1028: agentid del Voice Agent (multi-tenant routing) ──────────────
   agentid: text("agentid"),
+  // ── AUT-1301: enriquecimiento IA (Gemini) + duración + ubicación ────────
+  ia_enriquecimiento: jsonb("ia_enriquecimiento"),
+  ia_enriquecido_at: timestamp("ia_enriquecido_at", { withTimezone: true }),
+  duracion_segundos: integer("duracion_segundos"),
+  ubicacion_approx: text("ubicacion_approx"),
 });
 
 /**
@@ -113,6 +122,11 @@ export const logLlamadas = pgTable("log_llamadas", {
   lead_embudo_personalizado: jsonb("lead_embudo_personalizado"),
   // ── AUT-1028: agentid del Voice Agent (multi-tenant routing) ──────────────
   agentid: text("agentid"),
+  // ── AUT-1301: enriquecimiento IA (Gemini) + duración + ubicación ────────
+  ia_enriquecimiento: jsonb("ia_enriquecimiento"),
+  ia_enriquecido_at: timestamp("ia_enriquecido_at", { withTimezone: true }),
+  duracion_segundos: integer("duracion_segundos"),
+  ubicacion_approx: text("ubicacion_approx"),
 });
 
 /**
@@ -168,6 +182,10 @@ export const cuentas = pgTable("cuentas", {
   config_llamadas: jsonb("config_llamadas"),
   // ── V12: write-back de resumen IA a custom fields de oportunidad GHL (AUT-1157) ──
   ghl_opportunity_fields_config: jsonb("ghl_opportunity_fields_config"),
+  // ── V13: canales activos por cuenta (AUT-1330) ────────────────────────────
+  // NULL = todos los canales activos (backwards-compat).
+  // Shape: { chats: boolean, llamadas: boolean, videollamadas: boolean }
+  canales_activos: jsonb("canales_activos"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

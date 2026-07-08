@@ -26,6 +26,7 @@ import { ghlCallbackRoute } from "./routes/oauth/ghl-callback.route.js";
 import { dataChatsRoute } from "./routes/data/chats.route.js";
 import { asesoresMergeSuggestionsRoute } from "./routes/data/merge-suggestions.route.js";
 import { criteriosCalificacionRoute } from "./routes/data/criterios-calificacion.route.js";
+import { canalesActivosRoute } from "./routes/data/canales-activos.route.js";
 import { contactIntakeRoute } from "./routes/webhooks/contact-intake.route.js";
 import { metricsRoute } from "./routes/data/metrics.route.js";
 import { contactoTranscripcionesRoute } from "./routes/data/contacto-transcripciones.route.js";
@@ -68,6 +69,7 @@ export async function buildApp() {
   await app.register(dataChatsRoute, { prefix: "/api/data" });
   await app.register(asesoresMergeSuggestionsRoute, { prefix: "/api/data/asesores" });
   await app.register(criteriosCalificacionRoute, { prefix: "/api" });
+  await app.register(canalesActivosRoute, { prefix: "/api" });
   await app.register(metricsRoute, { prefix: "/api/v1/metrics" });
   await app.register(contactoTranscripcionesRoute, { prefix: "/data" });
   await app.register(ghlMarketplaceShadowRoute, { prefix: "/webhooks" });
