@@ -6,6 +6,7 @@ import { usoApiMensual } from "../../db/schema.js";
 export const TIPO_CONSUMO = {
   GPT4O_MINI: "gpt4o_mini",
   WHISPER: "whisper",
+  GEMINI_FLASH: "gemini_flash",
 } as const;
 
 function getMesAnio(): string {

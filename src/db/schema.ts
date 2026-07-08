@@ -38,6 +38,9 @@ export const agendas = pgTable("resumenes_diarios_agendas", {
   // Solo se escribe cuando Fathom actualiza un registro existente Y cambia la categoría.
   fathom_reingest_at: timestamp("fathom_reingest_at", { withTimezone: true }),
   categoria_previa: text("categoria_previa"),
+  gemini_enriquecimiento: jsonb("gemini_enriquecimiento"),
+  duracion_segundos: integer("duracion_segundos"),
+  ubicacion_aprox: text("ubicacion_aprox"),
 }, (table) => [
   // ── Índices parciales para lookup en effectivePath() (categoria = PDTE) ──
   index("idx_agendas_cuenta_contact_pdte")
@@ -81,6 +84,9 @@ export const llamadas = pgTable("registros_de_llamada", {
   speed_to_lead_4h_alerted_at: timestamp("speed_to_lead_4h_alerted_at", { withTimezone: true }),
   // ── AUT-1028: agentid del Voice Agent (multi-tenant routing) ──────────────
   agentid: text("agentid"),
+  gemini_enriquecimiento: jsonb("gemini_enriquecimiento"),
+  duracion_segundos: integer("duracion_segundos"),
+  ubicacion_aprox: text("ubicacion_aprox"),
 });
 
 /**
@@ -113,6 +119,9 @@ export const logLlamadas = pgTable("log_llamadas", {
   lead_embudo_personalizado: jsonb("lead_embudo_personalizado"),
   // ── AUT-1028: agentid del Voice Agent (multi-tenant routing) ──────────────
   agentid: text("agentid"),
+  gemini_enriquecimiento: jsonb("gemini_enriquecimiento"),
+  duracion_segundos: integer("duracion_segundos"),
+  ubicacion_aprox: text("ubicacion_aprox"),
 });
 
 /**

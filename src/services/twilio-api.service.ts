@@ -34,6 +34,7 @@ export interface TwilioCall {
    * Possible values: "human" | "machine_start" | "machine_end_beep" |
    * "machine_end_silence" | "machine_end_other" | "fax" | "unknown" | null */
   answeredBy: string | null;
+  durationSeconds: number | null;
 }
 
 // Twilio AMD values that indicate the call was answered by a machine/voicemail.
@@ -74,17 +75,19 @@ export async function getLatestCompletedCall(
   }
 
   const data = (await response.json()) as {
-    calls?: Array<{ sid?: string; account_sid?: string; parent_call_sid?: string; answered_by?: string }>;
+    calls?: Array<{ sid?: string; account_sid?: string; parent_call_sid?: string; answered_by?: string; duration?: string }>;
   };
 
   const call = data.calls?.[0];
   if (!call?.sid || !call?.account_sid) return null;
 
+  const dur = call.duration ? parseInt(call.duration, 10) : NaN;
   return {
     callSid: call.sid,
     accountSid: call.account_sid,
     parentCallSid: call.parent_call_sid ?? null,
     answeredBy: call.answered_by ?? null,
+    durationSeconds: Number.isFinite(dur) ? dur : null,
   };
 }
 

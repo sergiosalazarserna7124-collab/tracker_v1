@@ -14,6 +14,7 @@ const EnvSchema = Type.Object({
   GHL_APP_CLIENT_ID: Type.String({ default: "" }),
   GHL_APP_CLIENT_SECRET: Type.String({ default: "" }),
   GHL_OAUTH_REDIRECT_URI: Type.String({ default: "" }),
+  GEMINI_API_KEY: Type.String({ default: "" }),
 });
 
 export type Env = Static<typeof EnvSchema>;
@@ -28,6 +29,7 @@ function loadEnv(): Env {
     GHL_APP_CLIENT_ID: process.env.GHL_APP_CLIENT_ID ?? "696e8c458f9f5e7c1661bf3e-mn1w8ng8",
     GHL_APP_CLIENT_SECRET: process.env.GHL_APP_CLIENT_SECRET ?? "0e3fc8c2-f76e-403d-be6f-4a2fb0642c8e",
     GHL_OAUTH_REDIRECT_URI: process.env.GHL_OAUTH_REDIRECT_URI ?? "https://cerebro-tracker-v6-saas-git-cstkjl7bpa-ue.a.run.app/oauth/callback",
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? "",
   };
 
   if (!Value.Check(EnvSchema, raw)) {

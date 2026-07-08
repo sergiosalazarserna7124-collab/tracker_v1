@@ -6,6 +6,7 @@ import { processInChunks } from "../../utils/batch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { db as pgPool } from "../../config/database.js";
 import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
+import { enrichWithGemini } from "../ai/gemini-enrichment.service.js";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -557,7 +558,21 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
           ],
         );
 
-        // ── 3c. Aplicar tags en GHL ─────────────────────────────────────────
+        // ── 3c. Enriquecimiento Gemini (AUT-1301) ─────────────────────────
+        const chatText = messages
+          .map((m) => `${m.role === "lead" ? "Lead" : "Asesor"}: ${m.message}`)
+          .join("\n");
+        if (chatText.length >= 50) {
+          const gemini = await enrichWithGemini(chatText, "chat", cuenta.id_cuenta).catch(() => null);
+          if (gemini) {
+            await pgPool.query(
+              `UPDATE chats_logs SET gemini_enriquecimiento = $1::jsonb WHERE id_evento = $2`,
+              [JSON.stringify(gemini), chat.id_evento],
+            ).catch((e: unknown) => console.error(`[analyzeChats] Gemini update failed chat=${chat.id_evento}:`, e));
+          }
+        }
+
+        // ── 3d. Aplicar tags en GHL ─────────────────────────────────────────
         if (result.tags_internos.length > 0 && chat.id_lead && cuenta.token_ghl) {
           try {
             await addContactTags(chat.id_lead, cuenta.token_ghl, result.tags_internos);

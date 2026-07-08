@@ -36,6 +36,8 @@ import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service
 import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
 import { updateContactCustomFields, createLocationTag, createContactTask, contactHasTag, getContactAppointmentInfo } from "../ghl-api.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
+import { enrichWithGemini } from "../ai/gemini-enrichment.service.js";
+import { ubicacionPorTelefono } from "../../utils/lada.utils.js";
 import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
 import type { ServiceResult } from "../../types/index.js";
@@ -79,6 +81,9 @@ interface LogEntry {
   speedToLead?: string | null;
   tagsInternos?: string[] | null;
   leadEmbudoPersonalizado?: Record<string, unknown> | null;
+  geminiEnriquecimiento?: object | null;
+  duracionSegundos?: number | null;
+  ubicacionAprox?: string | null;
 }
 
 async function insertLogEntry(entry: LogEntry): Promise<void> {
@@ -104,6 +109,9 @@ async function insertLogEntry(entry: LogEntry): Promise<void> {
           speed_to_lead: entry.speedToLead ?? null,
           tags_internos: entry.tagsInternos ?? [],
           ...(entry.leadEmbudoPersonalizado && { lead_embudo_personalizado: entry.leadEmbudoPersonalizado }),
+          ...(entry.geminiEnriquecimiento && { gemini_enriquecimiento: entry.geminiEnriquecimiento }),
+          ...(entry.duracionSegundos != null && { duracion_segundos: entry.duracionSegundos }),
+          ...(entry.ubicacionAprox && { ubicacion_aprox: entry.ubicacionAprox }),
         }),
       { label: "insertLogEntry" },
     );
@@ -777,7 +785,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     if (classification.buzon === true || classification.buzon === null) {
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
     }
-    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas, preReglasResult, ghlOpportunityFieldsConfig);
+    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas, preReglasResult, ghlOpportunityFieldsConfig, null);
   }
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
@@ -794,6 +802,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   let callSid: string | null = null;
   let audioBuffer: Buffer | null = null;
+  let callDurationSeconds: number | null = null;
 
   try {
     const call = await getLatestCompletedCall(twilioSid, authTwilio, fields.phone);
@@ -819,6 +828,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     }
 
     callSid = call.callSid;
+    callDurationSeconds = call.durationSeconds;
 
     const recordingSid = await getCallRecordingSid(
       call.accountSid,
@@ -951,6 +961,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     promptLlamadas,
     mainReglasResult,
     ghlOpportunityFieldsConfig,
+    callDurationSeconds,
   );
 }
 
@@ -970,6 +981,7 @@ async function effectivePath(
   promptLlamadas?: string | null,
   preComputedReglas?: ReglasEvalResult,
   ghlOpportunityFieldsConfig?: unknown,
+  callDurationSeconds?: number | null,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
@@ -1037,6 +1049,15 @@ async function effectivePath(
       console.warn(`[Effective] CitaTarea extraction error (fail-open):`, err instanceof Error ? err.message : err);
     }
   }
+
+  // AUT-1301: Gemini enrichment + ubicación por lada
+  const geminiResult = transcript.trim().length >= 50
+    ? await enrichWithGemini(transcript, "llamada", idCuenta).catch((err: unknown) => {
+        console.error("[Effective] Error enriquecimiento Gemini:", err);
+        return null;
+      })
+    : null;
+  const ubicacionAprox = ubicacionPorTelefono(phone);
 
   // Construir objeto lead_embudo_personalizado si hay embudo configurado
   const leadEmbudoData = embudoPersonalizado
@@ -1195,6 +1216,9 @@ async function effectivePath(
               ...(idUserGhl && { id_user_ghl: idUserGhl }),
               ...(contactId && { ghl_contact_id: contactId }),
               ...(stl !== null && { speed_to_lead: stl }),
+              ...(geminiResult && { gemini_enriquecimiento: geminiResult }),
+              ...(callDurationSeconds != null && { duracion_segundos: callDurationSeconds }),
+              ...(ubicacionAprox && { ubicacion_aprox: ubicacionAprox }),
             })
             .where(eq(llamadas.id_registro, existing!.id_registro)),
         { label: "effectivePath/update" },
@@ -1232,6 +1256,9 @@ async function effectivePath(
               ghl_contact_id: contactId,
               tags_internos: tagsInternos,
               ...(leadEmbudoData && { lead_embudo_personalizado: leadEmbudoData }),
+              ...(geminiResult && { gemini_enriquecimiento: geminiResult }),
+              ...(callDurationSeconds != null && { duracion_segundos: callDurationSeconds }),
+              ...(ubicacionAprox && { ubicacion_aprox: ubicacionAprox }),
             })
             .returning({ id_registro: llamadas.id_registro }),
         { label: "effectivePath/insert" },
@@ -1449,6 +1476,9 @@ async function effectivePath(
     speedToLead: stlForLog,
     tagsInternos,
     leadEmbudoPersonalizado: leadEmbudoData,
+    geminiEnriquecimiento: geminiResult,
+    duracionSegundos: callDurationSeconds,
+    ubicacionAprox: ubicacionAprox,
   });
 
   return {

@@ -21,6 +21,7 @@ import { analyzeCall } from "../ai/call-analysis.service.js";
 import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
 import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
+import { enrichWithGemini, estimateDurationFromTranscript } from "../ai/gemini-enrichment.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { FathomEventBody } from "../../schemas/webhooks/fathom.schema.js";
 
@@ -424,6 +425,15 @@ export async function processFathomCall(
     }
   }
 
+  // AUT-1301: Gemini enrichment + duración estimada desde transcript
+  const geminiResult = formattedTranscript
+    ? await enrichWithGemini(formattedTranscript, "videollamada", idCuenta).catch((err: unknown) => {
+        console.error("[Fathom] Error enriquecimiento Gemini:", err);
+        return null;
+      })
+    : null;
+  const duracionSegundos = estimateDurationFromTranscript(payload.transcript ?? null);
+
   // Si alguna regla tiene funnelStage, la regla explícita del cliente sobreescribe la clasificación IA
   const funnelStageFromReglas = collectFunnelStages(reglasResult.matched_rules);
 
@@ -621,6 +631,8 @@ export async function processFathomCall(
               ...(objections && { objeciones_ia: objections }),
               ...(formattedTranscript && { transcripcion_fathom: formattedTranscript }),
               tags_internos: tagsInternos,
+              ...(geminiResult && { gemini_enriquecimiento: geminiResult }),
+              ...(duracionSegundos != null && { duracion_segundos: duracionSegundos }),
               ...(utmContent && { origen: utmContent }),
               ...(contactId && { ghl_contact_id: contactId }),
               ...(contactName && { nombre_de_lead: contactName }),
@@ -698,6 +710,8 @@ export async function processFathomCall(
             ...(objections && { objeciones_ia: objections }),
             ...(formattedTranscript && { transcripcion_fathom: formattedTranscript }),
             tags_internos: tagsInternos,
+            ...(geminiResult && { gemini_enriquecimiento: geminiResult }),
+            ...(duracionSegundos != null && { duracion_segundos: duracionSegundos }),
           }),
         { label: "Fathom/insertAgenda" },
       );
