@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { Type } from "@sinclair/typebox";
 import { env } from "../../config/env.js";
-import { runGeminiBackfill, type BackfillTable } from "../../services/cron/gemini-backfill.service.js";
+import { runGeminiBackfill } from "../../services/cron/gemini-backfill.service.js";
 import { db as pgPool } from "../../config/database.js";
 
 const TABLE_LOCK_IDS: Record<string, number> = {
@@ -9,6 +9,8 @@ const TABLE_LOCK_IDS: Record<string, number> = {
   resumenes_diarios_agendas: 839_303,
   chats_logs: 839_304,
 };
+
+type SingleTable = "log_llamadas" | "resumenes_diarios_agendas" | "chats_logs";
 
 const BackfillBody = Type.Object({
   tabla: Type.Optional(
@@ -30,7 +32,7 @@ const CronHeaders = Type.Object(
 
 export async function cronGeminiBackfillRoute(app: FastifyInstance) {
   app.post<{
-    Body: { tabla?: BackfillTable; account_ids?: number[]; days_back?: number };
+    Body: { tabla?: string; account_ids?: number[]; days_back?: number };
   }>(
     "/gemini-backfill",
     {
@@ -47,52 +49,67 @@ export async function cronGeminiBackfillRoute(app: FastifyInstance) {
 
       const { tabla = "all", account_ids, days_back } = request.body;
 
-      const tables: Array<"log_llamadas" | "resumenes_diarios_agendas" | "chats_logs"> =
-        tabla === "all"
-          ? ["log_llamadas", "resumenes_diarios_agendas", "chats_logs"]
-          : [tabla];
-
-      async function processTable(t: "log_llamadas" | "resumenes_diarios_agendas" | "chats_logs"): Promise<{ tabla: string; locked: boolean; result?: unknown }> {
-        const lockId = TABLE_LOCK_IDS[t];
-        let client: import("pg").PoolClient;
-        try {
-          client = await pgPool.connect();
-        } catch (err) {
-          console.error(`[gemini-backfill] connect() falló para ${t}:`, err);
-          return { tabla: t, locked: false, result: { error: "No se pudo obtener conexión del pool" } };
-        }
-        try {
-          await client.query("BEGIN");
-          const lockResult = await client.query<{ locked: boolean }>(
-            "SELECT pg_try_advisory_xact_lock($1) AS locked",
-            [lockId],
-          );
-          if (!lockResult.rows[0]?.locked) {
-            await client.query("ROLLBACK");
-            return { tabla: t, locked: false };
-          }
-
-          try {
-            const tableResults = await runGeminiBackfill(t, account_ids, days_back);
-            await client.query("COMMIT");
-            return { tabla: t, locked: true, result: tableResults[0] };
-          } catch (err) {
-            await client.query("ROLLBACK").catch(() => {});
-            console.error(`[gemini-backfill] Error en ${t}:`, err);
-            return { tabla: t, locked: true, result: { error: err instanceof Error ? err.message : "Error interno" } };
-          }
-        } finally {
-          client.release();
-        }
+      if (tabla === "all") {
+        console.warn(`[gemini-backfill] Rechazado: tabla="all" desde ${request.ip}. Usar llamadas single-table.`);
+        return reply.status(400).send({
+          success: false,
+          error: 'tabla="all" ya no está soportado. Enviar una request por tabla: log_llamadas, resumenes_diarios_agendas, chats_logs.',
+        });
       }
 
-      const results = await Promise.all(tables.map(processTable));
+      const t = tabla as SingleTable;
+      const lockId = TABLE_LOCK_IDS[t];
 
-      const allSkipped = results.every((r) => !r.locked);
-      return reply.status(allSkipped ? 409 : 200).send({
-        success: true,
-        results,
-      });
+      let client: import("pg").PoolClient;
+      try {
+        client = await pgPool.connect();
+      } catch (err) {
+        console.error(`[gemini-backfill] connect() falló para ${t}:`, err);
+        return reply.status(500).send({
+          success: false,
+          error: "No se pudo obtener conexión del pool",
+        });
+      }
+
+      try {
+        const lockResult = await client.query<{ locked: boolean }>(
+          "SELECT pg_try_advisory_lock($1) AS locked",
+          [lockId],
+        );
+
+        if (!lockResult.rows[0]?.locked) {
+          client.release();
+          return reply.status(409).send({
+            success: true,
+            results: [{ tabla: t, locked: false }],
+          });
+        }
+
+        let result: unknown;
+        try {
+          const tableResults = await runGeminiBackfill(t, account_ids, days_back);
+          result = tableResults[0];
+        } catch (err) {
+          console.error(`[gemini-backfill] Error en ${t}:`, err);
+          result = { error: err instanceof Error ? err.message : "Error interno" };
+        } finally {
+          await client.query("SELECT pg_advisory_unlock($1)", [lockId]).catch(() => {});
+          client.release();
+        }
+
+        return reply.status(200).send({
+          success: true,
+          results: [{ tabla: t, locked: true, result }],
+        });
+      } catch (err) {
+        await client.query("SELECT pg_advisory_unlock($1)", [lockId]).catch(() => {});
+        client.release();
+        console.error(`[gemini-backfill] Error inesperado en ${t}:`, err);
+        return reply.status(500).send({
+          success: false,
+          error: err instanceof Error ? err.message : "Error interno",
+        });
+      }
     },
   );
 }
