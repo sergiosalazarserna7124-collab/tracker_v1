@@ -20,7 +20,7 @@ const BackfillBody = Type.Object({
     ]),
   ),
   account_ids: Type.Optional(Type.Array(Type.Number({ minimum: 1 }))),
-  days_back: Type.Optional(Type.Number({ minimum: 1, maximum: 365 })),
+  days_back: Type.Optional(Type.Number({ minimum: 1, maximum: 730 })),
 });
 
 const CronHeaders = Type.Object(
@@ -45,18 +45,22 @@ export async function cronGeminiBackfillRoute(app: FastifyInstance) {
         return reply.status(401).send({ success: false, error: "Unauthorized" });
       }
 
-      const { tabla = "all", account_ids, days_back = 60 } = request.body;
+      const { tabla = "all", account_ids, days_back } = request.body;
 
       const tables: Array<"log_llamadas" | "resumenes_diarios_agendas" | "chats_logs"> =
         tabla === "all"
           ? ["log_llamadas", "resumenes_diarios_agendas", "chats_logs"]
           : [tabla];
 
-      const results: Array<{ tabla: string; locked: boolean; result?: unknown }> = [];
-
-      for (const t of tables) {
+      async function processTable(t: "log_llamadas" | "resumenes_diarios_agendas" | "chats_logs"): Promise<{ tabla: string; locked: boolean; result?: unknown }> {
         const lockId = TABLE_LOCK_IDS[t];
-        const client = await pgPool.connect();
+        let client: import("pg").PoolClient;
+        try {
+          client = await pgPool.connect();
+        } catch (err) {
+          console.error(`[gemini-backfill] connect() falló para ${t}:`, err);
+          return { tabla: t, locked: false, result: { error: "No se pudo obtener conexión del pool" } };
+        }
         try {
           await client.query("BEGIN");
           const lockResult = await client.query<{ locked: boolean }>(
@@ -65,26 +69,27 @@ export async function cronGeminiBackfillRoute(app: FastifyInstance) {
           );
           if (!lockResult.rows[0]?.locked) {
             await client.query("ROLLBACK");
-            results.push({ tabla: t, locked: false });
-            continue;
+            return { tabla: t, locked: false };
           }
 
           try {
             const tableResults = await runGeminiBackfill(t, account_ids, days_back);
             await client.query("COMMIT");
-            results.push({ tabla: t, locked: true, result: tableResults[0] });
+            return { tabla: t, locked: true, result: tableResults[0] };
           } catch (err) {
             await client.query("ROLLBACK").catch(() => {});
             console.error(`[gemini-backfill] Error en ${t}:`, err);
-            results.push({ tabla: t, locked: true, result: { error: err instanceof Error ? err.message : "Error interno" } });
+            return { tabla: t, locked: true, result: { error: err instanceof Error ? err.message : "Error interno" } };
           }
         } finally {
           client.release();
         }
       }
 
-      const anyLocked = results.some((r) => !r.locked);
-      return reply.status(anyLocked && results.every((r) => !r.locked) ? 409 : 200).send({
+      const results = await Promise.all(tables.map(processTable));
+
+      const allSkipped = results.every((r) => !r.locked);
+      return reply.status(allSkipped ? 409 : 200).send({
         success: true,
         results,
       });

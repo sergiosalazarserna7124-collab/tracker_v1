@@ -4,7 +4,7 @@ import { env } from "../../config/env.js";
 
 // 30s margin before Cloud Run's 240s request timeout
 const MAX_RUNTIME_MS = 210_000;
-const DELAY_MS = 300;
+const DELAY_MS = 50;
 const BATCH_SIZE = 50;
 
 function sleep(ms: number): Promise<void> {
@@ -278,7 +278,7 @@ export type BackfillTable = "log_llamadas" | "resumenes_diarios_agendas" | "chat
 export async function runGeminiBackfill(
   tabla: BackfillTable,
   accountIds?: number[],
-  daysBack = 60,
+  daysBack = 365,
 ): Promise<GeminiBackfillResult[]> {
   if (!env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY no configurada — el backfill requiere esta variable de entorno");
