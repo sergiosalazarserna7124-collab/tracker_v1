@@ -33,6 +33,7 @@ import { canalesActivosRoute } from "./routes/data/canales-activos.route.js";
 import { contactIntakeRoute } from "./routes/webhooks/contact-intake.route.js";
 import { metricsRoute } from "./routes/data/metrics.route.js";
 import { contactoTranscripcionesRoute } from "./routes/data/contacto-transcripciones.route.js";
+import { bulkTagRoute } from "./routes/data/bulk-tag.route.js";
 import { ghlMarketplaceShadowRoute } from "./routes/webhooks/ghl-marketplace-shadow.route.js";
 import { asistenciaWebhookRoute } from "./routes/webhooks/asistencia.route.js";
 
@@ -80,6 +81,7 @@ export async function buildApp() {
   await app.register(contactoTranscripcionesRoute, { prefix: "/data" });
   await app.register(ghlMarketplaceShadowRoute, { prefix: "/webhooks" });
   await app.register(asistenciaWebhookRoute, { prefix: "/webhooks" });
+  await app.register(bulkTagRoute, { prefix: "/api" });
 
   return app;
 }
