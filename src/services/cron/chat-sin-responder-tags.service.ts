@@ -3,7 +3,7 @@ import { safeAddContactTag } from "../ghl-api.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingTag } from "../ghl-token-guard.service.js";
 
-const MAX_TAGS_PER_RUN = 80;
+const MAX_TAGS_PER_RUN = 200;
 const TAG_NAME = "sin_responder_chat";
 
 interface ChatSinResponder {
@@ -48,17 +48,16 @@ export async function runChatSinResponderTags(): Promise<ChatSinResponderTagsRes
            EXTRACT(EPOCH FROM (NOW() - cl.primer_msg_lead_at)) / 60 AS minutos_sin_respuesta
          FROM chats_logs cl
          JOIN cuentas c ON c.id_cuenta = cl.id_cuenta
-         JOIN metas_cuenta mc ON mc.id_cuenta = cl.id_cuenta
+         LEFT JOIN metas_cuenta mc ON mc.id_cuenta = cl.id_cuenta
          WHERE cl.primer_msg_lead_at IS NOT NULL
            AND cl.chat_sin_responder_tagged_at IS NULL
            AND cl.chat_sin_responder_removed_at IS NULL
            AND cl.primer_msg_lead_at >= NOW() - INTERVAL '48 hours'
-           AND EXTRACT(EPOCH FROM (NOW() - cl.primer_msg_lead_at)) / 60 >= mc.meta_tag_sin_responder_wait_min
+           AND EXTRACT(EPOCH FROM (NOW() - cl.primer_msg_lead_at)) / 60 >= COALESCE(mc.meta_tag_sin_responder_wait_min, 60)
            AND NOT EXISTS (
              SELECT 1 FROM jsonb_array_elements(cl.chat) m
              WHERE m->>'role' = 'agent'
            )
-           AND mc.meta_tag_sin_responder_wait_min IS NOT NULL
            AND c.estado_cuenta = 'activo'
            AND c.monto_mensualidad > 0
          ORDER BY cl.primer_msg_lead_at ASC
