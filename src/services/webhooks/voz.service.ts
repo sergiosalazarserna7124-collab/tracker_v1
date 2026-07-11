@@ -620,47 +620,51 @@ async function processVozInternal(
         }
 
         if (citaTareaResult.tarea.detectada) {
-          const alreadyTagged = await contactHasTag(ghlContactId, tokenGhl, "tarea_registradaai");
-          if (alreadyTagged) {
-            console.info(`${label} CitaTarea: contacto ya tiene tag tarea_registradaai, skip task creation (idempotencia)`);
+          if (cuenta.ghl_native_task_workflow) {
+            console.info(`${label} [GHL native workflow] task creation skipped for cuenta ${cuenta.id_cuenta}`);
           } else {
-            try {
-              await createLocationTag(locationId, tokenGhl, "tarea_registradaai");
-              await safeAddContactTags(ghlContactId, tokenGhl, ["tarea_registradaai"], locationId);
-              tagsAplicados.push("tarea_registradaai");
-              console.info(`${label} CitaTarea: applied tag tarea_registradaai`);
-            } catch (err) {
-              console.error(`${label} CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
-            }
-
-            try {
-              const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
-              const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
-              let dueDate = citaTareaResult.tarea.fecha_vencimiento;
-              if (!dueDate) {
-                const fallback = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-                dueDate = fallback.toISOString();
-              }
-
-              let assignedTo: string | undefined;
+            const alreadyTagged = await contactHasTag(ghlContactId, tokenGhl, "tarea_registradaai");
+            if (alreadyTagged) {
+              console.info(`${label} CitaTarea: contacto ya tiene tag tarea_registradaai, skip task creation (idempotencia)`);
+            } else {
               try {
-                const apptInfo = await getContactAppointmentInfo(ghlContactId, tokenGhl, now);
-                if (apptInfo?.assignedUserId) {
-                  assignedTo = apptInfo.assignedUserId;
-                }
-              } catch { /* best-effort */ }
-
-              const taskResult = await createContactTask(ghlContactId, tokenGhl, {
-                title: tareaTitle,
-                body: tareaBody,
-                dueDate,
-                assignedTo,
-              });
-              if (taskResult) {
-                console.info(`${label} CitaTarea: created GHL task id=${taskResult.id}`);
+                await createLocationTag(locationId, tokenGhl, "tarea_registradaai");
+                await safeAddContactTags(ghlContactId, tokenGhl, ["tarea_registradaai"], locationId);
+                tagsAplicados.push("tarea_registradaai");
+                console.info(`${label} CitaTarea: applied tag tarea_registradaai`);
+              } catch (err) {
+                console.error(`${label} CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
               }
-            } catch (err) {
-              console.error(`${label} CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
+
+              try {
+                const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
+                const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
+                let dueDate = citaTareaResult.tarea.fecha_vencimiento;
+                if (!dueDate) {
+                  const fallback = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+                  dueDate = fallback.toISOString();
+                }
+
+                let assignedTo: string | undefined;
+                try {
+                  const apptInfo = await getContactAppointmentInfo(ghlContactId, tokenGhl, now);
+                  if (apptInfo?.assignedUserId) {
+                    assignedTo = apptInfo.assignedUserId;
+                  }
+                } catch { /* best-effort */ }
+
+                const taskResult = await createContactTask(ghlContactId, tokenGhl, {
+                  title: tareaTitle,
+                  body: tareaBody,
+                  dueDate,
+                  assignedTo,
+                });
+                if (taskResult) {
+                  console.info(`${label} CitaTarea: created GHL task id=${taskResult.id}`);
+                }
+              } catch (err) {
+                console.error(`${label} CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
+              }
             }
           }
         }

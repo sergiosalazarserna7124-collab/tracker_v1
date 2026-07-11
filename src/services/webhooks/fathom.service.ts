@@ -213,6 +213,7 @@ export async function processFathomCall(
     embudo_personalizado: unknown;
     reglas_etiquetas: unknown;
     canales_activos: unknown;
+    ghl_native_task_workflow: boolean;
   } | null = null;
   // configuracion_ui no está en el schema Drizzle del Cerebro — se lee via pgPool
   let ghlNotasConfig: GhlNotasConfig = { ia: true, transcripcion: false };
@@ -230,6 +231,7 @@ export async function processFathomCall(
             embudo_personalizado: cuentas.embudo_personalizado,
             reglas_etiquetas: cuentas.reglas_etiquetas,
             canales_activos: cuentas.canales_activos,
+            ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
           })
           .from(cuentas)
           .where(eq(cuentas.id_cuenta, idCuenta))
@@ -533,41 +535,45 @@ export async function processFathomCall(
     }
 
     if (citaTareaResult.tarea.detectada) {
-      try {
-        await safeAddContactTag(contactId, account.token_ghl, "tarea_registradaai", locationId);
-        console.info(`[Fathom] CitaTarea: applied tag tarea_registradaai`);
-      } catch (err) {
-        console.error(`[Fathom] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
-      }
-
-      try {
-        const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
-        const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
-        let dueDate = citaTareaResult.tarea.fecha_vencimiento;
-        if (!dueDate) {
-          const fallback = new Date((meetingDate ?? new Date()).getTime() + 7 * 24 * 60 * 60 * 1000);
-          dueDate = fallback.toISOString();
-        }
-
-        let assignedTo: string | undefined;
+      if (account.ghl_native_task_workflow) {
+        console.info(`[Fathom] [GHL native workflow] task creation skipped for cuenta ${idCuenta}`);
+      } else {
         try {
-          const apptInfo = await getContactAppointmentInfo(contactId, account.token_ghl, new Date());
-          if (apptInfo?.assignedUserId) {
-            assignedTo = apptInfo.assignedUserId;
-          }
-        } catch { /* best-effort */ }
-
-        const taskResult = await createContactTask(contactId, account.token_ghl, {
-          title: tareaTitle,
-          body: tareaBody,
-          dueDate,
-          assignedTo,
-        });
-        if (taskResult) {
-          console.info(`[Fathom] CitaTarea: created GHL task id=${taskResult.id}`);
+          await safeAddContactTag(contactId, account.token_ghl, "tarea_registradaai", locationId);
+          console.info(`[Fathom] CitaTarea: applied tag tarea_registradaai`);
+        } catch (err) {
+          console.error(`[Fathom] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
         }
-      } catch (err) {
-        console.error(`[Fathom] CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
+
+        try {
+          const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
+          const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
+          let dueDate = citaTareaResult.tarea.fecha_vencimiento;
+          if (!dueDate) {
+            const fallback = new Date((meetingDate ?? new Date()).getTime() + 7 * 24 * 60 * 60 * 1000);
+            dueDate = fallback.toISOString();
+          }
+
+          let assignedTo: string | undefined;
+          try {
+            const apptInfo = await getContactAppointmentInfo(contactId, account.token_ghl, new Date());
+            if (apptInfo?.assignedUserId) {
+              assignedTo = apptInfo.assignedUserId;
+            }
+          } catch { /* best-effort */ }
+
+          const taskResult = await createContactTask(contactId, account.token_ghl, {
+            title: tareaTitle,
+            body: tareaBody,
+            dueDate,
+            assignedTo,
+          });
+          if (taskResult) {
+            console.info(`[Fathom] CitaTarea: created GHL task id=${taskResult.id}`);
+          }
+        } catch (err) {
+          console.error(`[Fathom] CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
+        }
       }
     }
   }

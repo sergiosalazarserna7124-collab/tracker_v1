@@ -181,6 +181,8 @@ export const cuentas = pgTable("cuentas", {
   // NULL = todos los canales activos (backwards-compat).
   // Shape: { chats: boolean, llamadas: boolean, videollamadas: boolean }
   canales_activos: jsonb("canales_activos"),
+  // ── V14: flag para suprimir createContactTask cuando el tenant tiene workflow nativo GHL (AUT-1490) ──
+  ghl_native_task_workflow: boolean("ghl_native_task_workflow").notNull().default(false),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

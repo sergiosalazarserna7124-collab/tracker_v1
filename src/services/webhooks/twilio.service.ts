@@ -213,9 +213,10 @@ async function resolveAccountFull(
   configLlamadas: unknown;
   categoriasLlamadas: unknown;
   ghlOpportunityFieldsConfig: unknown;
+  ghlNativeTaskWorkflow: boolean;
   isCancelled: boolean;
 }> {
-  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, configLlamadas: null, categoriasLlamadas: null, ghlOpportunityFieldsConfig: null, isCancelled: false };
+  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, configLlamadas: null, categoriasLlamadas: null, ghlOpportunityFieldsConfig: null, ghlNativeTaskWorkflow: false, isCancelled: false };
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
     return empty;
@@ -249,6 +250,7 @@ async function resolveAccountFull(
       configLlamadas: account.config_llamadas,
       categoriasLlamadas: account.categorias_llamadas,
       ghlOpportunityFieldsConfig: account.ghl_opportunity_fields_config,
+      ghlNativeTaskWorkflow: account.ghl_native_task_workflow,
       isCancelled: false,
     };
   } catch (err) {
@@ -738,7 +740,7 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
 export async function processEffectiveCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
-  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, configLlamadas, categoriasLlamadas, ghlOpportunityFieldsConfig, isCancelled } =
+  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, configLlamadas, categoriasLlamadas, ghlOpportunityFieldsConfig, ghlNativeTaskWorkflow, isCancelled } =
     await resolveAccountFull(fields.locationId, "Effective", fields.locationIdFallback);
   if (isCancelled) return { success: true, data: { id_cuenta: idCuenta, cancelled: true } };
 
@@ -785,7 +787,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     if (classification.buzon === true || classification.buzon === null) {
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
     }
-    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas, preReglasResult, ghlOpportunityFieldsConfig, null);
+    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas, preReglasResult, ghlOpportunityFieldsConfig, null, ghlNativeTaskWorkflow);
   }
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
@@ -962,6 +964,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     mainReglasResult,
     ghlOpportunityFieldsConfig,
     callDurationSeconds,
+    ghlNativeTaskWorkflow,
   );
 }
 
@@ -982,6 +985,7 @@ async function effectivePath(
   preComputedReglas?: ReglasEvalResult,
   ghlOpportunityFieldsConfig?: unknown,
   callDurationSeconds?: number | null,
+  ghlNativeTaskWorkflow?: boolean,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
@@ -1415,46 +1419,50 @@ async function effectivePath(
     }
 
     if (citaTareaResult.tarea.detectada && fields.locationId) {
-      const alreadyTagged = await contactHasTag(contactId, tokenGhl, "tarea_registradaai");
-      if (alreadyTagged) {
-        console.info(`[Effective] CitaTarea: contacto ya tiene tag tarea_registradaai, skip task creation (idempotencia)`);
+      if (ghlNativeTaskWorkflow) {
+        console.info(`[Effective] [GHL native workflow] task creation skipped for cuenta ${idCuenta}`);
       } else {
-        try {
-          await createLocationTag(fields.locationId, tokenGhl, "tarea_registradaai");
-          await safeAddContactTags(contactId, tokenGhl, ["tarea_registradaai"], fields.locationId);
-          console.info(`[Effective] CitaTarea: applied tag tarea_registradaai`);
-        } catch (err) {
-          console.error(`[Effective] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
-        }
-
-        try {
-          const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
-          const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
-          let dueDate = citaTareaResult.tarea.fecha_vencimiento;
-          if (!dueDate) {
-            const fallback = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-            dueDate = fallback.toISOString();
-          }
-
-          let assignedTo: string | undefined;
+        const alreadyTagged = await contactHasTag(contactId, tokenGhl, "tarea_registradaai");
+        if (alreadyTagged) {
+          console.info(`[Effective] CitaTarea: contacto ya tiene tag tarea_registradaai, skip task creation (idempotencia)`);
+        } else {
           try {
-            const apptInfo = await getContactAppointmentInfo(contactId, tokenGhl, now);
-            if (apptInfo?.assignedUserId) {
-              assignedTo = apptInfo.assignedUserId;
-            }
-          } catch { /* best-effort */ }
-
-          const taskResult = await createContactTask(contactId, tokenGhl, {
-            title: tareaTitle,
-            body: tareaBody,
-            dueDate,
-            assignedTo,
-          });
-          if (taskResult) {
-            console.info(`[Effective] CitaTarea: created GHL task id=${taskResult.id}`);
+            await createLocationTag(fields.locationId, tokenGhl, "tarea_registradaai");
+            await safeAddContactTags(contactId, tokenGhl, ["tarea_registradaai"], fields.locationId);
+            console.info(`[Effective] CitaTarea: applied tag tarea_registradaai`);
+          } catch (err) {
+            console.error(`[Effective] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
           }
-        } catch (err) {
-          console.error(`[Effective] CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
+
+          try {
+            const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
+            const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
+            let dueDate = citaTareaResult.tarea.fecha_vencimiento;
+            if (!dueDate) {
+              const fallback = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+              dueDate = fallback.toISOString();
+            }
+
+            let assignedTo: string | undefined;
+            try {
+              const apptInfo = await getContactAppointmentInfo(contactId, tokenGhl, now);
+              if (apptInfo?.assignedUserId) {
+                assignedTo = apptInfo.assignedUserId;
+              }
+            } catch { /* best-effort */ }
+
+            const taskResult = await createContactTask(contactId, tokenGhl, {
+              title: tareaTitle,
+              body: tareaBody,
+              dueDate,
+              assignedTo,
+            });
+            if (taskResult) {
+              console.info(`[Effective] CitaTarea: created GHL task id=${taskResult.id}`);
+            }
+          } catch (err) {
+            console.error(`[Effective] CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
+          }
         }
       }
     }
