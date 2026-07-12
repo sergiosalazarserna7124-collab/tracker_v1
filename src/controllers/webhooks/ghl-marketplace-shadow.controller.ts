@@ -1,4 +1,5 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
+import { verify as ed25519Verify } from "node:crypto";
 import { db } from "../../config/database.js";
 
 interface GhlMarketplaceBody {
@@ -8,31 +9,19 @@ interface GhlMarketplaceBody {
   [key: string]: unknown;
 }
 
-async function verifyEd25519Signature(
+function verifyGhlSignature(
   rawBody: string,
   signatureHeader: string | undefined,
-  timestampHeader: string | undefined,
-): Promise<boolean> {
-  if (!signatureHeader || !timestampHeader) return false;
+): boolean {
+  if (!signatureHeader || signatureHeader === "N/A") return false;
+
+  const publicKeyPem = process.env.GHL_WEBHOOK_PUBLIC_KEY ?? "";
+  if (!publicKeyPem) return false;
 
   try {
-    const signatureBytes = Buffer.from(signatureHeader, "base64");
-    const message = `${timestampHeader}.${rawBody}`;
-    const messageBytes = new TextEncoder().encode(message);
-
-    const GHL_WEBHOOK_PUBLIC_KEY = process.env.GHL_WEBHOOK_PUBLIC_KEY ?? "";
-    if (!GHL_WEBHOOK_PUBLIC_KEY) return false;
-
-    const keyBytes = Buffer.from(GHL_WEBHOOK_PUBLIC_KEY, "base64");
-    const cryptoKey = await crypto.subtle.importKey(
-      "raw",
-      keyBytes,
-      { name: "Ed25519" },
-      false,
-      ["verify"],
-    );
-
-    return await crypto.subtle.verify("Ed25519", cryptoKey, signatureBytes, messageBytes);
+    const payloadBuffer = Buffer.from(rawBody, "utf8");
+    const signatureBuffer = Buffer.from(signatureHeader, "base64");
+    return ed25519Verify(null, payloadBuffer, publicKeyPem, signatureBuffer);
   } catch {
     return false;
   }
@@ -50,14 +39,13 @@ export async function handleGhlMarketplaceShadow(
     const locationId = body?.locationId ?? body?.location_id ?? null;
 
     const signatureHeader = request.headers["x-ghl-signature"] as string | undefined;
-    const timestampHeader = request.headers["x-ghl-timestamp"] as string | undefined;
 
     let signatureOk: boolean | null = null;
     if (signatureHeader) {
       const rawBody = typeof request.body === "string"
         ? request.body
         : JSON.stringify(request.body);
-      signatureOk = await verifyEd25519Signature(rawBody, signatureHeader, timestampHeader);
+      signatureOk = verifyGhlSignature(rawBody, signatureHeader);
     }
 
     const headersToStore: Record<string, string> = {};
