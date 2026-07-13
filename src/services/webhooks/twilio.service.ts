@@ -1419,50 +1419,50 @@ async function effectivePath(
     }
 
     if (citaTareaResult.tarea.detectada && fields.locationId) {
+      const alreadyTagged = await contactHasTag(contactId, tokenGhl, "tarea_registradaai");
+      if (alreadyTagged) {
+        console.info(`[Effective] CitaTarea: contacto ya tiene tag tarea_registradaai, skip tag+task (idempotencia)`);
+      } else {
+        try {
+          await createLocationTag(fields.locationId, tokenGhl, "tarea_registradaai");
+          await safeAddContactTags(contactId, tokenGhl, ["tarea_registradaai"], fields.locationId);
+          console.info(`[Effective] CitaTarea: applied tag tarea_registradaai`);
+        } catch (err) {
+          console.error(`[Effective] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+        }
+      }
+
       if (ghlNativeTaskWorkflow) {
         console.info(`[Effective] [GHL native workflow] task creation skipped for cuenta ${idCuenta}`);
-      } else {
-        const alreadyTagged = await contactHasTag(contactId, tokenGhl, "tarea_registradaai");
-        if (alreadyTagged) {
-          console.info(`[Effective] CitaTarea: contacto ya tiene tag tarea_registradaai, skip task creation (idempotencia)`);
-        } else {
-          try {
-            await createLocationTag(fields.locationId, tokenGhl, "tarea_registradaai");
-            await safeAddContactTags(contactId, tokenGhl, ["tarea_registradaai"], fields.locationId);
-            console.info(`[Effective] CitaTarea: applied tag tarea_registradaai`);
-          } catch (err) {
-            console.error(`[Effective] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+      } else if (!alreadyTagged) {
+        try {
+          const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
+          const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
+          let dueDate = citaTareaResult.tarea.fecha_vencimiento;
+          if (!dueDate) {
+            const fallback = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+            dueDate = fallback.toISOString();
           }
 
+          let assignedTo: string | undefined;
           try {
-            const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
-            const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
-            let dueDate = citaTareaResult.tarea.fecha_vencimiento;
-            if (!dueDate) {
-              const fallback = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-              dueDate = fallback.toISOString();
+            const apptInfo = await getContactAppointmentInfo(contactId, tokenGhl, now);
+            if (apptInfo?.assignedUserId) {
+              assignedTo = apptInfo.assignedUserId;
             }
+          } catch { /* best-effort */ }
 
-            let assignedTo: string | undefined;
-            try {
-              const apptInfo = await getContactAppointmentInfo(contactId, tokenGhl, now);
-              if (apptInfo?.assignedUserId) {
-                assignedTo = apptInfo.assignedUserId;
-              }
-            } catch { /* best-effort */ }
-
-            const taskResult = await createContactTask(contactId, tokenGhl, {
-              title: tareaTitle,
-              body: tareaBody,
-              dueDate,
-              assignedTo,
-            });
-            if (taskResult) {
-              console.info(`[Effective] CitaTarea: created GHL task id=${taskResult.id}`);
-            }
-          } catch (err) {
-            console.error(`[Effective] CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
+          const taskResult = await createContactTask(contactId, tokenGhl, {
+            title: tareaTitle,
+            body: tareaBody,
+            dueDate,
+            assignedTo,
+          });
+          if (taskResult) {
+            console.info(`[Effective] CitaTarea: created GHL task id=${taskResult.id}`);
           }
+        } catch (err) {
+          console.error(`[Effective] CitaTarea: error creating GHL task (best-effort):`, err instanceof Error ? err.message : err);
         }
       }
     }

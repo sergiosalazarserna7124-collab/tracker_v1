@@ -535,16 +535,16 @@ export async function processFathomCall(
     }
 
     if (citaTareaResult.tarea.detectada) {
+      try {
+        await safeAddContactTag(contactId, account.token_ghl, "tarea_registradaai", locationId);
+        console.info(`[Fathom] CitaTarea: applied tag tarea_registradaai`);
+      } catch (err) {
+        console.error(`[Fathom] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
+      }
+
       if (account.ghl_native_task_workflow) {
         console.info(`[Fathom] [GHL native workflow] task creation skipped for cuenta ${idCuenta}`);
       } else {
-        try {
-          await safeAddContactTag(contactId, account.token_ghl, "tarea_registradaai", locationId);
-          console.info(`[Fathom] CitaTarea: applied tag tarea_registradaai`);
-        } catch (err) {
-          console.error(`[Fathom] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
-        }
-
         try {
           const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
           const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
