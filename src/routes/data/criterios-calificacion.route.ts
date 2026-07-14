@@ -37,6 +37,17 @@ const criteriosCanalSchema = {
   additionalProperties: false,
 } as const;
 
+const categoriaCustomSchema = {
+  type: "object",
+  required: ["slug", "label", "descripcion"],
+  properties: {
+    slug: { type: "string", minLength: 1 },
+    label: { type: "string", minLength: 1 },
+    descripcion: { type: "string" },
+  },
+  additionalProperties: false,
+} as const;
+
 const criteriosBodySchema = {
   oneOf: [
     {
@@ -57,6 +68,10 @@ const criteriosBodySchema = {
             videollamadas: criteriosCanalSchema,
           },
           additionalProperties: false,
+        },
+        categorias_custom: {
+          type: "array",
+          items: categoriaCustomSchema,
         },
       },
       additionalProperties: false,

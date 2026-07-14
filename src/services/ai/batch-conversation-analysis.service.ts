@@ -92,6 +92,7 @@ function buildChatBatchSchema(estadosEnum: string[]) {
 function buildChatBatchSystemPrompt(
   embudo: Array<{ id: string; nombre: string }>,
   promptEmpresa?: string,
+  categoriasCustom?: Array<{ slug: string; label: string; descripcion: string }>,
 ): string {
   const parts: string[] = [];
 
@@ -110,6 +111,13 @@ Responde ÚNICAMENTE con el JSON solicitado. Sin texto adicional.`);
     parts.push(`## ETAPAS DEL EMBUDO (usa el ID exacto)\n${embudoStr}\n\nElige el ID que mejor describe el estado del lead. Si no puedes determinar, devuelve null.`);
   } else {
     parts.push(`## CATEGORÍAS GENERALES\nUsa: "interesado", "no_interesado", "seguimiento", "programado"`);
+  }
+
+  if (categoriasCustom && categoriasCustom.length > 0) {
+    const customStr = categoriasCustom
+      .map((c) => `- ID: "${c.slug}" | Nombre: "${c.label}" | Significado: ${c.descripcion}`)
+      .join("\n");
+    parts.push(`## CATEGORÍAS ADICIONALES DEFINIDAS POR EL CLIENTE\nAdemás de las etapas anteriores, considera estas categorías personalizadas:\n${customStr}\n\nSi el lead encaja mejor en una de estas categorías, úsala como valor de "categoria".`);
   }
 
   parts.push(`## OBJECIONES DE VENTA
@@ -168,8 +176,9 @@ export async function analyzeChatBatch(params: {
   prompt_empresa?: string | null;
   openai_api_key?: string | null;
   id_cuenta?: number | null;
+  categorias_custom?: Array<{ slug: string; label: string; descripcion: string }> | null;
 }): Promise<ChatBatchAnalysisResult> {
-  const { messages, embudo, prompt_empresa, openai_api_key, id_cuenta } = params;
+  const { messages, embudo, prompt_empresa, openai_api_key, id_cuenta, categorias_custom } = params;
 
   const conversationText = truncateConversation(messages);
   if (!conversationText) {
@@ -185,8 +194,11 @@ export async function analyzeChatBatch(params: {
     ? embudoIds
     : ["interesado", "no_interesado", "seguimiento", "programado"];
 
-  const schema = buildChatBatchSchema(estadosValidos);
-  const systemPrompt = buildChatBatchSystemPrompt(embudo, prompt_empresa ?? undefined);
+  const customSlugs = (categorias_custom ?? []).map((c) => c.slug);
+  const allEstados = [...estadosValidos, ...customSlugs.filter((s) => !estadosValidos.includes(s))];
+
+  const schema = buildChatBatchSchema(allEstados);
+  const systemPrompt = buildChatBatchSystemPrompt(embudo, prompt_empresa ?? undefined, categorias_custom ?? undefined);
 
   const { object, usage } = await generateObject({
     model,

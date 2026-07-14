@@ -15,6 +15,12 @@ export interface CriteriosCanal {
   umbral_minimo: number;
 }
 
+export interface CategoriaCustom {
+  slug: string;
+  label: string;
+  descripcion: string;
+}
+
 export interface CriteriosCalificacion {
   /** Categorías de ia_categoria que cuentan como lead calificado */
   categorias_calificadas: string[];
@@ -26,6 +32,8 @@ export interface CriteriosCalificacion {
     llamadas?: CriteriosCanal;
     videollamadas?: CriteriosCanal;
   };
+  /** Categorías custom definidas por el tenant (AUT-1526) */
+  categorias_custom?: CategoriaCustom[];
 }
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
@@ -92,6 +100,38 @@ export function parseCriteriosCalificacion(raw: unknown): CriteriosCalificacion 
     categorias_calificadas: (obj.categorias_calificadas as string[]).map((s) => s.trim()),
     umbral_minimo: typeof umbral === "number" ? umbral : 1,
   };
+
+  if (obj.categorias_custom !== undefined) {
+    if (!Array.isArray(obj.categorias_custom)) {
+      throw new Error("categorias_custom debe ser un array");
+    }
+    const slugs = new Set<string>();
+    for (const item of obj.categorias_custom as unknown[]) {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        throw new Error("Cada categoría custom debe ser un objeto con slug, label y descripcion");
+      }
+      const cat = item as Record<string, unknown>;
+      if (typeof cat.slug !== "string" || cat.slug.trim() === "") {
+        throw new Error("slug de categoría custom debe ser un string no vacío");
+      }
+      if (typeof cat.label !== "string" || cat.label.trim() === "") {
+        throw new Error("label de categoría custom debe ser un string no vacío");
+      }
+      if (typeof cat.descripcion !== "string") {
+        throw new Error("descripcion de categoría custom debe ser un string");
+      }
+      const slug = cat.slug.trim();
+      if (slugs.has(slug)) {
+        throw new Error(`slug duplicado en categorias_custom: "${slug}"`);
+      }
+      slugs.add(slug);
+    }
+    result.categorias_custom = (obj.categorias_custom as Array<Record<string, unknown>>).map((c) => ({
+      slug: (c.slug as string).trim(),
+      label: (c.label as string).trim(),
+      descripcion: (c.descripcion as string).trim(),
+    }));
+  }
 
   if (obj.canales !== undefined) {
     if (typeof obj.canales !== "object" || obj.canales === null || Array.isArray(obj.canales)) {

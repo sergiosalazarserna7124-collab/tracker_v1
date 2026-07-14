@@ -1,6 +1,7 @@
 import { db as pgPool } from "../../config/database.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { analyzeChatBatch, analyzeLlamadaBatch } from "../ai/batch-conversation-analysis.service.js";
+import { parseCriteriosCalificacion } from "../data/criterios-calificacion.utils.js";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -8,6 +9,7 @@ interface CuentaBatchRow {
   id_cuenta: number;
   openai_api_key: string | null;
   embudo_personalizado: unknown;
+  criterios_calificacion: unknown;
   prompt_ventas: string | null;
   prompt_llamadas: string | null;
 }
@@ -76,7 +78,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
   const cuentasResult = await withRetry(
     () => pgPool.query<CuentaBatchRow>(
       `SELECT c.id_cuenta, c.openai_api_key, c.embudo_personalizado,
-              c.prompt_ventas, c.prompt_llamadas
+              c.criterios_calificacion, c.prompt_ventas, c.prompt_llamadas
        FROM cuentas c
        WHERE (c.estado_cuenta NOT IN ('cancelado', 'inactivo') OR c.estado_cuenta IS NULL)
        ${accountFilter}
@@ -96,6 +98,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
     chats: ChatPendienteRow[];
     llamadas: LlamadaPendienteRow[];
     embudo: Array<{ id: string; nombre: string }>;
+    categorias_custom: Array<{ slug: string; label: string; descripcion: string }>;
   }
 
   const cuentasConPendientes: CuentaConPendientes[] = [];
@@ -144,11 +147,22 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
       ? (cuenta.embudo_personalizado as Array<{ id: string; nombre: string }>)
       : [];
 
+    let categoriasCustom: Array<{ slug: string; label: string; descripcion: string }> = [];
+    try {
+      const criterios = cuenta.criterios_calificacion
+        ? parseCriteriosCalificacion(cuenta.criterios_calificacion)
+        : null;
+      categoriasCustom = criterios?.categorias_custom ?? [];
+    } catch {
+      // criterios_calificacion malformado — ignorar categorías custom
+    }
+
     cuentasConPendientes.push({
       cuenta,
       chats: chatsResult.rows,
       llamadas: llamadasResult.rows,
       embudo,
+      categorias_custom: categoriasCustom,
     });
 
     console.info(
@@ -208,6 +222,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
         prompt_empresa: item.cuenta.prompt_ventas,
         openai_api_key: item.cuenta.openai_api_key,
         id_cuenta: item.cuenta.id_cuenta,
+        categorias_custom: item.categorias_custom.length > 0 ? item.categorias_custom : null,
       });
 
       // Actualizar: ia_objeciones siempre; ia_categoria solo si aún es null
