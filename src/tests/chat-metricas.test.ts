@@ -7,8 +7,8 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { computeChatMetrica } from "../services/data/chats.service.js";
-import type { MetricaConfigChat } from "../types/metricas.js";
+import { computeChatMetrica, computeKeywordMetrica } from "../services/data/chats.service.js";
+import type { MetricaConfigChat, MetricaConfigChatKeyword } from "../types/metricas.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -181,5 +181,225 @@ describe("computeChatMetrica — avg_response_time", () => {
     };
     const result = computeChatMetrica([], config);
     assert.equal(result.valor, 0);
+  });
+});
+
+// ─── Keyword metric fixtures ─────────────────────────────────────────────────
+
+const KEYWORD_ROWS = [
+  {
+    id_evento: 10,
+    id_cuenta: 10,
+    fecha_y_hora_z: "2025-01-10T10:00:00Z",
+    estado: "activo",
+    origen: "WhatsApp",
+    asesor_asignado: "Ana",
+    ia_categoria: "prospecto_caliente",
+    ia_objeciones: [],
+    tags_internos: [],
+    primer_msg_lead_at: "2025-01-10T10:05:00Z",
+    es_calificado: true,
+    chat: [
+      { role: "lead", message: "Hola, quiero información sobre precios" },
+      { role: "agent", message: "Claro, te paso la cotización" },
+      { role: "lead", message: "¿Cuánto cuesta el plan básico?" },
+    ],
+  },
+  {
+    id_evento: 11,
+    id_cuenta: 10,
+    fecha_y_hora_z: "2025-01-11T09:00:00Z",
+    estado: "activo",
+    origen: "WhatsApp",
+    asesor_asignado: "Pedro",
+    ia_categoria: "no_interesado",
+    ia_objeciones: [],
+    tags_internos: [],
+    primer_msg_lead_at: "2025-01-11T09:03:00Z",
+    es_calificado: true,
+    chat: [
+      { role: "lead", message: "No me interesa, gracias" },
+      { role: "agent", message: "Entendido, que tenga buen día" },
+    ],
+  },
+  {
+    id_evento: 12,
+    id_cuenta: 10,
+    fecha_y_hora_z: "2025-01-12T14:00:00Z",
+    estado: "cerrado",
+    origen: "SMS",
+    asesor_asignado: "Ana",
+    ia_categoria: "cliente_ganado",
+    ia_objeciones: [],
+    tags_internos: [],
+    primer_msg_lead_at: null,
+    es_calificado: true,
+    chat: [
+      { role: "lead", message: "Quiero cotización del plan premium" },
+      { role: "agent", message: "El precio del plan premium es $200/mes, incluye cotización detallada" },
+    ],
+  },
+  {
+    id_evento: 13,
+    id_cuenta: 10,
+    fecha_y_hora_z: "2025-01-13T14:00:00Z",
+    estado: "activo",
+    origen: "WhatsApp",
+    asesor_asignado: "Ana",
+    ia_categoria: "prospecto_caliente",
+    ia_objeciones: [],
+    tags_internos: [],
+    primer_msg_lead_at: "2025-01-13T14:01:00Z",
+    es_calificado: true,
+    chat: null,
+  },
+] as Parameters<typeof computeKeywordMetrica>[0];
+
+// ─── Tests: conteo_keyword ───────────────────────────────────────────────────
+
+describe("computeKeywordMetrica — countMode chats", () => {
+  test("cuenta chats con al menos una ocurrencia del keyword (lead only)", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw1",
+      nombre: "Chats con cotización",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: ["cotización"],
+      matchScope: "mensajes_lead",
+      countMode: "chats",
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(result.valor, 1); // solo row 12 tiene "cotización" en lead msgs
+  });
+
+  test("cuenta chats con keyword en todo el chat", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw2",
+      nombre: "Chats mencionan cotización",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: ["cotización"],
+      matchScope: "todo_el_chat",
+      countMode: "chats",
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(result.valor, 2); // row 10 (agent msg) + row 12 (lead msg)
+  });
+
+  test("devuelve 0 si keywords vacío", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw3",
+      nombre: "Sin keywords",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: [],
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(result.valor, 0);
+  });
+});
+
+describe("computeKeywordMetrica — countMode ocurrencias", () => {
+  test("cuenta todas las ocurrencias de keywords en mensajes del lead", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw4",
+      nombre: "Ocurrencias precio",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: ["precio", "precios"],
+      matchScope: "mensajes_lead",
+      countMode: "ocurrencias",
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(result.valor, 1); // row 10: "precios" en primer msg lead
+  });
+
+  test("cuenta ocurrencias en todo el chat", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw5",
+      nombre: "Ocurrencias precio total",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: ["precio"],
+      matchScope: "todo_el_chat",
+      countMode: "ocurrencias",
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(result.valor, 1); // row 12 agent msg: "precio"
+  });
+});
+
+describe("computeKeywordMetrica — accent normalization", () => {
+  test("match case-insensitive y accent-insensitive por defecto", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw6",
+      nombre: "Match cotizacion sin acento",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: ["cotizacion"],
+      matchScope: "mensajes_lead",
+      countMode: "chats",
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(result.valor, 1); // "cotización" normalizada matchea "cotizacion"
+  });
+
+  test("no matchea substrings (word boundary)", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw7",
+      nombre: "No falsos positivos",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: ["plan"],
+      matchScope: "mensajes_lead",
+      countMode: "chats",
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(result.valor, 2); // row 10 "plan básico", row 12 "plan premium"
+  });
+
+  test("normalizeAccents false: no normaliza", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw8",
+      nombre: "Sin normalización",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: ["cotizacion"],
+      matchScope: "mensajes_lead",
+      countMode: "chats",
+      normalizeAccents: false,
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(result.valor, 0); // "cotización" ≠ "cotizacion" without normalization
+  });
+});
+
+describe("computeKeywordMetrica — null/empty chat", () => {
+  test("row con chat null se ignora sin error", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw9",
+      nombre: "Con null chat",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: ["plan"],
+      matchScope: "mensajes_lead",
+      countMode: "chats",
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(typeof result.valor, "number");
+  });
+
+  test("multiple keywords matchean en OR", () => {
+    const config: MetricaConfigChatKeyword = {
+      id: "kw10",
+      nombre: "Multi keyword",
+      tipo: "chat",
+      chatSubtipo: "conteo_keyword",
+      keywords: ["interesa", "información"],
+      matchScope: "mensajes_lead",
+      countMode: "chats",
+    };
+    const result = computeKeywordMetrica(KEYWORD_ROWS, config);
+    assert.equal(result.valor, 2); // row 10 "información", row 11 "interesa"
   });
 });

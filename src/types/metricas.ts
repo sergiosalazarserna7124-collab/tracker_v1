@@ -57,13 +57,27 @@ export interface MetricaConfigChat extends MetricaConfigBase {
   chatFiltroValor?: string;
 }
 
+export type KeywordMatchScope = "mensajes_lead" | "todo_el_chat";
+export type KeywordCountMode = "chats" | "ocurrencias";
+
+export interface MetricaConfigChatKeyword extends MetricaConfigBase {
+  tipo: "chat";
+  chatSubtipo: "conteo_keyword";
+  keywords: string[];
+  matchScope?: KeywordMatchScope;
+  countMode?: KeywordCountMode;
+  normalizeAccents?: boolean;
+  paneles?: string[];
+}
+
 export type MetricaConfig =
   | MetricaConfigManual
   | MetricaConfigAutomatica
   | MetricaConfigWebhook
   | MetricaConfigAds
   | MetricaConfigEmbudoEtapa
-  | MetricaConfigChat;
+  | MetricaConfigChat
+  | MetricaConfigChatKeyword;
 
 // ─── Resultado de métrica custom de chat ─────────────────────────────────────
 

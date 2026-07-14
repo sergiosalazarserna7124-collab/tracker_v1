@@ -2,7 +2,12 @@ import { db } from "../../config/database.js";
 import { drizzleDb } from "../../config/drizzle.js";
 import { cuentas } from "../../db/schema.js";
 import { eq } from "drizzle-orm";
-import type { MetricaConfig, MetricaConfigChat, ChatMetricaResultado } from "../../types/metricas.js";
+import type {
+  MetricaConfig,
+  MetricaConfigChat,
+  MetricaConfigChatKeyword,
+  ChatMetricaResultado,
+} from "../../types/metricas.js";
 import {
   esCalificado,
   parseCriteriosCalificacion,
@@ -10,6 +15,11 @@ import {
 } from "./criterios-calificacion.utils.js";
 
 // ─── Tipos internos ───────────────────────────────────────────────────────────
+
+interface ChatMessage {
+  role?: string;
+  message?: string;
+}
 
 interface ChatRow {
   id_evento: number;
@@ -23,6 +33,10 @@ interface ChatRow {
   tags_internos: unknown;
   primer_msg_lead_at: string | null;
   es_calificado: boolean;
+}
+
+interface ChatRowWithTranscript extends ChatRow {
+  chat: ChatMessage[] | null;
 }
 
 // ─── Cómputo de métricas custom tipo "chat" ───────────────────────────────────
@@ -112,6 +126,102 @@ export function computeChatMetrica(
   return { id, nombre, tipo: "chat", valor: 0 };
 }
 
+// ─── Keyword matching helpers ─────────────────────────────────────────────────
+
+const ACCENT_MAP: Record<string, string> = {
+  á: "a", é: "e", í: "i", ó: "o", ú: "u", ü: "u",
+  à: "a", è: "e", ì: "i", ò: "o", ù: "u",
+  ä: "a", ë: "e", ï: "i", ö: "o",
+  â: "a", ê: "e", î: "i", ô: "o", û: "u",
+  ñ: "n",
+};
+
+function removeAccents(text: string): string {
+  return text.replace(/[áéíóúüàèìòùäëïöâêîôûñ]/g, (ch) => ACCENT_MAP[ch] ?? ch);
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildKeywordRegex(keywords: string[], normalizeAccents: boolean): RegExp {
+  const patterns = keywords.map((kw) => {
+    let escaped = escapeRegex(kw.toLowerCase());
+    if (normalizeAccents) escaped = removeAccents(escaped);
+    return `\\b${escaped}\\b`;
+  });
+  return new RegExp(patterns.join("|"), "gi");
+}
+
+function extractTexts(
+  messages: ChatMessage[],
+  scope: "mensajes_lead" | "todo_el_chat",
+): string[] {
+  const texts: string[] = [];
+  for (const msg of messages) {
+    if (!msg.message) continue;
+    if (scope === "todo_el_chat" || msg.role === "lead") {
+      texts.push(msg.message);
+    }
+  }
+  return texts;
+}
+
+export function computeKeywordMetrica(
+  rows: ChatRowWithTranscript[],
+  config: MetricaConfigChatKeyword,
+): ChatMetricaResultado {
+  const { id, nombre, keywords } = config;
+  const matchScope = config.matchScope ?? "mensajes_lead";
+  const countMode = config.countMode ?? "chats";
+  const normalizeAccents = config.normalizeAccents !== false;
+
+  if (!keywords.length) {
+    return { id, nombre, tipo: "chat", valor: 0 };
+  }
+
+  const regex = buildKeywordRegex(keywords, normalizeAccents);
+
+  let total = 0;
+
+  for (const row of rows) {
+    const messages = Array.isArray(row.chat) ? row.chat : [];
+    const texts = extractTexts(messages, matchScope);
+
+    let chatMatches = 0;
+    for (const text of texts) {
+      const haystack = normalizeAccents
+        ? removeAccents(text.toLowerCase())
+        : text.toLowerCase();
+      regex.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = regex.exec(haystack)) !== null) {
+        chatMatches++;
+        if (countMode === "chats") break;
+      }
+      if (countMode === "chats" && chatMatches > 0) break;
+    }
+
+    if (countMode === "chats") {
+      total += chatMatches > 0 ? 1 : 0;
+    } else {
+      total += chatMatches;
+    }
+  }
+
+  return { id, nombre, tipo: "chat", valor: total };
+}
+
+// ─── Type guard for keyword configs ──────────────────────────────────────────
+
+function isKeywordConfig(m: MetricaConfig): m is MetricaConfigChatKeyword {
+  return m.tipo === "chat" && "chatSubtipo" in m && (m as MetricaConfigChatKeyword).chatSubtipo === "conteo_keyword";
+}
+
+function isStandardChatConfig(m: MetricaConfig): m is MetricaConfigChat {
+  return m.tipo === "chat" && !("chatSubtipo" in m);
+}
+
 // ─── Servicio principal ───────────────────────────────────────────────────────
 
 export interface GetChatsParams {
@@ -155,9 +265,9 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
     }
   }
 
-  const chatMetricasConfig = metricasConfig.filter(
-    (m): m is MetricaConfigChat => m.tipo === "chat",
-  );
+  const standardChatConfigs = metricasConfig.filter(isStandardChatConfig);
+  const keywordConfigs = metricasConfig.filter(isKeywordConfig);
+  const needTranscript = keywordConfigs.length > 0;
 
   // ── 2. Obtener chats_logs ───────────────────────────────────────────────
   const conditions: string[] = ["id_cuenta = $1", "excluida_dashboard = false"];
@@ -174,14 +284,18 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
 
   const where = conditions.join(" AND ");
 
+  const chatColumn = needTranscript ? ", chat" : "";
+
   // ChatRowRaw = resultado directo de BD, sin es_calificado
-  interface ChatRowRaw extends Omit<ChatRow, "es_calificado"> {}
+  interface ChatRowRaw extends Omit<ChatRow, "es_calificado"> {
+    chat?: ChatMessage[] | null;
+  }
 
   const { rows: rawRows } = await db.query<ChatRowRaw>(
     `SELECT
        id_evento, id_cuenta, fecha_y_hora_z, estado, origen,
        asesor_asignado, ia_categoria, ia_objeciones, tags_internos,
-       primer_msg_lead_at
+       primer_msg_lead_at${chatColumn}
      FROM chats_logs
      WHERE ${where}
      ORDER BY primer_msg_lead_at DESC`,
@@ -195,9 +309,21 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
   }));
 
   // ── 4. Calcular métricas custom ─────────────────────────────────────────
-  const metricasCustom: ChatMetricaResultado[] = chatMetricasConfig.map((config) =>
+  const metricasCustom: ChatMetricaResultado[] = standardChatConfigs.map((config) =>
     computeChatMetrica(rows, config),
   );
+
+  // ── 4b. Calcular métricas keyword (requieren transcript) ───────────────
+  if (keywordConfigs.length > 0) {
+    const rowsWithTranscript: ChatRowWithTranscript[] = rawRows.map((r) => ({
+      ...r,
+      chat: Array.isArray(r.chat) ? r.chat : null,
+      es_calificado: esCalificado(r.ia_categoria, criterios, "chats"),
+    }));
+    for (const config of keywordConfigs) {
+      metricasCustom.push(computeKeywordMetrica(rowsWithTranscript, config));
+    }
+  }
 
   return { chats: rows, metricasCustom, total: rows.length };
 }
