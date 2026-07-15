@@ -73,6 +73,12 @@ const criteriosBodySchema = {
           type: "array",
           items: categoriaCustomSchema,
         },
+        prompt_calificacion_chats: {
+          oneOf: [
+            { type: "string", minLength: 1 },
+            { type: "null" },
+          ],
+        },
       },
       additionalProperties: false,
     },
