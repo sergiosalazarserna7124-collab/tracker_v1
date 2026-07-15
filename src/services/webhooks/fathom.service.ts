@@ -441,7 +441,10 @@ export async function processFathomCall(
 
   // Aplicar acciones incrementar_metrica de reglas matcheadas
   if (reglasResult.matched_rules.length > 0 && idCuenta) {
-    await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[Fathom]");
+    await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[Fathom]", {
+      eventTs: meetingDate ?? new Date(),
+      eventKey: recordingId ? `fathom:${recordingId}` : null,
+    });
   }
 
   // ── Fase 5: Sync final (GHL tag + DB update) ─────────────────────────────

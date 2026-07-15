@@ -183,6 +183,8 @@ export const cuentas = pgTable("cuentas", {
   canales_activos: jsonb("canales_activos"),
   // ── V14: flag para suprimir createContactTask cuando el tenant tiene workflow nativo GHL (AUT-1490) ──
   ghl_native_task_workflow: boolean("ghl_native_task_workflow").notNull().default(false),
+  // ── V15: zona horaria IANA del tenant (AUT-1555) ──────────────────────────
+  zona_horaria_iana: text("zona_horaria_iana"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

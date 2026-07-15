@@ -1028,7 +1028,10 @@ async function effectivePath(
   const funnelStageFromReglas = collectFunnelStages(reglasResult.matched_rules);
 
   if (reglasResult.matched_rules.length > 0 && idCuenta) {
-    await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[Effective]");
+    await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[Effective]", {
+      eventTs: now,
+      eventKey: callSid ? `twilio:${callSid}` : null,
+    });
   }
   // Regla explícita del cliente tiene mayor prioridad que clasificación IA
   const effectiveEstado = funnelStageFromReglas ?? aiEstado;

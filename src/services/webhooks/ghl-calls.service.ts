@@ -565,7 +565,10 @@ async function effectivePath(
   const funnelStageFromReglas = collectFunnelStages(reglasResult.matched_rules);
 
   if (reglasResult.matched_rules.length > 0 && idCuenta) {
-    await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[GhlCalls/Effective]");
+    await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[GhlCalls/Effective]", {
+      eventTs: now,
+      eventKey: contactId ? `ghl:${contactId}:${now.toISOString()}` : null,
+    });
   }
   const effectiveEstado = funnelStageFromReglas ?? aiEstado;
   const leadEmbudoData = embudoPersonalizado

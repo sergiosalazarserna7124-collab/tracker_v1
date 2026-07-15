@@ -332,7 +332,10 @@ async function processVozInternal(
       categoriaFromReglas = collectCategoria(reglasResult.matched_rules) ?? reglasResult.matched_categoria;
 
       if (reglasResult.matched_rules.length > 0 && idCuenta) {
-        await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, label);
+        await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, label, {
+          eventTs: now,
+          eventKey: callId ? `voz:${callId}` : null,
+        });
       }
     } catch (err) {
       console.error(`${label} Error evaluando reglas de etiquetas:`, err);
