@@ -1,6 +1,6 @@
 import { and, eq, desc } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
-import { guionesCoach, cuentas } from "../../db/schema.js";
+import { guionesCoach, cuentas, evaluacionesCoach } from "../../db/schema.js";
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -126,6 +126,19 @@ export async function upsertGuion(
       .update(guionesCoach)
       .set({ activo: false })
       .where(eq(guionesCoach.id, existing.id));
+
+    // Reconciliación: eliminar evaluaciones de la versión anterior para que
+    // el drainer re-evalúe esas llamadas con el guion actualizado.
+    const deleted = await drizzleDb
+      .delete(evaluacionesCoach)
+      .where(eq(evaluacionesCoach.guion_id, existing.id))
+      .returning({ id: evaluacionesCoach.id });
+
+    if (deleted.length > 0) {
+      console.info(
+        `[upsertGuion] Reconciliación: eliminadas ${deleted.length} evaluaciones del guion ${existing.id} (v${existing.version}) para re-evaluación`,
+      );
+    }
   }
 
   const newVersion = existing ? existing.version + 1 : 1;
