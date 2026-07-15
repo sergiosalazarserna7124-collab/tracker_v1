@@ -124,12 +124,13 @@ export async function processReasignacion(
   // Antes este bloque sobreescribía el closer correcto con el email del setter.
   results.resumenes_diarios_agendas = 0;
 
-  // ── 4. chats_logs (notas_extra = nombre del closer asignado) ────────────────
+  // ── 4. chats_logs (notas_extra + asesor_asignado = nombre del closer asignado) ──
   try {
     const closerValue = fields.nombreCloser || fields.closerMail || null;
-    if (closerValue) {
+    const isPlaceholder = !closerValue || closerValue === "por asignar";
+    if (closerValue && !isPlaceholder) {
       const res = await pgPool.query(
-        `UPDATE chats_logs SET notas_extra = $1
+        `UPDATE chats_logs SET notas_extra = $1, asesor_asignado = $1
          WHERE id_lead = $2 ${idCuenta ? "AND id_cuenta = $3" : ""}`,
         idCuenta ? [closerValue, contactId, idCuenta] : [closerValue, contactId],
       );
