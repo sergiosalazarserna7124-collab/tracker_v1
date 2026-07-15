@@ -331,19 +331,19 @@ Si ninguno aplica claramente, elige el más cercano de los proporcionados.`;
 interface CategoriaLlamada {
   id: string;
   nombre: string;
+  definicion?: string;
   temas: string[];
   prompt: string;
 }
 
-function resolveCategoryPrompt(
+function resolveCategoryMatch(
   categoria: string | null | undefined,
   categoriasLlamadas: unknown,
-): string | null {
+): CategoriaLlamada | null {
   if (!categoria || !Array.isArray(categoriasLlamadas)) return null;
-  const match = (categoriasLlamadas as CategoriaLlamada[]).find(
+  return (categoriasLlamadas as CategoriaLlamada[]).find(
     (c) => c.id === categoria,
-  );
-  return match?.prompt || null;
+  ) ?? null;
 }
 
 // ─── Helper: inyectar contexto de empresa + prompt específico de llamadas ────
@@ -361,10 +361,28 @@ function withFullContext(
     parts.push(`CONTEXTO DE LA EMPRESA:\n${promptVentas}\n\nUsa este contexto para entender el negocio y decidir si el lead cumple las condiciones del embudo.`);
   }
 
-  const effectivePromptLlamadas = resolveCategoryPrompt(categoria, categoriasLlamadas) ?? promptLlamadas;
+  const categoryMatch = resolveCategoryMatch(categoria, categoriasLlamadas);
 
-  if (effectivePromptLlamadas) {
-    parts.push(`INSTRUCCIONES ESPECÍFICAS PARA EVALUAR LLAMADAS TELEFÓNICAS:\n${effectivePromptLlamadas}`);
+  if (categoryMatch) {
+    const categoryParts: string[] = [];
+
+    if (categoryMatch.prompt) {
+      categoryParts.push(`INSTRUCCIONES ESPECÍFICAS PARA EVALUAR LLAMADAS TELEFÓNICAS:\n${categoryMatch.prompt}`);
+    }
+
+    if (categoryMatch.definicion && categoryMatch.definicion.trim()) {
+      categoryParts.push(`CUÁNDO APLICA ESTA CATEGORÍA (${categoryMatch.nombre}): ${categoryMatch.definicion.trim()}`);
+    }
+
+    if (Array.isArray(categoryMatch.temas) && categoryMatch.temas.length > 0) {
+      categoryParts.push(`TEMAS/SEÑALES A CONSIDERAR: ${categoryMatch.temas.join(", ")}`);
+    }
+
+    if (categoryParts.length > 0) {
+      parts.push(categoryParts.join("\n\n"));
+    }
+  } else if (promptLlamadas) {
+    parts.push(`INSTRUCCIONES ESPECÍFICAS PARA EVALUAR LLAMADAS TELEFÓNICAS:\n${promptLlamadas}`);
   }
 
   if (parts.length === 0) return basePrompt;
