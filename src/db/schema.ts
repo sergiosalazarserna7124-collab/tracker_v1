@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique, index, uuid, numeric } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique, index, uniqueIndex, uuid, numeric } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 /**
@@ -185,6 +185,8 @@ export const cuentas = pgTable("cuentas", {
   ghl_native_task_workflow: boolean("ghl_native_task_workflow").notNull().default(false),
   // ── V15: zona horaria IANA del tenant (AUT-1555) ──────────────────────────
   zona_horaria_iana: text("zona_horaria_iana"),
+  // ── V16: gate coach de ventas (AUT-1595) ─────────────────────────────────
+  coach_habilitado: boolean("coach_habilitado").notNull().default(false),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────
@@ -321,6 +323,40 @@ export const ghlMarketplaceShadow = pgTable("ghl_marketplace_shadow", {
 }, (table) => [
   index("idx_ghl_shadow_location").on(table.location_id),
   index("idx_ghl_shadow_received").on(table.received_at),
+]);
+
+// ── Tablas: Coach de ventas (AUT-1595) ──────────────────────────────────────
+
+export const guionesCoach = pgTable("guiones_coach", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  id_cuenta: integer("id_cuenta").notNull().references(() => cuentas.id_cuenta, { onDelete: "cascade" }),
+  categoria_llamada_id: text("categoria_llamada_id").notNull(),
+  version: integer("version").notNull().default(1),
+  secciones: jsonb("secciones").notNull(),
+  umbral: integer("umbral").notNull().default(70),
+  activo: boolean("activo").notNull().default(true),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index("idx_guiones_cuenta_cat").on(table.id_cuenta, table.categoria_llamada_id),
+]);
+
+export const evaluacionesCoach = pgTable("evaluaciones_coach", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  id_cuenta: integer("id_cuenta").notNull().references(() => cuentas.id_cuenta, { onDelete: "cascade" }),
+  log_llamada_id: integer("log_llamada_id").notNull(),
+  guion_id: uuid("guion_id").notNull().references(() => guionesCoach.id, { onDelete: "cascade" }),
+  guion_version: integer("guion_version").notNull(),
+  scores_secciones: jsonb("scores_secciones").notNull(),
+  score_total: integer("score_total").notNull(),
+  cumple_umbral: boolean("cumple_umbral").notNull(),
+  secciones_faltantes_must_have: jsonb("secciones_faltantes_must_have"),
+  nota_accionable: text("nota_accionable"),
+  ghl_tag_applied: text("ghl_tag_applied"),
+  evaluated_at: timestamp("evaluated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("uq_eval_cuenta_llamada").on(table.id_cuenta, table.log_llamada_id),
+  index("idx_eval_guion").on(table.guion_id),
 ]);
 
 export const metricDataPoints = pgTable("metric_data_points", {

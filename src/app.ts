@@ -36,6 +36,8 @@ import { contactoTranscripcionesRoute } from "./routes/data/contacto-transcripci
 import { bulkTagRoute } from "./routes/data/bulk-tag.route.js";
 import { ghlMarketplaceShadowRoute } from "./routes/webhooks/ghl-marketplace-shadow.route.js";
 import { asistenciaWebhookRoute } from "./routes/webhooks/asistencia.route.js";
+import { coachGuionRoute } from "./routes/data/coach-guion.route.js";
+import { cronCoachDrainerRoute } from "./routes/cron/coach-drainer.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -82,6 +84,8 @@ export async function buildApp() {
   await app.register(ghlMarketplaceShadowRoute, { prefix: "/webhooks" });
   await app.register(asistenciaWebhookRoute, { prefix: "/webhooks" });
   await app.register(bulkTagRoute, { prefix: "/api" });
+  await app.register(coachGuionRoute, { prefix: "/api" });
+  await app.register(cronCoachDrainerRoute, { prefix: "/cron" });
 
   return app;
 }

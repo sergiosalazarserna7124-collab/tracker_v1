@@ -53,6 +53,7 @@ export interface CuentaFullRow extends CuentaRow {
   categorias_llamadas: unknown;
   ghl_opportunity_fields_config: unknown;
   ghl_native_task_workflow: boolean;
+  coach_habilitado: boolean;
 }
 
 export interface GhlContact {
@@ -162,6 +163,7 @@ export async function getAccountFullById(idCuenta: number): Promise<CuentaFullRo
           categorias_llamadas: cuentas.categorias_llamadas,
           ghl_opportunity_fields_config: cuentas.ghl_opportunity_fields_config,
           ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
+          coach_habilitado: cuentas.coach_habilitado,
         })
         .from(cuentas)
         .where(eq(cuentas.id_cuenta, idCuenta))
@@ -195,6 +197,7 @@ export async function getAccountFullByLocationId(locationId: string): Promise<Cu
           categorias_llamadas: cuentas.categorias_llamadas,
           ghl_opportunity_fields_config: cuentas.ghl_opportunity_fields_config,
           ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
+          coach_habilitado: cuentas.coach_habilitado,
         })
         .from(cuentas)
         .where(eq(cuentas.locationid, locationId))
