@@ -34,6 +34,7 @@ export interface CriteriosCalificacion {
   };
   /** Categorías custom definidas por el tenant (AUT-1526) */
   categorias_custom?: CategoriaCustom[];
+  prompt_calificacion_chats?: string | null;
 }
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
@@ -131,6 +132,16 @@ export function parseCriteriosCalificacion(raw: unknown): CriteriosCalificacion 
       label: (c.label as string).trim(),
       descripcion: (c.descripcion as string).trim(),
     }));
+  }
+
+  if (obj.prompt_calificacion_chats !== undefined && obj.prompt_calificacion_chats !== null) {
+    if (typeof obj.prompt_calificacion_chats !== "string") {
+      throw new Error("prompt_calificacion_chats debe ser un string o null");
+    }
+    const trimmed = (obj.prompt_calificacion_chats as string).trim();
+    if (trimmed.length > 0) {
+      result.prompt_calificacion_chats = trimmed;
+    }
   }
 
   if (obj.canales !== undefined) {

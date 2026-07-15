@@ -7,6 +7,7 @@ import { withRetry } from "../../utils/retry.utils.js";
 import { db as pgPool } from "../../config/database.js";
 import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
 import { enrichWithGemini } from "../ai/gemini-enrichment.service.js";
+import { parseCriteriosCalificacion } from "../data/criterios-calificacion.utils.js";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -388,6 +389,7 @@ interface CuentaAnalisisRow {
   reglas_etiquetas: unknown;
   prompt_ventas: string | null;
   canales_activos: string[] | null;
+  criterios_calificacion: unknown;
 }
 
 interface AnalyzeChatsResult {
@@ -427,7 +429,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
   const cuentasQuery = `
     SELECT c.id_cuenta, c.token_ghl, c.openai_api_key,
            c.embudo_personalizado, c.reglas_etiquetas, c.prompt_ventas,
-           c.canales_activos
+           c.canales_activos, c.criterios_calificacion
     FROM cuentas c
     WHERE c.embudo_personalizado IS NOT NULL
       AND jsonb_array_length(c.embudo_personalizado::jsonb) > 0
@@ -455,6 +457,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
     chats: ChatLogRow[];
     embudo: Array<{ id: string; nombre: string; condition?: string; fuentes?: string[] }>;
     reglas_etiquetas: Array<{ id: string; tag: string; condition: string; source?: string; fuentes?: string[] }>;
+    prompt_calificacion_chats: string | null;
   }
 
   const cuentasConChats: CuentaConChats[] = [];
@@ -478,6 +481,16 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
 
     console.info(`[analyzeChats] cuenta=${cuenta.id_cuenta}: ${chatsResult.rows.length} chats pendientes`);
 
+    let promptCalificacionChats: string | null = null;
+    try {
+      const criterios = cuenta.criterios_calificacion
+        ? parseCriteriosCalificacion(cuenta.criterios_calificacion)
+        : null;
+      promptCalificacionChats = criterios?.prompt_calificacion_chats ?? null;
+    } catch {
+      // criterios_calificacion malformado — ignorar
+    }
+
     cuentasConChats.push({
       cuenta,
       chats: chatsResult.rows,
@@ -487,6 +500,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
       reglas_etiquetas: Array.isArray(cuenta.reglas_etiquetas)
         ? (cuenta.reglas_etiquetas as Array<{ id: string; tag: string; condition: string; source?: string; fuentes?: string[] }>)
         : [],
+      prompt_calificacion_chats: promptCalificacionChats,
     });
   }
 
@@ -501,7 +515,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
   );
 
   outer: for (let round = 0; round < maxChatsPerAccount; round++) {
-    for (const { cuenta, chats, embudo, reglas_etiquetas } of cuentasConChats) {
+    for (const { cuenta, chats, embudo, reglas_etiquetas, prompt_calificacion_chats } of cuentasConChats) {
       if (round >= chats.length) continue; // esta cuenta ya terminó sus chats
 
       // Circuit breaker: detener si superamos el tiempo máximo
@@ -541,6 +555,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
           openai_api_key: cuenta.openai_api_key ?? undefined,
           id_cuenta: cuenta.id_cuenta,
           canales_activos: Array.isArray(cuenta.canales_activos) ? cuenta.canales_activos : null,
+          prompt_calificacion_chats,
         });
 
         // ── 3b. Actualizar chats_logs ───────────────────────────────────────

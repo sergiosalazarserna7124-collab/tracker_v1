@@ -93,11 +93,16 @@ function buildChatBatchSystemPrompt(
   embudo: Array<{ id: string; nombre: string }>,
   promptEmpresa?: string,
   categoriasCustom?: Array<{ slug: string; label: string; descripcion: string }>,
+  promptCalificacionChats?: string | null,
 ): string {
   const parts: string[] = [];
 
   if (promptEmpresa) {
     parts.push(`## CONTEXTO DE LA EMPRESA\n${promptEmpresa}`);
+  }
+
+  if (promptCalificacionChats) {
+    parts.push(`## CRITERIOS DE CALIFICACIÓN DEL CLIENTE (CHATS)\n${promptCalificacionChats}\n\nUsa estos criterios proporcionados por el cliente para guiar tu clasificación del lead.`);
   }
 
   parts.push(`## TU FUNCIÓN
@@ -177,8 +182,9 @@ export async function analyzeChatBatch(params: {
   openai_api_key?: string | null;
   id_cuenta?: number | null;
   categorias_custom?: Array<{ slug: string; label: string; descripcion: string }> | null;
+  prompt_calificacion_chats?: string | null;
 }): Promise<ChatBatchAnalysisResult> {
-  const { messages, embudo, prompt_empresa, openai_api_key, id_cuenta, categorias_custom } = params;
+  const { messages, embudo, prompt_empresa, openai_api_key, id_cuenta, categorias_custom, prompt_calificacion_chats } = params;
 
   const conversationText = truncateConversation(messages);
   if (!conversationText) {
@@ -198,7 +204,7 @@ export async function analyzeChatBatch(params: {
   const allEstados = [...estadosValidos, ...customSlugs.filter((s) => !estadosValidos.includes(s))];
 
   const schema = buildChatBatchSchema(allEstados);
-  const systemPrompt = buildChatBatchSystemPrompt(embudo, prompt_empresa ?? undefined, categorias_custom ?? undefined);
+  const systemPrompt = buildChatBatchSystemPrompt(embudo, prompt_empresa ?? undefined, categorias_custom ?? undefined, prompt_calificacion_chats);
 
   const { object, usage } = await generateObject({
     model,

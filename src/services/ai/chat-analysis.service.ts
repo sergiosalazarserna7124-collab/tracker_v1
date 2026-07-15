@@ -131,11 +131,16 @@ function buildSystemPrompt(
   reglas_etiquetas: ReglaEtiqueta[],
   prompt_empresa?: string,
   canales_activos?: string[] | null,
+  prompt_calificacion_chats?: string | null,
 ): string {
   const parts: string[] = [];
 
   if (prompt_empresa) {
     parts.push(`## CONTEXTO DE LA EMPRESA\n${prompt_empresa}\n\nUsa este contexto para entender el negocio y sus productos/servicios al momento de clasificar los leads.`);
+  }
+
+  if (prompt_calificacion_chats) {
+    parts.push(`## CRITERIOS DE CALIFICACIÓN DEL CLIENTE (CHATS)\n${prompt_calificacion_chats}\n\nUsa estos criterios proporcionados por el cliente para guiar tu clasificación del lead.`);
   }
 
   parts.push(`## TU FUNCIÓN
@@ -219,8 +224,9 @@ export async function analyzeChatWithAI(params: {
   openai_api_key?: string;
   id_cuenta?: number | null;
   canales_activos?: string[] | null;
+  prompt_calificacion_chats?: string | null;
 }): Promise<ChatAnalysisResult> {
-  const { messages, embudo, reglas_etiquetas, prompt_empresa, openai_api_key, id_cuenta, canales_activos } = params;
+  const { messages, embudo, reglas_etiquetas, prompt_empresa, openai_api_key, id_cuenta, canales_activos, prompt_calificacion_chats } = params;
 
   const model = resolveModel(openai_api_key);
   const embudoIds = embudo.map((e) => e.id);
@@ -228,7 +234,7 @@ export async function analyzeChatWithAI(params: {
   const estadosValidos = embudoIds.length > 0 ? embudoIds : fallbackIds;
 
   const schema = buildChatClassificationSchema(estadosValidos);
-  const systemPrompt = buildSystemPrompt(embudo, reglas_etiquetas, prompt_empresa, canales_activos);
+  const systemPrompt = buildSystemPrompt(embudo, reglas_etiquetas, prompt_empresa, canales_activos, prompt_calificacion_chats);
   const conversationText = truncateConversation(messages);
 
   if (!conversationText) {

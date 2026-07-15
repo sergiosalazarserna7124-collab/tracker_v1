@@ -109,6 +109,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
     llamadas: LlamadaPendienteRow[];
     embudo: EmbudoEtapaConFuentes[];
     categorias_custom: Array<{ slug: string; label: string; descripcion: string }>;
+    prompt_calificacion_chats: string | null;
   }
 
   const cuentasConPendientes: CuentaConPendientes[] = [];
@@ -158,11 +159,13 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
       : [];
 
     let categoriasCustom: Array<{ slug: string; label: string; descripcion: string }> = [];
+    let promptCalificacionChats: string | null = null;
     try {
       const criterios = cuenta.criterios_calificacion
         ? parseCriteriosCalificacion(cuenta.criterios_calificacion)
         : null;
       categoriasCustom = criterios?.categorias_custom ?? [];
+      promptCalificacionChats = criterios?.prompt_calificacion_chats ?? null;
     } catch {
       // criterios_calificacion malformado — ignorar categorías custom
     }
@@ -173,6 +176,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
       llamadas: llamadasResult.rows,
       embudo,
       categorias_custom: categoriasCustom,
+      prompt_calificacion_chats: promptCalificacionChats,
     });
 
     console.info(
@@ -234,6 +238,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
         openai_api_key: item.cuenta.openai_api_key,
         id_cuenta: item.cuenta.id_cuenta,
         categorias_custom: item.categorias_custom.length > 0 ? item.categorias_custom : null,
+        prompt_calificacion_chats: item.prompt_calificacion_chats,
       });
 
       // Actualizar: ia_objeciones siempre; ia_categoria solo si aún es null
