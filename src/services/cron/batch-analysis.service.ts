@@ -36,6 +36,16 @@ export interface BatchAnalysisResult {
   llamadas_api: number;
 }
 
+type EmbudoEtapaConFuentes = { id: string; nombre: string; fuentes?: string[] };
+
+function filterEmbudoByFuente(
+  embudo: EmbudoEtapaConFuentes[],
+  fuente: "chat" | "videollamadas",
+): Array<{ id: string; nombre: string }> {
+  const aliases = fuente === "chat" ? ["chat", "chats", "todas"] : ["videollamadas", "todas"];
+  return embudo.filter((e) => !e.fuentes || e.fuentes.length === 0 || e.fuentes.some((f) => aliases.includes(f)));
+}
+
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
 // Max API calls por ejecución (entre chats + llamadas)
@@ -97,7 +107,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
     cuenta: CuentaBatchRow;
     chats: ChatPendienteRow[];
     llamadas: LlamadaPendienteRow[];
-    embudo: Array<{ id: string; nombre: string }>;
+    embudo: EmbudoEtapaConFuentes[];
     categorias_custom: Array<{ slug: string; label: string; descripcion: string }>;
   }
 
@@ -144,7 +154,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
     if (chatsResult.rows.length === 0 && llamadasResult.rows.length === 0) continue;
 
     const embudo = Array.isArray(cuenta.embudo_personalizado)
-      ? (cuenta.embudo_personalizado as Array<{ id: string; nombre: string }>)
+      ? (cuenta.embudo_personalizado as Array<{ id: string; nombre: string; fuentes?: string[] }>)
       : [];
 
     let categoriasCustom: Array<{ slug: string; label: string; descripcion: string }> = [];
@@ -216,9 +226,10 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
         continue;
       }
 
+      const embudoChat = filterEmbudoByFuente(item.embudo, "chat");
       const result = await analyzeChatBatch({
         messages,
-        embudo: item.embudo,
+        embudo: embudoChat,
         prompt_empresa: item.cuenta.prompt_ventas,
         openai_api_key: item.cuenta.openai_api_key,
         id_cuenta: item.cuenta.id_cuenta,

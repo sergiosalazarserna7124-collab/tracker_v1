@@ -453,7 +453,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
   interface CuentaConChats {
     cuenta: CuentaAnalisisRow;
     chats: ChatLogRow[];
-    embudo: Array<{ id: string; nombre: string; condition?: string }>;
+    embudo: Array<{ id: string; nombre: string; condition?: string; fuentes?: string[] }>;
     reglas_etiquetas: Array<{ id: string; tag: string; condition: string; source?: string; fuentes?: string[] }>;
   }
 
@@ -482,7 +482,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
       cuenta,
       chats: chatsResult.rows,
       embudo: Array.isArray(cuenta.embudo_personalizado)
-        ? (cuenta.embudo_personalizado as Array<{ id: string; nombre: string; condition?: string }>)
+        ? (cuenta.embudo_personalizado as Array<{ id: string; nombre: string; condition?: string; fuentes?: string[] }>)
         : [],
       reglas_etiquetas: Array.isArray(cuenta.reglas_etiquetas)
         ? (cuenta.reglas_etiquetas as Array<{ id: string; tag: string; condition: string; source?: string; fuentes?: string[] }>)
@@ -530,9 +530,12 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
         }
 
         // ── 3a. Analizar con IA ─────────────────────────────────────────────
+        const embudoChat = embudo.filter((e) =>
+          !e.fuentes || e.fuentes.length === 0 || e.fuentes.some((f) => ["chat", "chats", "todas"].includes(f)),
+        );
         const result = await analyzeChatWithAI({
           messages,
-          embudo,
+          embudo: embudoChat,
           reglas_etiquetas,
           prompt_empresa: cuenta.prompt_ventas ?? undefined,
           openai_api_key: cuenta.openai_api_key ?? undefined,
