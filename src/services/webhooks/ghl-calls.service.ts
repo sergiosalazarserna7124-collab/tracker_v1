@@ -567,7 +567,9 @@ async function effectivePath(
   if (reglasResult.matched_rules.length > 0 && idCuenta) {
     await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[GhlCalls/Effective]", {
       eventTs: now,
-      eventKey: contactId ? `ghl:${contactId}:${now.toISOString()}` : null,
+      // GHL payloads lack a per-call stable ID (no callSid/recordingId equivalent).
+      // contactId is the best deterministic key; same contact + same day deduplicates.
+      eventKey: contactId ? `ghl:${contactId}` : null,
     });
   }
   const effectiveEstado = funnelStageFromReglas ?? aiEstado;
