@@ -318,6 +318,7 @@ async function followUpPath(
     intentos_contacto: number | null;
     estado: string | null;
     fecha_evento: Date | null;
+    fecha_primera_llamada: Date | null;
   };
   let existing: ExistingRow | null = null;
 
@@ -326,6 +327,7 @@ async function followUpPath(
     intentos_contacto: llamadas.intentos_contacto,
     estado: llamadas.estado,
     fecha_evento: llamadas.fecha_evento,
+    fecha_primera_llamada: llamadas.fecha_primera_llamada,
   };
 
   // Prioridad 1: buscar por mail_lead
@@ -458,7 +460,10 @@ async function followUpPath(
               nombre_closer: nombreCloser,
               fecha_y_hora_de_seguimiento: now,
               intentos_contacto: (existing!.intentos_contacto ?? 0) + 1,
-              ...((existing!.intentos_contacto ?? 0) === 0 && { fecha_primera_llamada: now }),
+              // AUT-1621: sanear registros legacy con llamadas pero sin fecha_primera_llamada.
+              // Se setea siempre que esté NULL (no solo en el primer intento), para que
+              // no queden marcados como "sin contacto" pese a tener llamadas.
+              ...(existing!.fecha_primera_llamada == null && { fecha_primera_llamada: now }),
               ...(callSid && { callsid: callSid }),
               ...(transcript && { trancription: transcript }),
               ...(iadesc && { iadescripcion: iadesc }),
@@ -1077,6 +1082,7 @@ async function effectivePath(
     intentos_contacto: number | null;
     estado: string | null;
     fecha_evento: Date | null;
+    fecha_primera_llamada: Date | null;
   };
   let existing: ExistingRow | null = null;
 
@@ -1085,6 +1091,7 @@ async function effectivePath(
     intentos_contacto: llamadas.intentos_contacto,
     estado: llamadas.estado,
     fecha_evento: llamadas.fecha_evento,
+    fecha_primera_llamada: llamadas.fecha_primera_llamada,
   };
 
   // Prioridad 1: buscar por mail_lead
@@ -1214,7 +1221,10 @@ async function effectivePath(
               nombre_closer: nombreCloser,
               fecha_y_hora_de_seguimiento: now,
               intentos_contacto: (existing!.intentos_contacto ?? 0) + 1,
-              ...((existing!.intentos_contacto ?? 0) === 0 && { fecha_primera_llamada: now }),
+              // AUT-1621: sanear registros legacy con llamadas pero sin fecha_primera_llamada.
+              // Se setea siempre que esté NULL (no solo en el primer intento), para que
+              // no queden marcados como "sin contacto" pese a tener llamadas.
+              ...(existing!.fecha_primera_llamada == null && { fecha_primera_llamada: now }),
               trancription: transcript,
               iadescripcion: iadesc,
               tags_internos: tagsInternos,
