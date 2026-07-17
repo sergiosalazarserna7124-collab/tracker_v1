@@ -313,6 +313,35 @@ function normalizeClassifierResult(
   return { ...result, categoria: fallbackId };
 }
 
+// ─── Extracción de objeciones para llamadas telefónicas (Twilio/GHL) ─────────
+
+export async function extractLlamadaObjections(
+  transcript: string,
+  promptVentas: string | null,
+  openaiApiKey?: string | null,
+  idCuenta?: number | null,
+  canalesActivos?: string[] | null,
+): Promise<ObjecionItem[] | null> {
+  if (!transcript.trim()) return null;
+
+  const model = resolveModel(openaiApiKey);
+
+  try {
+    const result = await generateObject({
+      model,
+      schema: objectionsSchema,
+      system: withBusinessContext(OBJECTIONS_PROMPT, promptVentas, canalesActivos),
+      prompt: `Transcript:\n${transcript}`,
+      temperature: 0,
+    });
+    void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, result.usage.totalTokens ?? 0);
+    return result.object.objeciones;
+  } catch (err) {
+    console.error("[extractLlamadaObjections] Error:", err);
+    return null;
+  }
+}
+
 // ─── Análisis de texto para llamadas telefónicas (Twilio/GHL) ────────────────
 
 const DEFAULT_LLAMADA_ANALYSIS_PROMPT = `Eres un Analista Senior de Ventas. Analiza la transcripción de esta llamada telefónica y genera un diagnóstico detallado en formato Markdown que incluya:

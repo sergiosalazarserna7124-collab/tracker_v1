@@ -140,7 +140,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
           `SELECT id, id_cuenta, transcripcion
            FROM log_llamadas
            WHERE id_cuenta = $1
-             AND ia_descripcion IS NULL
+             AND (ia_descripcion IS NULL OR ia_objeciones IS NULL)
              AND transcripcion IS NOT NULL
              AND transcripcion <> ''
              AND ts >= NOW() - INTERVAL '48 hours'
@@ -305,9 +305,10 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
 
       await pgPool.query(
         `UPDATE log_llamadas
-         SET ia_descripcion = $1
+         SET ia_descripcion = $1,
+             ia_objeciones = COALESCE(ia_objeciones, $3::jsonb)
          WHERE id = $2`,
-        [result.ia_descripcion, llamada.id],
+        [result.ia_descripcion, llamada.id, JSON.stringify(result.objeciones)],
       );
 
       llamadasUpdated++;

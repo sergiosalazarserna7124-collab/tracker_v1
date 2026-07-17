@@ -87,6 +87,7 @@ export const llamadas = pgTable("registros_de_llamada", {
   gemini_enriquecimiento: jsonb("gemini_enriquecimiento"),
   duracion_segundos: integer("duracion_segundos"),
   ubicacion_aprox: text("ubicacion_aprox"),
+  ia_objeciones: jsonb("ia_objeciones"),
 });
 
 /**
@@ -122,6 +123,7 @@ export const logLlamadas = pgTable("log_llamadas", {
   gemini_enriquecimiento: jsonb("gemini_enriquecimiento"),
   duracion_segundos: integer("duracion_segundos"),
   ubicacion_aprox: text("ubicacion_aprox"),
+  ia_objeciones: jsonb("ia_objeciones"),
 });
 
 /**

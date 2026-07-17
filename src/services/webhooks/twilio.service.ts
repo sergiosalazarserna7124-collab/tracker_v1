@@ -26,7 +26,8 @@ import {
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
-import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-analysis.service.js";
+import { generateLlamadaAnalysisText, diarizarTranscripcion, extractLlamadaObjections } from "../ai/call-analysis.service.js";
+import type { ObjecionItem } from "../ai/call-analysis.service.js";
 import { evaluateReglas, type DynamicValueContext } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.service.js";
@@ -84,6 +85,7 @@ interface LogEntry {
   geminiEnriquecimiento?: object | null;
   duracionSegundos?: number | null;
   ubicacionAprox?: string | null;
+  iaObjeciones?: ObjecionItem[] | null;
 }
 
 async function insertLogEntry(entry: LogEntry): Promise<void> {
@@ -112,6 +114,7 @@ async function insertLogEntry(entry: LogEntry): Promise<void> {
           ...(entry.geminiEnriquecimiento && { gemini_enriquecimiento: entry.geminiEnriquecimiento }),
           ...(entry.duracionSegundos != null && { duracion_segundos: entry.duracionSegundos }),
           ...(entry.ubicacionAprox && { ubicacion_aprox: entry.ubicacionAprox }),
+          ...(entry.iaObjeciones && { ia_objeciones: entry.iaObjeciones }),
         }),
       { label: "insertLogEntry" },
     );
@@ -998,7 +1001,7 @@ async function effectivePath(
 
   // AUT-1144: si las reglas ya se evaluaron antes de clasificar, reutilizar;
   // si no, evaluar ahora (fallback retrocompatible)
-  const [analysisText, reglasResult] = await Promise.all([
+  const [analysisText, reglasResult, objections] = await Promise.all([
     (promptLlamadas || promptVentas)
       ? generateLlamadaAnalysisText(
           transcript,
@@ -1024,6 +1027,15 @@ async function effectivePath(
           console.error("[Effective] Error evaluando reglas de etiquetas:", err);
           return { matched_tags: [] as string[], matched_rules: [] as MatchedRule[], matched_categoria: null };
         }),
+    extractLlamadaObjections(
+      transcript,
+      promptVentas ?? null,
+      openaiApiKey,
+      idCuenta,
+    ).catch((err) => {
+      console.error("[Effective] Error extrayendo objeciones:", err);
+      return null;
+    }),
   ]);
 
   // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador
@@ -1236,6 +1248,7 @@ async function effectivePath(
               ...(geminiResult && { gemini_enriquecimiento: geminiResult }),
               ...(callDurationSeconds != null && { duracion_segundos: callDurationSeconds }),
               ...(ubicacionAprox && { ubicacion_aprox: ubicacionAprox }),
+              ...(objections && { ia_objeciones: objections }),
             })
             .where(eq(llamadas.id_registro, existing!.id_registro)),
         { label: "effectivePath/update" },
@@ -1276,6 +1289,7 @@ async function effectivePath(
               ...(geminiResult && { gemini_enriquecimiento: geminiResult }),
               ...(callDurationSeconds != null && { duracion_segundos: callDurationSeconds }),
               ...(ubicacionAprox && { ubicacion_aprox: ubicacionAprox }),
+              ...(objections && { ia_objeciones: objections }),
             })
             .returning({ id_registro: llamadas.id_registro }),
         { label: "effectivePath/insert" },
@@ -1500,6 +1514,7 @@ async function effectivePath(
     geminiEnriquecimiento: geminiResult,
     duracionSegundos: callDurationSeconds,
     ubicacionAprox: ubicacionAprox,
+    iaObjeciones: objections,
   });
 
   return {

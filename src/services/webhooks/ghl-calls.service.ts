@@ -33,7 +33,8 @@ import {
   mapEstadoToTag,
   type CallClassification,
 } from "../ai/call-classification.service.js";
-import { generateLlamadaAnalysisText, diarizarTranscripcion } from "../ai/call-analysis.service.js";
+import { generateLlamadaAnalysisText, diarizarTranscripcion, extractLlamadaObjections } from "../ai/call-analysis.service.js";
+import type { ObjecionItem } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
@@ -280,6 +281,7 @@ interface LogEntry {
   speedToLead?: string | null;
   tagsInternos?: string[] | null;
   leadEmbudoPersonalizado?: Record<string, unknown> | null;
+  iaObjeciones?: ObjecionItem[] | null;
 }
 
 async function insertLogEntry(entry: LogEntry): Promise<void> {
@@ -304,6 +306,7 @@ async function insertLogEntry(entry: LogEntry): Promise<void> {
           speed_to_lead: entry.speedToLead ?? null,
           tags_internos: entry.tagsInternos ?? [],
           ...(entry.leadEmbudoPersonalizado && { lead_embudo_personalizado: entry.leadEmbudoPersonalizado }),
+          ...(entry.iaObjeciones && { ia_objeciones: entry.iaObjeciones }),
         }),
       { label: "GhlCalls/insertLogEntry" },
     );
@@ -537,7 +540,7 @@ async function effectivePath(
   const aiEstado = classification.estado ?? "seguimiento";
 
   // AUT-1144: si las reglas ya se evaluaron antes de clasificar, reutilizar
-  const [analysisText, reglasResult] = await Promise.all([
+  const [analysisText, reglasResult, objections] = await Promise.all([
     (promptLlamadas || promptVentas)
       ? generateLlamadaAnalysisText(
           transcript,
@@ -561,6 +564,15 @@ async function effectivePath(
           console.error("[GhlCalls/Effective] Error evaluando reglas de etiquetas:", err);
           return { matched_tags: [] as string[], matched_rules: [] as MatchedRule[], matched_categoria: null };
         }),
+    extractLlamadaObjections(
+      transcript,
+      promptVentas ?? null,
+      openaiApiKey,
+      idCuenta,
+    ).catch((err) => {
+      console.error("[GhlCalls/Effective] Error extrayendo objeciones:", err);
+      return null;
+    }),
   ]);
 
   // Si hay análisis enriquecido lo usamos; si no, caemos al iadesc breve del clasificador
@@ -680,6 +692,7 @@ async function effectivePath(
               ...(leadEmbudoData && { lead_embudo_personalizado: leadEmbudoData }),
               ...(idUserGhl && { id_user_ghl: idUserGhl }),
               ...(stl !== null && { speed_to_lead: stl }),
+              ...(objections && { ia_objeciones: objections }),
             })
             .where(eq(llamadas.id_registro, existing!.id_registro)),
         { label: "GhlCalls/effectivePath/update" },
@@ -714,6 +727,7 @@ async function effectivePath(
               id_user_ghl: idUserGhl,
               tags_internos: tagsInternos,
               ...(leadEmbudoData && { lead_embudo_personalizado: leadEmbudoData }),
+              ...(objections && { ia_objeciones: objections }),
             })
             .returning({ id_registro: llamadas.id_registro }),
         { label: "GhlCalls/effectivePath/insert" },
@@ -814,6 +828,7 @@ async function effectivePath(
     speedToLead: stlForLog,
     tagsInternos,
     leadEmbudoPersonalizado: leadEmbudoData,
+    iaObjeciones: objections,
   });
 
   return {
