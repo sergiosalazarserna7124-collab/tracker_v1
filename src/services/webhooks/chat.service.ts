@@ -7,6 +7,7 @@ import { fetchWithTimeout } from "../../utils/fetch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { ChatWebhookBody } from "../../schemas/webhooks/chat.schema.js";
 import type { ServiceResult } from "../../types/index.js";
+import { tryInlineChatClassification } from "./inline-chat-classify.service.js";
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -544,6 +545,12 @@ export async function processChatWebhook(
   );
 
   console.log(`[Chat] ✅ Upsert OK — conversationId="${conversationId}" | id_cuenta=${idCuenta} | primer_msg_at=${primerMsgAt} | dateAdded=${dateAdded}`);
+
+  // ── 10b. Inline classification — classify immediately so MQL/SQL metrics
+  // don't drift when the batch cron runs hours later (AUT-1657) ───────────────
+  if (senderRole === "lead") {
+    void tryInlineChatClassification(conversationId, idCuenta);
+  }
 
   // ── 11. Auto-remove tag sin_responder_chat cuando un agente responde ──────
   if (senderRole === "agent" && contactId && tokenGhl) {
