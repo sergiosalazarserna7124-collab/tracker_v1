@@ -9,6 +9,9 @@ const EnvSchema = Type.Object({
     { default: "development" },
   ),
   DATABASE_URL: Type.String({ minLength: 1 }),
+  // Credencial dedicada con permisos DDL para el runner de migraciones (AUT-1688).
+  // Si no está seteada, el runner cae a DATABASE_URL (comportamiento actual → cero regresión).
+  MIGRATIONS_DATABASE_URL: Type.String({ default: "" }),
   CRON_SECRET: Type.String({ minLength: 1 }),
   OPENAI_API_KEY: Type.String({ minLength: 1 }),
   GHL_APP_CLIENT_ID: Type.String({ default: "" }),
@@ -24,6 +27,7 @@ function loadEnv(): Env {
     PORT: process.env.PORT ?? "8080",
     NODE_ENV: process.env.NODE_ENV ?? "development",
     DATABASE_URL: process.env.DATABASE_URL ?? "",
+    MIGRATIONS_DATABASE_URL: process.env.MIGRATIONS_DATABASE_URL ?? "",
     CRON_SECRET: process.env.CRON_SECRET ?? "",
     OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
     GHL_APP_CLIENT_ID: process.env.GHL_APP_CLIENT_ID ?? "696e8c458f9f5e7c1661bf3e-mn1w8ng8",
