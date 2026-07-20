@@ -38,6 +38,8 @@ import { ghlMarketplaceShadowRoute } from "./routes/webhooks/ghl-marketplace-sha
 import { asistenciaWebhookRoute } from "./routes/webhooks/asistencia.route.js";
 import { coachGuionRoute } from "./routes/data/coach-guion.route.js";
 import { cronCoachDrainerRoute } from "./routes/cron/coach-drainer.route.js";
+import { etiquetasDescarteRoute } from "./routes/data/etiquetas-descarte.route.js";
+import { descartarLeadRoute } from "./routes/data/descartar-lead.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -86,6 +88,8 @@ export async function buildApp() {
   await app.register(bulkTagRoute, { prefix: "/api" });
   await app.register(coachGuionRoute, { prefix: "/api" });
   await app.register(cronCoachDrainerRoute, { prefix: "/cron" });
+  await app.register(etiquetasDescarteRoute, { prefix: "/api" });
+  await app.register(descartarLeadRoute, { prefix: "/api" });
 
   return app;
 }

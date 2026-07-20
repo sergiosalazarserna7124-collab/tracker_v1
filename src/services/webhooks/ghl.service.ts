@@ -487,30 +487,43 @@ async function handlePerdido(body: GhlBodyPayload): Promise<AgendaResult> {
   };
 }
 
-// ─── Handler: descartar lead (excluir de dashboard) ─────────────────────────
+// ─── Handler: descartar lead (excluir de dashboard + métricas) ──────────────
 
 async function handleDescartar(body: GhlBodyPayload): Promise<AgendaResult> {
   const fields = extractFields(body);
 
   let updatedChats = 0;
+  let updatedLlamadas = 0;
 
   if (fields.contactId) {
-    const { rowCount } = await withRetry(
+    const chatResult = await withRetry(
       () =>
         db.query(
           `UPDATE chats_logs
-           SET excluida_dashboard = true
-           WHERE id_cuenta = $1 AND id_lead = $2 AND excluida_dashboard = false`,
+           SET excluida_dashboard = true, excluido_metricas = true
+           WHERE id_cuenta = $1 AND id_lead = $2 AND (excluida_dashboard = false OR excluido_metricas = false)`,
           [fields.idCuenta, fields.contactId],
         ),
       { label: "handleDescartar/chats" },
     );
-    updatedChats = rowCount ?? 0;
+    updatedChats = chatResult.rowCount ?? 0;
+
+    const llamadaResult = await withRetry(
+      () =>
+        db.query(
+          `UPDATE registros_de_llamada
+           SET excluido_metricas = true
+           WHERE id_cuenta = $1::text AND ghl_contact_id = $2 AND excluido_metricas = false`,
+          [String(fields.idCuenta), fields.contactId],
+        ),
+      { label: "handleDescartar/llamadas" },
+    );
+    updatedLlamadas = llamadaResult.rowCount ?? 0;
   }
 
   console.log(
     `[GHL handleDescartar] cuenta=${fields.idCuenta} contacto=${fields.contactId} ` +
-    `→ chats_excluidos=${updatedChats}`,
+    `→ chats_excluidos=${updatedChats} llamadas_excluidas=${updatedLlamadas}`,
   );
 
   const tagged = await applyGhlTag(

@@ -88,6 +88,7 @@ export const llamadas = pgTable("registros_de_llamada", {
   duracion_segundos: integer("duracion_segundos"),
   ubicacion_aprox: text("ubicacion_aprox"),
   ia_objeciones: jsonb("ia_objeciones"),
+  excluido_metricas: boolean("excluido_metricas").notNull().default(false),
 });
 
 /**
@@ -189,6 +190,10 @@ export const cuentas = pgTable("cuentas", {
   zona_horaria_iana: text("zona_horaria_iana"),
   // ── V16: gate coach de ventas (AUT-1595) ─────────────────────────────────
   coach_habilitado: boolean("coach_habilitado").notNull().default(false),
+  // ── V17: etiquetas de descarte de leads (AUT-1663) ───────────────────────
+  // NULL = sin etiquetas de descarte configuradas.
+  // Shape: string[] — nombres de etiquetas GHL que marcan un lead como descartado.
+  etiquetas_descarte: jsonb("etiquetas_descarte"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────
