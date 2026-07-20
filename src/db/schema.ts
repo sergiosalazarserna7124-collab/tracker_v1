@@ -375,3 +375,17 @@ export const metricDataPoints = pgTable("metric_data_points", {
 }, (table) => [
   index("idx_mdp_metric_cuenta_ts").on(table.metric_id, table.id_cuenta, table.ts),
 ]);
+
+export const metricasWebhook = pgTable("metricas_webhook", {
+  id:              serial("id").primaryKey(),
+  id_cuenta:       integer("id_cuenta").notNull().references(() => cuentas.id_cuenta, { onDelete: "cascade" }),
+  fecha:           date("fecha").notNull(),
+  campo:           text("campo").notNull(),
+  valor:           numeric("valor", { precision: 18, scale: 4 }).notNull().default("0"),
+  ghl_user_id:     text("ghl_user_id"),
+  ghl_customer_id: text("ghl_customer_id"),
+  created_at:      timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updated_at:      timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index("idx_metricas_webhook_cuenta_fecha").on(table.id_cuenta, table.fecha),
+]);
