@@ -12,6 +12,8 @@ import {
   parseCriteriosCalificacion,
   esCalificado,
   resolverCriterios,
+  CRITERIOS_DEFAULT,
+  DEFAULTS_POR_CANAL,
 } from "../services/data/criterios-calificacion.utils.js";
 
 // ─── parseCriteriosCalificacion ───────────────────────────────────────────────
@@ -195,10 +197,13 @@ describe("esCalificado — lógica de calificación", () => {
     umbral_minimo: 1,
   };
 
-  test("null fallback: criterios=null → siempre true", () => {
-    assert.equal(esCalificado("no_interesado", null), true);
-    assert.equal(esCalificado(null, null), true);
-    assert.equal(esCalificado("presupuesto", null), true);
+  test("null criterios → usa defaults (AUT-1659)", () => {
+    assert.equal(esCalificado("calificada", null), true);
+    assert.equal(esCalificado("cerrada", null), true);
+    assert.equal(esCalificado("interesado", null), true);
+    assert.equal(esCalificado("no_interesado", null), false);
+    assert.equal(esCalificado("no_calificada", null), false);
+    assert.equal(esCalificado(null, null), false);
   });
 
   test("categoria calificada → es_calificado=true", () => {
@@ -243,7 +248,14 @@ describe("esCalificado — con canal", () => {
     assert.equal(esCalificado("cliente_ganado", criterios), false);
   });
 
-  test("criterios null + canal → siempre true", () => {
-    assert.equal(esCalificado("whatever", null, "chats"), true);
+  test("null criterios + canal → usa defaults del canal (AUT-1659)", () => {
+    assert.equal(esCalificado("calificada", null, "chats"), true);
+    assert.equal(esCalificado("interesado", null, "chats"), true);
+    assert.equal(esCalificado("no_calificada", null, "chats"), false);
+    assert.equal(esCalificado("calificada", null, "llamadas"), true);
+    assert.equal(esCalificado("agendado", null, "llamadas"), true);
+    assert.equal(esCalificado("no_contestada", null, "llamadas"), false);
+    assert.equal(esCalificado("calificada", null, "videollamadas"), true);
+    assert.equal(esCalificado("no_show", null, "videollamadas"), false);
   });
 });

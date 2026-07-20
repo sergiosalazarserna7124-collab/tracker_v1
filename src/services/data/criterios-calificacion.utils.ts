@@ -37,6 +37,35 @@ export interface CriteriosCalificacion {
   prompt_calificacion_chats?: string | null;
 }
 
+// ─── Defaults por canal ──────────────────────────────────────────────────────
+// AUT-1659: cuando criterios_calificacion es NULL, aplicamos defaults razonables
+// en vez de marcar todo como calificado. Cada canal tiene sus propias categorías
+// que cuentan como "calificado" según lo que la IA puede clasificar.
+
+export const DEFAULTS_POR_CANAL: Record<Canal, CriteriosCanal> = {
+  chats: {
+    categorias_calificadas: ["calificada", "interesado", "cerrada"],
+    umbral_minimo: 1,
+  },
+  llamadas: {
+    categorias_calificadas: [
+      "calificada", "cerrada", "interesado",
+      "agendado", "reagendado", "confirmado",
+    ],
+    umbral_minimo: 1,
+  },
+  videollamadas: {
+    categorias_calificadas: ["calificada", "cerrada"],
+    umbral_minimo: 1,
+  },
+};
+
+export const CRITERIOS_DEFAULT: CriteriosCalificacion = {
+  categorias_calificadas: ["calificada", "cerrada", "interesado"],
+  umbral_minimo: 1,
+  canales: { ...DEFAULTS_POR_CANAL },
+};
+
 // ─── Helpers internos ─────────────────────────────────────────────────────────
 
 const CANALES_VALIDOS: readonly Canal[] = ["chats", "llamadas", "videollamadas"];
@@ -202,9 +231,8 @@ export function esCalificado(
   criterios: CriteriosCalificacion | null,
   canal?: Canal,
 ): boolean {
-  if (criterios === null) return true;
   if (iaCategoria === null) return false;
-  const efectivos = resolverCriterios(criterios, canal);
+  const efectivos = resolverCriterios(criterios ?? CRITERIOS_DEFAULT, canal);
   const categorias = Array.isArray(iaCategoria) ? iaCategoria : [iaCategoria];
   const coincidencias = categorias.filter((c) =>
     efectivos.categorias_calificadas.includes(c),

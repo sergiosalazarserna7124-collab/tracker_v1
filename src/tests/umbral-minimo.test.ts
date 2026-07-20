@@ -48,8 +48,9 @@ describe("esCalificado — umbral_minimo", () => {
     assert.equal(esCalificado(null, criteriosUmbral2), false);
   });
 
-  test("umbral=2 con criterios null: siempre calificado", () => {
-    assert.equal(esCalificado(["presupuesto"], null), true);
+  test("umbral=2 con criterios null: usa defaults (AUT-1659)", () => {
+    assert.equal(esCalificado(["calificada"], null), true);
+    assert.equal(esCalificado(["no_interesado"], null), false);
   });
 
   test("umbral=2 con canal que tiene su propio umbral", () => {

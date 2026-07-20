@@ -9,6 +9,7 @@ import {
   getCriteriosCalificacion,
   updateCriteriosCalificacion,
   parseCriteriosCalificacion,
+  CRITERIOS_DEFAULT,
 } from "../../services/data/criterios-calificacion.service.js";
 
 export interface CuentaParams {
@@ -31,7 +32,12 @@ export async function handleGetCriteriosCalificacion(
 
   try {
     const criterios = await getCriteriosCalificacion(idCuenta);
-    return reply.send({ success: true, criterios_calificacion: criterios });
+    return reply.send({
+      success: true,
+      criterios_calificacion: criterios,
+      criterios_efectivos: criterios ?? CRITERIOS_DEFAULT,
+      es_default: criterios === null,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("no encontrada")) {
