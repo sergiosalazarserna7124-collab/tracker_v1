@@ -525,6 +525,17 @@ async function processVozInternal(
         tagsToApply.push(clasificacionTag);
       }
 
+      // Zolutium (cuenta 40): tags de retargeting derivados del estado
+      if (idCuenta === ACCOUNT_ALIAS.zolutium) {
+        const retargetEstados = new Set(["no_contesto", "buzon_voz", "colgo_temprano"]);
+        if (retargetEstados.has(estadoFinal)) {
+          tagsToApply.push(GHL_TAGS.llamar_despues_callai);
+        }
+        if (reclassify.estadoOriginal === "no_interesado") {
+          tagsToApply.push(GHL_TAGS.no_interesado_callai);
+        }
+      }
+
       // Tags de reglas de etiquetas
       if (reglasMatchedTags.length > 0) {
         tagsToApply.push(...reglasMatchedTags);
