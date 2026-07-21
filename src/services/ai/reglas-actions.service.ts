@@ -1,11 +1,16 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { cuentas } from "../../db/schema.js";
 import type { MatchedRule } from "./reglas-evaluator.service.js";
 
-interface MetricEntry {
+interface MetricConfig {
+  id: string;
+  tipo?: string;
+  webhookCampo?: string;
+}
+
+interface DedupEntry {
   date?: string;
-  valor?: number;
   keys?: string[];
 }
 
@@ -45,6 +50,7 @@ export async function applyReglasMetricActions(
   try {
     const [cuentaRow] = await drizzleDb
       .select({
+        metricas_config: cuentas.metricas_config,
         metricas_manual_data: cuentas.metricas_manual_data,
         zona_horaria_iana: cuentas.zona_horaria_iana,
       })
@@ -52,38 +58,58 @@ export async function applyReglasMetricActions(
       .where(eq(cuentas.id_cuenta, idCuenta))
       .limit(1);
 
-    const currentData = (cuentaRow?.metricas_manual_data ?? {}) as Record<string, unknown[]>;
+    const metricasConfig = (Array.isArray(cuentaRow?.metricas_config) ? cuentaRow.metricas_config : []) as MetricConfig[];
+    const configById = new Map(metricasConfig.map((m) => [m.id, m]));
+
+    const dedupData = (cuentaRow?.metricas_manual_data ?? {}) as Record<string, DedupEntry[]>;
     const tz = cuentaRow?.zona_horaria_iana ?? "UTC";
     const eventTs = opts?.eventTs ?? new Date();
     const bucketDate = dateInTz(eventTs, tz);
     const eventKey = opts?.eventKey ?? null;
 
+    let dedupDirty = false;
+
     for (const { metrica_id, metrica_incremento } of metricActions) {
-      const entries = (currentData[metrica_id] ?? []) as MetricEntry[];
+      const entries = (dedupData[metrica_id] ?? []) as DedupEntry[];
       let dayEntry = entries.find((e) => e.date === bucketDate);
 
       if (eventKey) {
         if (dayEntry?.keys?.includes(eventKey)) continue;
       }
 
+      const cfg = configById.get(metrica_id);
+      const webhookCampo = cfg?.webhookCampo;
+
+      if (webhookCampo) {
+        await drizzleDb.execute(sql`
+          INSERT INTO metricas_webhook (id_cuenta, fecha, campo, valor, ghl_user_id, updated_at)
+          VALUES (${idCuenta}, ${bucketDate}, ${webhookCampo}, ${String(metrica_incremento)}, NULL, NOW())
+          ON CONFLICT (id_cuenta, fecha, campo) WHERE ghl_user_id IS NULL DO UPDATE
+          SET valor = metricas_webhook.valor + ${String(metrica_incremento)},
+              updated_at = NOW()
+        `);
+      }
+
       if (dayEntry) {
-        dayEntry.valor = (dayEntry.valor ?? 0) + metrica_incremento;
         if (eventKey) {
           dayEntry.keys = dayEntry.keys ?? [];
           dayEntry.keys.push(eventKey);
         }
       } else {
-        dayEntry = { date: bucketDate, valor: metrica_incremento };
+        dayEntry = { date: bucketDate };
         if (eventKey) dayEntry.keys = [eventKey];
         entries.push(dayEntry);
       }
-      currentData[metrica_id] = entries;
+      dedupData[metrica_id] = entries;
+      dedupDirty = true;
     }
 
-    await drizzleDb
-      .update(cuentas)
-      .set({ metricas_manual_data: currentData })
-      .where(eq(cuentas.id_cuenta, idCuenta));
+    if (dedupDirty) {
+      await drizzleDb
+        .update(cuentas)
+        .set({ metricas_manual_data: dedupData })
+        .where(eq(cuentas.id_cuenta, idCuenta));
+    }
   } catch (err) {
     console.error(`${label} Error incrementando métrica custom:`, err);
   }
