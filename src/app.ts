@@ -42,6 +42,7 @@ import { etiquetasDescarteRoute } from "./routes/data/etiquetas-descarte.route.j
 import { descartarLeadRoute } from "./routes/data/descartar-lead.route.js";
 import { objecionesDetalleRoute } from "./routes/data/objeciones-detalle.route.js";
 import { metricasWebhookRoute } from "./routes/webhooks/metricas-webhook.route.js";
+import { calificacionWebhookRoute } from "./routes/webhooks/calificacion.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -94,6 +95,7 @@ export async function buildApp() {
   await app.register(descartarLeadRoute, { prefix: "/api" });
   await app.register(objecionesDetalleRoute, { prefix: "/api/data" });
   await app.register(metricasWebhookRoute, { prefix: "/webhooks" });
+  await app.register(calificacionWebhookRoute, { prefix: "/webhooks" });
 
   return app;
 }

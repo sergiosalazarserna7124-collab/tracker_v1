@@ -230,7 +230,10 @@ export function esCalificado(
   iaCategoria: string | string[] | null,
   criterios: CriteriosCalificacion | null,
   canal?: Canal,
+  calificacionManual?: string | null,
 ): boolean {
+  if (calificacionManual === "calificado") return true;
+  if (calificacionManual === "descartado") return false;
   if (iaCategoria === null) return false;
   const efectivos = resolverCriterios(criterios ?? CRITERIOS_DEFAULT, canal);
   const categorias = Array.isArray(iaCategoria) ? iaCategoria : [iaCategoria];

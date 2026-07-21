@@ -23,6 +23,7 @@ interface LlamadaRow {
   tags_internos: unknown;
   speed_to_lead: number | null;
   es_calificado: boolean;
+  calificacion_manual: string | null;
 }
 
 // ─── Servicio principal ───────────────────────────────────────────────────────
@@ -78,7 +79,7 @@ export async function getLlamadasData(params: GetLlamadasParams): Promise<GetLla
     `SELECT
        id, id_cuenta, ts, tipo_evento, estado_resultado,
        nombre_lead, closer_mail, nombre_closer, phone,
-       tags_internos, speed_to_lead
+       tags_internos, speed_to_lead, calificacion_manual
      FROM log_llamadas
      WHERE ${where}
      ORDER BY ts DESC`,
@@ -87,7 +88,8 @@ export async function getLlamadasData(params: GetLlamadasParams): Promise<GetLla
 
   const rows: LlamadaRow[] = rawRows.map((r) => ({
     ...r,
-    es_calificado: esCalificado(r.estado_resultado, criterios, "llamadas"),
+    calificacion_manual: r.calificacion_manual ?? null,
+    es_calificado: esCalificado(r.estado_resultado, criterios, "llamadas", r.calificacion_manual),
   }));
 
   return { llamadas: rows, total: rows.length };

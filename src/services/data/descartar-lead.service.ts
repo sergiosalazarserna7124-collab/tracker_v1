@@ -21,13 +21,17 @@ export async function descartarLeads(
   let llamadasUpdated = 0;
 
   for (const contactId of contact_ids) {
+    const calificacionManual = descartar ? "descartado" : null;
+
     const chatResult = await withRetry(
       () =>
         db.query(
           `UPDATE chats_logs
-           SET excluido_metricas = $3
-           WHERE id_cuenta = $1 AND id_lead = $2 AND excluido_metricas != $3`,
-          [id_cuenta, contactId, descartar],
+           SET excluido_metricas = $3,
+               calificacion_manual = $4
+           WHERE id_cuenta = $1 AND id_lead = $2
+             AND (excluido_metricas != $3 OR calificacion_manual IS DISTINCT FROM $4)`,
+          [id_cuenta, contactId, descartar, calificacionManual],
         ),
       { label: "descartarLeads/chats" },
     );
@@ -37,9 +41,11 @@ export async function descartarLeads(
       () =>
         db.query(
           `UPDATE registros_de_llamada
-           SET excluido_metricas = $3
-           WHERE id_cuenta = $1::text AND ghl_contact_id = $2 AND excluido_metricas != $3`,
-          [String(id_cuenta), contactId, descartar],
+           SET excluido_metricas = $3,
+               calificacion_manual = $4
+           WHERE id_cuenta = $1::text AND ghl_contact_id = $2
+             AND (excluido_metricas != $3 OR calificacion_manual IS DISTINCT FROM $4)`,
+          [String(id_cuenta), contactId, descartar, calificacionManual],
         ),
       { label: "descartarLeads/llamadas" },
     );

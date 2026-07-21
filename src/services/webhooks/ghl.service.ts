@@ -500,8 +500,8 @@ async function handleDescartar(body: GhlBodyPayload): Promise<AgendaResult> {
       () =>
         db.query(
           `UPDATE chats_logs
-           SET excluida_dashboard = true, excluido_metricas = true
-           WHERE id_cuenta = $1 AND id_lead = $2 AND (excluida_dashboard = false OR excluido_metricas = false)`,
+           SET excluida_dashboard = true, excluido_metricas = true, calificacion_manual = 'descartado'
+           WHERE id_cuenta = $1 AND id_lead = $2 AND (excluida_dashboard = false OR excluido_metricas = false OR calificacion_manual IS DISTINCT FROM 'descartado')`,
           [fields.idCuenta, fields.contactId],
         ),
       { label: "handleDescartar/chats" },
@@ -512,8 +512,8 @@ async function handleDescartar(body: GhlBodyPayload): Promise<AgendaResult> {
       () =>
         db.query(
           `UPDATE registros_de_llamada
-           SET excluido_metricas = true
-           WHERE id_cuenta = $1::text AND ghl_contact_id = $2 AND excluido_metricas = false`,
+           SET excluido_metricas = true, calificacion_manual = 'descartado'
+           WHERE id_cuenta = $1::text AND ghl_contact_id = $2 AND (excluido_metricas = false OR calificacion_manual IS DISTINCT FROM 'descartado')`,
           [String(fields.idCuenta), fields.contactId],
         ),
       { label: "handleDescartar/llamadas" },

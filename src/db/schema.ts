@@ -89,6 +89,7 @@ export const llamadas = pgTable("registros_de_llamada", {
   ubicacion_aprox: text("ubicacion_aprox"),
   ia_objeciones: jsonb("ia_objeciones"),
   excluido_metricas: boolean("excluido_metricas").notNull().default(false),
+  calificacion_manual: text("calificacion_manual"),
 });
 
 /**
@@ -125,6 +126,7 @@ export const logLlamadas = pgTable("log_llamadas", {
   duracion_segundos: integer("duracion_segundos"),
   ubicacion_aprox: text("ubicacion_aprox"),
   ia_objeciones: jsonb("ia_objeciones"),
+  calificacion_manual: text("calificacion_manual"),
 });
 
 /**

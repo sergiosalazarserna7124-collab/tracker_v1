@@ -34,6 +34,7 @@ interface ChatRow {
   primer_msg_lead_at: string | null;
   es_calificado: boolean;
   excluido_metricas: boolean;
+  calificacion_manual: string | null;
 }
 
 interface ChatRowWithTranscript extends ChatRow {
@@ -296,7 +297,8 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
     `SELECT
        id_evento, id_cuenta, fecha_y_hora_z, estado, origen,
        asesor_asignado, ia_categoria, ia_objeciones, tags_internos,
-       primer_msg_lead_at, COALESCE(excluido_metricas, false) AS excluido_metricas${chatColumn}
+       primer_msg_lead_at, COALESCE(excluido_metricas, false) AS excluido_metricas,
+       calificacion_manual${chatColumn}
      FROM chats_logs
      WHERE ${where}
      ORDER BY primer_msg_lead_at DESC`,
@@ -307,7 +309,8 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
   const rows: ChatRow[] = rawRows.map((r) => ({
     ...r,
     excluido_metricas: Boolean(r.excluido_metricas),
-    es_calificado: esCalificado(r.ia_categoria, criterios, "chats"),
+    calificacion_manual: r.calificacion_manual ?? null,
+    es_calificado: esCalificado(r.ia_categoria, criterios, "chats", r.calificacion_manual),
   }));
 
   // ── 4. Calcular métricas custom ─────────────────────────────────────────
@@ -320,7 +323,7 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
     const rowsWithTranscript: ChatRowWithTranscript[] = rawRows.map((r) => ({
       ...r,
       chat: Array.isArray(r.chat) ? r.chat : null,
-      es_calificado: esCalificado(r.ia_categoria, criterios, "chats"),
+      es_calificado: esCalificado(r.ia_categoria, criterios, "chats", r.calificacion_manual),
     }));
     for (const config of keywordConfigs) {
       metricasCustom.push(computeKeywordMetrica(rowsWithTranscript, config));
