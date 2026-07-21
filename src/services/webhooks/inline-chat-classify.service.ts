@@ -3,8 +3,8 @@ import { withRetry } from "../../utils/retry.utils.js";
 import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
 import { parseCriteriosCalificacion } from "../data/criterios-calificacion.utils.js";
 
-// Minimum messages (from lead) required before attempting inline classification
-const MIN_LEAD_MESSAGES = 2;
+// Classify on the very first lead message to prevent night-drift (AUT-1706)
+const MIN_LEAD_MESSAGES = 1;
 
 interface AccountConfigRow {
   openai_api_key: string | null;

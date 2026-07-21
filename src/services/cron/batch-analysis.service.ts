@@ -128,8 +128,8 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
              AND ia_objeciones IS NULL
              AND chat IS NOT NULL
              AND jsonb_array_length(chat::jsonb) > 0
-             AND fecha_y_hora_z >= NOW() - INTERVAL '48 hours'
-           ORDER BY fecha_y_hora_z DESC
+             AND primer_msg_at >= NOW() - INTERVAL '7 days'
+           ORDER BY primer_msg_at DESC
            LIMIT $2`,
           [cuenta.id_cuenta, maxChats],
         ),
