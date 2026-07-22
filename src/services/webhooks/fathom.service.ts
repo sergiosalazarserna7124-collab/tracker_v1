@@ -691,6 +691,10 @@ export async function processFathomCall(
     } else {
       // ── INSERT: sin registro previo (videollamada sin cita en GHL) ───────
       const now = new Date();
+      const leadName = contactName
+        ?? externalInvitees.find(i => i.email === emailLead)?.name?.trim()
+        ?? externalInvitees.find(i => i.email === emailLead)?.matched_speaker_display_name?.trim()
+        ?? emailLead;
 
       await withRetry(
         () =>
@@ -699,7 +703,7 @@ export async function processFathomCall(
             email_lead: emailLead,
             fecha: now,
             fechaReunion: meetingDate ?? now,
-            nombre_de_lead: contactName,
+            nombre_de_lead: leadName,
             origen: utmContent,
             ghl_contact_id: contactId,
             // Para INSERT: priorizar recorded_by.email (quien realmente grabó en Fathom)
@@ -740,7 +744,7 @@ export async function processFathomCall(
               id_cuenta: idCuenta,
               mail_lead: emailLead,
               contact_id_ghl: contactId,
-              nombre_lead: contactName,
+              nombre_lead: leadName,
               tipo_evento: "contacto_creado",
               closer_mail: closerEmail ?? closerEmailFromGhl ?? null,
               nombre_closer: closerName ?? null,
