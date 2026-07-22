@@ -81,6 +81,12 @@ async function fetchConversationsPage(
   const params = new URLSearchParams({
     locationId,
     limit: String(PAGE_SIZE),
+    // La lógica de corte por fecha (reachedCutoff) y el cursor startAfterDate
+    // dependen de que GHL devuelva las conversaciones en orden descendente por
+    // lastMessageDate. Lo fijamos explícitamente para no depender del default
+    // no documentado de GHL (mismo criterio que chat-recovery.service.ts).
+    sortBy: "lastMessageDate",
+    sortOrder: "desc",
   });
   if (searchAfter !== undefined) {
     params.set("startAfterDate", String(searchAfter));
