@@ -159,8 +159,6 @@ async function fetchGhlConversations(
   const params = new URLSearchParams({
     locationId,
     limit: String(limit),
-    sortBy: "lastMessageDate",
-    sortOrder: "desc",
   });
 
   const response = await fetchWithTimeout(

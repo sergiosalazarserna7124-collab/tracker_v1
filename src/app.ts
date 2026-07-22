@@ -21,6 +21,7 @@ import { videoRecoveryRoute } from "./routes/quick-triggers/video-recovery.route
 import { chatRecoveryRoute } from "./routes/quick-triggers/chat-recovery.route.js";
 import { reprocessReglasRoute } from "./routes/quick-triggers/reprocess-reglas.route.js";
 import { backfillMetricasReRoute } from "./routes/quick-triggers/backfill-metricas-re.route.js";
+import { chatBackfillRoute } from "./routes/quick-triggers/chat-backfill.route.js";
 import { chatWebhookRoute } from "./routes/webhooks/chat.route.js";
 import { vozWebhookRoute } from "./routes/webhooks/voz.route.js";
 import { ghlCallbackRoute } from "./routes/oauth/ghl-callback.route.js";
@@ -75,6 +76,7 @@ export async function buildApp() {
   await app.register(chatRecoveryRoute, { prefix: "/api/quick-triggers" });
   await app.register(reprocessReglasRoute, { prefix: "/api/quick-triggers" });
   await app.register(backfillMetricasReRoute, { prefix: "/api/quick-triggers" });
+  await app.register(chatBackfillRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatWebhookRoute, { prefix: "/webhooks" });
   await app.register(vozWebhookRoute, { prefix: "/webhooks" });
   await app.register(ghlCallbackRoute);
