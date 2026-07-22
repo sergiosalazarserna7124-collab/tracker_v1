@@ -13,6 +13,7 @@ export type Canal = "chats" | "llamadas" | "videollamadas";
 export interface CriteriosCanal {
   categorias_calificadas: string[];
   umbral_minimo: number;
+  califica?: boolean;
 }
 
 export interface CategoriaCustom {
@@ -46,6 +47,7 @@ export const DEFAULTS_POR_CANAL: Record<Canal, CriteriosCanal> = {
   chats: {
     categorias_calificadas: ["calificada", "interesado", "cerrada"],
     umbral_minimo: 1,
+    califica: true,
   },
   llamadas: {
     categorias_calificadas: [
@@ -53,10 +55,12 @@ export const DEFAULTS_POR_CANAL: Record<Canal, CriteriosCanal> = {
       "agendado", "reagendado", "confirmado",
     ],
     umbral_minimo: 1,
+    califica: false,
   },
   videollamadas: {
     categorias_calificadas: ["calificada", "cerrada"],
     umbral_minimo: 1,
+    califica: true,
   },
 };
 
@@ -90,10 +94,16 @@ function parseCriteriosCanal(raw: unknown, label: string): CriteriosCanal {
     throw new Error(`canales.${label}.umbral_minimo debe ser un entero positivo`);
   }
 
-  return {
+  const result: CriteriosCanal = {
     categorias_calificadas: (obj.categorias_calificadas as string[]).map((s) => s.trim()),
     umbral_minimo: typeof umbral === "number" ? umbral : 1,
   };
+
+  if (typeof obj.califica === "boolean") {
+    result.califica = obj.califica;
+  }
+
+  return result;
 }
 
 // ─── Helper de validación ─────────────────────────────────────────────────────
@@ -219,12 +229,29 @@ export function resolverCriterios(
 }
 
 /**
+ * AUT-1739: Determina si un canal tiene habilitada la calificación.
+ * - criterios NULL → product defaults (llamadas=false, chats/video=true)
+ * - califica explícito en JSONB → lo usa
+ * - canales existe pero sin califica → true (backward compat pre-migración)
+ */
+export function canalCalifica(
+  criterios: CriteriosCalificacion | null,
+  canal: Canal,
+): boolean {
+  if (!criterios) {
+    return DEFAULTS_POR_CANAL[canal].califica !== false;
+  }
+  const canalConfig = criterios.canales?.[canal];
+  if (canalConfig && typeof canalConfig.califica === "boolean") {
+    return canalConfig.califica;
+  }
+  return true;
+}
+
+/**
  * Determina si un chat/llamada/videollamada es calificado según los criterios.
  *
- * Aplica umbral_minimo: el lead debe cumplir >= umbral_minimo categorías
- * calificadas. Con umbral_minimo=1 (default) basta con que una categoría
- * coincida (mismo comportamiento anterior). Acepta string o string[] para
- * soportar leads con múltiples categorías.
+ * AUT-1739: si el canal tiene califica=false, retorna false (salvo override manual).
  */
 export function esCalificado(
   iaCategoria: string | string[] | null,
@@ -234,6 +261,7 @@ export function esCalificado(
 ): boolean {
   if (calificacionManual === "calificado") return true;
   if (calificacionManual === "descartado") return false;
+  if (canal && !canalCalifica(criterios, canal)) return false;
   if (iaCategoria === null) return false;
   const efectivos = resolverCriterios(criterios ?? CRITERIOS_DEFAULT, canal);
   const categorias = Array.isArray(iaCategoria) ? iaCategoria : [iaCategoria];

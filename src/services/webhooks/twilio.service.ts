@@ -39,7 +39,7 @@ import { updateContactCustomFields, createLocationTag, createContactTask, contac
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { enrichWithGemini } from "../ai/gemini-enrichment.service.js";
 import { ubicacionPorTelefono } from "../../utils/lada.utils.js";
-import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
+import { parseConfigLlamadas, countWords, filterEmbudoForCalls } from "../data/config-llamadas.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 
@@ -783,9 +783,12 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     }
     const categoriaGhl = collectCategoria(preReglasResult.matched_rules) ?? preReglasResult.matched_categoria;
 
+    // AUT-1739: filter embudo stages to only those applicable to calls
+    const embudoLlamadas = filterEmbudoForCalls(embudoPersonalizado);
+
     let classification: CallClassification;
     try {
-      classification = await classifyCall(fields.preTranscript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, idCuenta, categoriaGhl, categoriasLlamadas);
+      classification = await classifyCall(fields.preTranscript, openaiApiKey, embudoLlamadas, promptVentas, promptLlamadas, idCuenta, categoriaGhl, categoriasLlamadas);
     } catch (err) {
       console.error("[Effective/GHL] Error clasificando con IA:", err);
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, null, "Effective/GHL");
@@ -930,9 +933,12 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
   }
   const categoriaMain = collectCategoria(mainReglasResult.matched_rules) ?? mainReglasResult.matched_categoria;
 
+  // AUT-1739: filter embudo stages to only those applicable to calls
+  const embudoLlamadasMain = filterEmbudoForCalls(embudoPersonalizado);
+
   let classification: CallClassification;
   try {
-    classification = await classifyCall(transcript, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, idCuenta, categoriaMain, categoriasLlamadas);
+    classification = await classifyCall(transcript, openaiApiKey, embudoLlamadasMain, promptVentas, promptLlamadas, idCuenta, categoriaMain, categoriasLlamadas);
   } catch (err) {
     console.error("[Effective] Error clasificando llamada con IA:", err);
     return followUpPath(fields, idCuenta, tokenGhl, callSid, transcript, null, "Effective");

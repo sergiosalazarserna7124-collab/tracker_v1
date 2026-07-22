@@ -40,7 +40,7 @@ import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.servi
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
-import { parseConfigLlamadas, countWords } from "../data/config-llamadas.utils.js";
+import { parseConfigLlamadas, countWords, filterEmbudoForCalls } from "../data/config-llamadas.utils.js";
 import type { GhlCallEventBody } from "../../schemas/webhooks/ghl-calls.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service.js";
@@ -1078,13 +1078,16 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
   }
   const categoriaGhl = collectCategoria(ghlReglasResult.matched_rules) ?? ghlReglasResult.matched_categoria;
 
+  // AUT-1739: filter embudo stages to only those applicable to calls
+  const embudoLlamadas = filterEmbudoForCalls(embudoPersonalizado);
+
   // Clasificar con IA
   let classification: CallClassification;
   try {
     classification = await classifyCall(
       transcript,
       openaiApiKey,
-      embudoPersonalizado,
+      embudoLlamadas,
       promptVentas,
       promptLlamadas,
       idCuenta,

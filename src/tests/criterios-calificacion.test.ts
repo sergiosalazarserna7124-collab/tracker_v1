@@ -12,6 +12,7 @@ import {
   parseCriteriosCalificacion,
   esCalificado,
   resolverCriterios,
+  canalCalifica,
   CRITERIOS_DEFAULT,
   DEFAULTS_POR_CANAL,
 } from "../services/data/criterios-calificacion.utils.js";
@@ -248,14 +249,126 @@ describe("esCalificado — con canal", () => {
     assert.equal(esCalificado("cliente_ganado", criterios), false);
   });
 
-  test("null criterios + canal → usa defaults del canal (AUT-1659)", () => {
+  test("null criterios + canal → usa defaults del canal (AUT-1659, AUT-1739)", () => {
     assert.equal(esCalificado("calificada", null, "chats"), true);
     assert.equal(esCalificado("interesado", null, "chats"), true);
     assert.equal(esCalificado("no_calificada", null, "chats"), false);
-    assert.equal(esCalificado("calificada", null, "llamadas"), true);
-    assert.equal(esCalificado("agendado", null, "llamadas"), true);
+    assert.equal(esCalificado("calificada", null, "llamadas"), false);
+    assert.equal(esCalificado("agendado", null, "llamadas"), false);
     assert.equal(esCalificado("no_contestada", null, "llamadas"), false);
     assert.equal(esCalificado("calificada", null, "videollamadas"), true);
     assert.equal(esCalificado("no_show", null, "videollamadas"), false);
+  });
+});
+
+// ─── canalCalifica (AUT-1739) ────────────────────────────────────────────────
+
+describe("canalCalifica — toggle califica por canal (AUT-1739)", () => {
+  test("null criterios → product defaults (llamadas=false, chats/video=true)", () => {
+    assert.equal(canalCalifica(null, "chats"), true);
+    assert.equal(canalCalifica(null, "llamadas"), false);
+    assert.equal(canalCalifica(null, "videollamadas"), true);
+  });
+
+  test("califica explícito true → true", () => {
+    const criterios = parseCriteriosCalificacion({
+      categorias_calificadas: ["calificada"],
+      canales: {
+        llamadas: { categorias_calificadas: ["interesado"], califica: true },
+      },
+    });
+    assert.equal(canalCalifica(criterios, "llamadas"), true);
+  });
+
+  test("califica explícito false → false", () => {
+    const criterios = parseCriteriosCalificacion({
+      categorias_calificadas: ["calificada"],
+      canales: {
+        llamadas: { categorias_calificadas: ["interesado"], califica: false },
+        chats: { categorias_calificadas: ["calificada"], califica: false },
+      },
+    });
+    assert.equal(canalCalifica(criterios, "llamadas"), false);
+    assert.equal(canalCalifica(criterios, "chats"), false);
+  });
+
+  test("canales existe sin califica → backward compat = true", () => {
+    const criterios = parseCriteriosCalificacion({
+      categorias_calificadas: ["calificada"],
+      canales: {
+        llamadas: { categorias_calificadas: ["interesado"] },
+      },
+    });
+    assert.equal(canalCalifica(criterios, "llamadas"), true);
+  });
+
+  test("criterios sin canales → backward compat = true", () => {
+    const criterios = parseCriteriosCalificacion({
+      categorias_calificadas: ["calificada"],
+    });
+    assert.equal(canalCalifica(criterios, "llamadas"), true);
+    assert.equal(canalCalifica(criterios, "chats"), true);
+  });
+
+  test("parseCriteriosCalificacion preserva califica boolean", () => {
+    const result = parseCriteriosCalificacion({
+      categorias_calificadas: ["calificada"],
+      canales: {
+        llamadas: { categorias_calificadas: ["interesado"], califica: false },
+        chats: { categorias_calificadas: ["calificada"], califica: true },
+      },
+    });
+    assert.equal(result.canales?.llamadas?.califica, false);
+    assert.equal(result.canales?.chats?.califica, true);
+  });
+
+  test("parseCriteriosCalificacion omite califica cuando no está", () => {
+    const result = parseCriteriosCalificacion({
+      categorias_calificadas: ["calificada"],
+      canales: {
+        llamadas: { categorias_calificadas: ["interesado"] },
+      },
+    });
+    assert.equal(result.canales?.llamadas?.califica, undefined);
+  });
+});
+
+// ─── esCalificado — con califica=false (AUT-1739) ───────────────────────────
+
+describe("esCalificado — respeta califica=false por canal (AUT-1739)", () => {
+  const criterios = parseCriteriosCalificacion({
+    categorias_calificadas: ["calificada", "interesado"],
+    canales: {
+      llamadas: { categorias_calificadas: ["interesado", "agendado"], califica: false },
+      chats: { categorias_calificadas: ["calificada", "interesado"], califica: true },
+      videollamadas: { categorias_calificadas: ["calificada"], califica: true },
+    },
+  });
+
+  test("llamadas califica=false → siempre false (categoría calificada)", () => {
+    assert.equal(esCalificado("interesado", criterios, "llamadas"), false);
+    assert.equal(esCalificado("agendado", criterios, "llamadas"), false);
+  });
+
+  test("llamadas califica=false + calificacion_manual='calificado' → override = true", () => {
+    assert.equal(esCalificado("interesado", criterios, "llamadas", "calificado"), true);
+  });
+
+  test("llamadas califica=false + calificacion_manual='descartado' → false", () => {
+    assert.equal(esCalificado("interesado", criterios, "llamadas", "descartado"), false);
+  });
+
+  test("chats califica=true → funciona normalmente", () => {
+    assert.equal(esCalificado("calificada", criterios, "chats"), true);
+    assert.equal(esCalificado("no_interesado", criterios, "chats"), false);
+  });
+
+  test("videollamadas califica=true → funciona normalmente", () => {
+    assert.equal(esCalificado("calificada", criterios, "videollamadas"), true);
+    assert.equal(esCalificado("no_show", criterios, "videollamadas"), false);
+  });
+
+  test("sin canal → no aplica filtro califica", () => {
+    assert.equal(esCalificado("calificada", criterios), true);
   });
 });

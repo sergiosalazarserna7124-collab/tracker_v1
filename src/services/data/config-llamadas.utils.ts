@@ -27,3 +27,16 @@ export function parseConfigLlamadas(raw: unknown): ConfigLlamadas | null {
 export function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
+
+// AUT-1739: filter embudo_personalizado stages to only those applicable to calls
+type EmbudoEtapaRaw = { id: string; nombre: string; fuentes?: string[]; [k: string]: unknown };
+
+const CALL_FUENTE_ALIASES = ["llamadas", "llamada", "call", "calls", "todas"];
+
+export function filterEmbudoForCalls(embudo: unknown): EmbudoEtapaRaw[] | null {
+  if (!Array.isArray(embudo) || embudo.length === 0) return null;
+  const filtered = (embudo as EmbudoEtapaRaw[]).filter(
+    (e) => !e.fuentes || e.fuentes.length === 0 || e.fuentes.some((f) => CALL_FUENTE_ALIASES.includes(f)),
+  );
+  return filtered.length > 0 ? filtered : null;
+}
