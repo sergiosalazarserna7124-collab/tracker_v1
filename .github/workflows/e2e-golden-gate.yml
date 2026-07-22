@@ -1,0 +1,36 @@
+name: e2e-golden-gate
+
+# Guardián de Regresiones (AUT-1752)
+# Corre la suite E2E golden cases contra el Cerebro de producción (demo cuenta 52).
+# Falla el PR si algún caso golden se rompe.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  golden-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Run E2E golden cases
+        env:
+          VOZ_WEBHOOK_SECRET: ${{ secrets.VOZ_WEBHOOK_SECRET }}
+          E2E_DATABASE_URL: ${{ secrets.E2E_DATABASE_URL }}
+        run: npm run test:e2e

@@ -9,7 +9,9 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx/esm --test src/tests/**/*.test.ts"
+    "test": "node --import tsx/esm --test src/tests/**/*.test.ts",
+    "test:e2e": "node --import tsx/esm --test src/tests/e2e/**/*.test.ts",
+    "test:e2e:report": "node --import tsx/esm src/tests/e2e/watchdog-runner.ts"
   },
   "packageManager": "pnpm@10.30.1",
   "engines": {
