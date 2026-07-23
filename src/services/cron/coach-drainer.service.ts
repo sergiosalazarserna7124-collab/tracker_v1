@@ -10,7 +10,7 @@ import {
   createContactTask,
 } from "../ghl-api.service.js";
 import { savePendingTag } from "../ghl-token-guard.service.js";
-import type { SeccionGuion } from "../data/coach-guion.service.js";
+import type { SeccionGuion, CanalCoach } from "../data/coach-guion.service.js";
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -24,19 +24,28 @@ interface CoachCuentaRow {
   ghl_native_task_workflow: boolean;
 }
 
-interface LlamadaCoachRow {
+interface EvalCandidate {
   id: number;
   id_cuenta: number;
-  transcripcion: string;
+  transcript: string;
   contact_id_ghl: string | null;
+  canal: CanalCoach;
   estado_resultado: string | null;
-  tipo_evento: string;
-  duracion_segundos: number | null;
+  tipo_evento: string | null;
+}
+
+interface ChatMessage {
+  role: string;
+  name: string;
+  message: string;
+  timestamp: string;
 }
 
 export interface CoachDrainerResult {
   cuentas_procesadas: number;
   llamadas_evaluadas: number;
+  chats_evaluados: number;
+  videollamadas_evaluadas: number;
   llamadas_skip: number;
   tags_aplicados: number;
   tareas_creadas: number;
@@ -62,11 +71,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ─── Conversión chat JSONB → texto plano ────────────────────────────────────
+
+function chatJsonToTranscript(chatJson: unknown): string | null {
+  if (!Array.isArray(chatJson)) return null;
+  const messages = chatJson as ChatMessage[];
+  if (messages.length === 0) return null;
+
+  const lines = messages
+    .filter((m) => typeof m.message === "string" && m.message.trim() !== "")
+    .map((m) => {
+      const role = m.role === "lead" ? (m.name || "Lead") : (m.name || "Asesor");
+      return `${role}: ${m.message}`;
+    });
+
+  const text = lines.join("\n");
+  return text.length >= MIN_TRANSCRIPT_CHARS ? text : null;
+}
+
 // ─── Drainer principal ──────────────────────────────────────────────────────
 
 export async function runCoachDrainer(): Promise<CoachDrainerResult> {
   const startTime = Date.now();
-  let evaluadas = 0;
+  let evaluadasLlamadas = 0;
+  let evaluadasChats = 0;
+  let evaluadasVideo = 0;
   let skipped = 0;
   let tagsApplied = 0;
   let tareasCreadas = 0;
@@ -84,10 +113,11 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
   );
 
   const cuentasList = cuentasResult.rows;
+  const totalEvaluated = () => evaluadasLlamadas + evaluadasChats + evaluadasVideo;
   console.info(`[coachDrainer] ${cuentasList.length} cuentas con coach habilitado`);
 
   if (cuentasList.length === 0) {
-    return { cuentas_procesadas: 0, llamadas_evaluadas: 0, llamadas_skip: 0, tags_aplicados: 0, tareas_creadas: 0, errores: 0 };
+    return { cuentas_procesadas: 0, llamadas_evaluadas: 0, chats_evaluados: 0, videollamadas_evaluadas: 0, llamadas_skip: 0, tags_aplicados: 0, tareas_creadas: 0, errores: 0 };
   }
 
   for (const cuenta of cuentasList) {
@@ -95,7 +125,7 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
       console.warn("[coachDrainer] Circuit breaker activado");
       break;
     }
-    if (evaluadas >= MAX_EVALUATIONS_PER_RUN) {
+    if (totalEvaluated() >= MAX_EVALUATIONS_PER_RUN) {
       console.info("[coachDrainer] Límite de evaluaciones alcanzado");
       break;
     }
@@ -109,53 +139,61 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
       continue;
     }
 
-    const guionMap = new Map<string, typeof guiones[0]>();
+    const guionsByCanal = new Map<CanalCoach, Map<string, typeof guiones[0]>>();
     for (const g of guiones) {
-      guionMap.set(g.categoria_llamada_id, g);
+      const canal = (g.canal ?? "llamada") as CanalCoach;
+      if (!guionsByCanal.has(canal)) {
+        guionsByCanal.set(canal, new Map());
+      }
+      guionsByCanal.get(canal)?.set(g.categoria_llamada_id, g);
     }
 
-    const llamadasResult = await withRetry(
-      () => pgPool.query<LlamadaCoachRow>(
-        `SELECT ll.id, ll.id_cuenta, ll.transcripcion, ll.contact_id_ghl,
-                ll.estado_resultado, ll.tipo_evento, ll.duracion_segundos
-         FROM log_llamadas ll
-         WHERE ll.id_cuenta = $1
-           AND ll.transcripcion IS NOT NULL
-           AND LENGTH(ll.transcripcion) >= $2
-           AND ll.ts >= NOW() - INTERVAL '48 hours'
-           AND ll.id NOT IN (
-             SELECT ec.log_llamada_id FROM evaluaciones_coach ec
-             WHERE ec.id_cuenta = $1
-           )
-         ORDER BY ll.ts DESC
-         LIMIT 20`,
-        [cuenta.id_cuenta, MIN_TRANSCRIPT_CHARS],
-      ),
-      { label: `coachDrainer/getLlamadas/${cuenta.id_cuenta}` },
-    );
+    const candidates: EvalCandidate[] = [];
 
-    if (llamadasResult.rows.length === 0) continue;
+    if (guionsByCanal.has("llamada")) {
+      const rows = await fetchLlamadaCandidates(cuenta.id_cuenta);
+      candidates.push(...rows);
+    }
+
+    if (guionsByCanal.has("chat")) {
+      const rows = await fetchChatCandidates(cuenta.id_cuenta);
+      candidates.push(...rows);
+    }
+
+    if (guionsByCanal.has("videollamada")) {
+      const rows = await fetchVideollamadaCandidates(cuenta.id_cuenta);
+      candidates.push(...rows);
+    }
+
+    if (candidates.length === 0) continue;
 
     console.info(
-      `[coachDrainer] cuenta=${cuenta.id_cuenta}: ${llamadasResult.rows.length} llamadas pendientes de evaluación`,
+      `[coachDrainer] cuenta=${cuenta.id_cuenta}: ${candidates.length} candidatos pendientes de evaluación`,
     );
 
-    for (const llamada of llamadasResult.rows) {
-      if (evaluadas >= MAX_EVALUATIONS_PER_RUN) break;
+    for (const candidate of candidates) {
+      if (totalEvaluated() >= MAX_EVALUATIONS_PER_RUN) break;
       if (Date.now() - startTime > MAX_RUNTIME_MS) break;
 
-      const estado = (llamada.estado_resultado ?? "").toLowerCase().trim().replace(/\s+/g, "_");
-      if (!ESTADOS_EFECTIVOS.has(estado)) {
+      if (candidate.canal === "llamada") {
+        const estado = (candidate.estado_resultado ?? "").toLowerCase().trim().replace(/\s+/g, "_");
+        if (!ESTADOS_EFECTIVOS.has(estado)) {
+          skipped++;
+          continue;
+        }
+        if (candidate.tipo_evento === "voz_callai") {
+          skipped++;
+          continue;
+        }
+      }
+
+      const canalMap = guionsByCanal.get(candidate.canal);
+      if (!canalMap) {
         skipped++;
         continue;
       }
 
-      if (llamada.tipo_evento === "voz_callai") {
-        skipped++;
-        continue;
-      }
-
-      const guion = resolveGuionForCall(guionMap, cuenta.categorias_llamadas);
+      const guion = resolveGuionForCanal(canalMap, cuenta.categorias_llamadas);
       if (!guion) {
         skipped++;
         continue;
@@ -167,20 +205,22 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
         continue;
       }
 
-      const label = `[coachDrainer c=${cuenta.id_cuenta} ll=${llamada.id}]`;
+      const label = `[coachDrainer c=${cuenta.id_cuenta} ${candidate.canal}=${candidate.id}]`;
 
       try {
         const result = await evaluateCallAgainstGuion(
-          llamada.transcripcion,
+          candidate.transcript,
           secciones,
           guion.umbral,
           cuenta.openai_api_key,
           cuenta.id_cuenta,
+          candidate.canal,
         );
 
         await drizzleDb.insert(evaluacionesCoach).values({
           id_cuenta: cuenta.id_cuenta,
-          log_llamada_id: llamada.id,
+          log_llamada_id: candidate.id,
+          canal: candidate.canal,
           guion_id: guion.id,
           guion_version: guion.version,
           scores_secciones: result.scores as unknown as Record<string, unknown>,
@@ -190,11 +230,13 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
           nota_accionable: result.nota_accionable,
         });
 
-        evaluadas++;
+        if (candidate.canal === "llamada") evaluadasLlamadas++;
+        else if (candidate.canal === "chat") evaluadasChats++;
+        else evaluadasVideo++;
 
-        if (!result.cumple_umbral && llamada.contact_id_ghl && cuenta.token_ghl && cuenta.locationid) {
+        if (!result.cumple_umbral && candidate.contact_id_ghl && cuenta.token_ghl && cuenta.locationid) {
           const ghlResult = await applyCoachTagAndTask(
-            llamada.contact_id_ghl,
+            candidate.contact_id_ghl,
             cuenta.token_ghl,
             cuenta.locationid,
             cuenta.id_cuenta,
@@ -214,7 +256,8 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
             .where(
               and(
                 eq(evaluacionesCoach.id_cuenta, cuenta.id_cuenta),
-                eq(evaluacionesCoach.log_llamada_id, llamada.id),
+                eq(evaluacionesCoach.canal, candidate.canal),
+                eq(evaluacionesCoach.log_llamada_id, candidate.id),
               ),
             );
         }
@@ -231,13 +274,16 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
     }
   }
 
+  const total = evaluadasLlamadas + evaluadasChats + evaluadasVideo;
   console.info(
-    `[coachDrainer] Fin: evaluadas=${evaluadas} skip=${skipped} tags=${tagsApplied} tareas=${tareasCreadas} errores=${errors}`,
+    `[coachDrainer] Fin: evaluadas=${total} (llamadas=${evaluadasLlamadas} chats=${evaluadasChats} video=${evaluadasVideo}) skip=${skipped} tags=${tagsApplied} tareas=${tareasCreadas} errores=${errors}`,
   );
 
   return {
     cuentas_procesadas: cuentasList.length,
-    llamadas_evaluadas: evaluadas,
+    llamadas_evaluadas: evaluadasLlamadas,
+    chats_evaluados: evaluadasChats,
+    videollamadas_evaluadas: evaluadasVideo,
     llamadas_skip: skipped,
     tags_aplicados: tagsApplied,
     tareas_creadas: tareasCreadas,
@@ -245,9 +291,131 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
   };
 }
 
+// ─── Fetchers por canal ─────────────────────────────────────────────────────
+
+async function fetchLlamadaCandidates(idCuenta: number): Promise<EvalCandidate[]> {
+  const result = await withRetry(
+    () => pgPool.query<{
+      id: number;
+      id_cuenta: number;
+      transcripcion: string;
+      contact_id_ghl: string | null;
+      estado_resultado: string | null;
+      tipo_evento: string;
+    }>(
+      `SELECT ll.id, ll.id_cuenta, ll.transcripcion, ll.contact_id_ghl,
+              ll.estado_resultado, ll.tipo_evento
+       FROM log_llamadas ll
+       WHERE ll.id_cuenta = $1
+         AND ll.transcripcion IS NOT NULL
+         AND LENGTH(ll.transcripcion) >= $2
+         AND ll.ts >= NOW() - INTERVAL '48 hours'
+         AND ll.id NOT IN (
+           SELECT ec.log_llamada_id FROM evaluaciones_coach ec
+           WHERE ec.id_cuenta = $1 AND ec.canal = 'llamada'
+         )
+       ORDER BY ll.ts DESC
+       LIMIT 20`,
+      [idCuenta, MIN_TRANSCRIPT_CHARS],
+    ),
+    { label: `coachDrainer/getLlamadas/${idCuenta}` },
+  );
+
+  return result.rows.map((r) => ({
+    id: r.id,
+    id_cuenta: r.id_cuenta,
+    transcript: r.transcripcion,
+    contact_id_ghl: r.contact_id_ghl,
+    canal: "llamada" as const,
+    estado_resultado: r.estado_resultado,
+    tipo_evento: r.tipo_evento,
+  }));
+}
+
+async function fetchChatCandidates(idCuenta: number): Promise<EvalCandidate[]> {
+  const result = await withRetry(
+    () => pgPool.query<{
+      id_evento: number;
+      id_cuenta: number;
+      chat: unknown;
+      id_lead: string | null;
+    }>(
+      `SELECT cl.id_evento, cl.id_cuenta, cl.chat, cl.id_lead
+       FROM chats_logs cl
+       WHERE cl.id_cuenta = $1
+         AND cl.chat IS NOT NULL
+         AND jsonb_array_length(cl.chat) >= 3
+         AND cl.fecha_y_hora_z >= NOW() - INTERVAL '48 hours'
+         AND COALESCE(cl.excluida_dashboard, false) = false
+         AND cl.id_evento NOT IN (
+           SELECT ec.log_llamada_id FROM evaluaciones_coach ec
+           WHERE ec.id_cuenta = $1 AND ec.canal = 'chat'
+         )
+       ORDER BY cl.fecha_y_hora_z DESC
+       LIMIT 20`,
+      [idCuenta],
+    ),
+    { label: `coachDrainer/getChats/${idCuenta}` },
+  );
+
+  const candidates: EvalCandidate[] = [];
+  for (const r of result.rows) {
+    const transcript = chatJsonToTranscript(r.chat);
+    if (!transcript) continue;
+
+    candidates.push({
+      id: r.id_evento,
+      id_cuenta: r.id_cuenta,
+      transcript,
+      contact_id_ghl: r.id_lead,
+      canal: "chat",
+      estado_resultado: null,
+      tipo_evento: null,
+    });
+  }
+
+  return candidates;
+}
+
+async function fetchVideollamadaCandidates(idCuenta: number): Promise<EvalCandidate[]> {
+  const result = await withRetry(
+    () => pgPool.query<{
+      id_registro_agenda: number;
+      id_cuenta: number;
+      transcripcion_fathom: string;
+      ghl_contact_id: string | null;
+    }>(
+      `SELECT a.id_registro_agenda, a.id_cuenta, a.transcripcion_fathom, a.ghl_contact_id
+       FROM resumenes_diarios_agendas a
+       WHERE a.id_cuenta = $1
+         AND a.transcripcion_fathom IS NOT NULL
+         AND LENGTH(a.transcripcion_fathom) >= $2
+         AND a.fathom_processed_at >= NOW() - INTERVAL '48 hours'
+         AND a.id_registro_agenda NOT IN (
+           SELECT ec.log_llamada_id FROM evaluaciones_coach ec
+           WHERE ec.id_cuenta = $1 AND ec.canal = 'videollamada'
+         )
+       ORDER BY a.fathom_processed_at DESC
+       LIMIT 20`,
+      [idCuenta, MIN_TRANSCRIPT_CHARS],
+    ),
+    { label: `coachDrainer/getVideollamadas/${idCuenta}` },
+  );
+
+  return result.rows.map((r) => ({
+    id: r.id_registro_agenda,
+    id_cuenta: r.id_cuenta,
+    transcript: r.transcripcion_fathom,
+    contact_id_ghl: r.ghl_contact_id,
+    canal: "videollamada" as const,
+    estado_resultado: null,
+    tipo_evento: null,
+  }));
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function resolveGuionForCall(
+function resolveGuionForCanal(
   guionMap: Map<string, typeof guionesCoach.$inferSelect>,
   categoriasLlamadas: unknown,
 ): typeof guionesCoach.$inferSelect | null {

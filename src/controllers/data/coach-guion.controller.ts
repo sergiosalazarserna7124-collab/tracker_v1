@@ -62,7 +62,7 @@ export async function handleUpsertGuion(
     return reply.status(403).send({ error: "API key no pertenece a esta cuenta" });
   }
 
-  const body = request.body as { categoria_llamada_id: string; secciones: unknown[]; umbral?: number };
+  const body = request.body as { categoria_llamada_id: string; canal?: string; secciones: unknown[]; umbral?: number };
 
   const habilitado = await isCoachHabilitado(idCuenta);
   if (!habilitado) {
@@ -72,6 +72,7 @@ export async function handleUpsertGuion(
   try {
     const guion = await upsertGuion(idCuenta, {
       categoria_llamada_id: body.categoria_llamada_id,
+      canal: body.canal as Parameters<typeof upsertGuion>[1]["canal"],
       secciones: body.secciones as Parameters<typeof upsertGuion>[1]["secciones"],
       umbral: body.umbral,
     });

@@ -3,7 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
-import type { SeccionGuion } from "../data/coach-guion.service.js";
+import type { SeccionGuion, CanalCoach } from "../data/coach-guion.service.js";
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -89,13 +89,21 @@ function buildEvalSchema(seccionIds: string[]) {
 
 // ─── Prompt ─────────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(secciones: SeccionGuion[]): string {
+const CANAL_LABELS: Record<CanalCoach, { tipo: string; interaccion: string }> = {
+  llamada: { tipo: "llamada telefónica", interaccion: "llamada" },
+  chat: { tipo: "conversación de chat", interaccion: "chat" },
+  videollamada: { tipo: "videollamada", interaccion: "videollamada" },
+};
+
+function buildSystemPrompt(secciones: SeccionGuion[], canal: CanalCoach = "llamada"): string {
   const seccionesDesc = secciones.map((s) => {
     const tipo = s.tipo === "must_have" ? "OBLIGATORIA" : "DESEABLE";
     return `- **${s.nombre}** (ID: ${s.id}, ${tipo}): ${s.criterio}`;
   }).join("\n");
 
-  return `Eres un evaluador de llamadas de ventas. Tu tarea es evaluar una transcripción contra un guion de ventas específico.
+  const labels = CANAL_LABELS[canal];
+
+  return `Eres un evaluador de ${labels.tipo}s de ventas. Tu tarea es evaluar una transcripción contra un guion de ventas específico.
 
 ## SECCIONES DEL GUION A EVALUAR
 
@@ -106,7 +114,7 @@ ${seccionesDesc}
 1. Evalúa CADA sección del guion y asigna un score de 0 a 100.
 2. "cumple" = true si el asesor cubrió al menos el criterio mínimo de esa sección (score ≥ 50).
 3. Sé justo: no exijas coincidencia literal, evalúa si el OBJETIVO de la sección se cumplió.
-4. La nota_accionable debe ser concreta y útil: máximo 1-2 mejoras específicas que el asesor pueda aplicar en su próxima llamada. No repitas todo el guion; enfócate en lo más impactante.
+4. La nota_accionable debe ser concreta y útil: máximo 1-2 mejoras específicas que el asesor pueda aplicar en su próxima ${labels.interaccion}. No repitas todo el guion; enfócate en lo más impactante.
 5. Si el asesor hizo bien todo, la nota puede ser un refuerzo positivo breve.
 
 ## REGLAS
@@ -125,17 +133,19 @@ export async function evaluateCallAgainstGuion(
   umbral: number,
   openaiApiKey?: string | null,
   idCuenta?: number | null,
+  canal: CanalCoach = "llamada",
 ): Promise<CoachEvaluationResult> {
   const model = resolveModel(openaiApiKey);
   const seccionIds = secciones.map((s) => s.id);
   const schema = buildEvalSchema(seccionIds);
-  const systemPrompt = buildSystemPrompt(secciones);
+  const systemPrompt = buildSystemPrompt(secciones, canal);
+  const labels = CANAL_LABELS[canal];
 
   const { object, usage } = await generateObject({
     model,
     schema,
     system: systemPrompt,
-    prompt: `Evalúa la siguiente transcripción de llamada contra el guion:\n\n${transcript}`,
+    prompt: `Evalúa la siguiente transcripción de ${labels.tipo} contra el guion:\n\n${transcript}`,
     temperature: 0,
   });
 

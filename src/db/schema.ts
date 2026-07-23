@@ -340,6 +340,7 @@ export const guionesCoach = pgTable("guiones_coach", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   id_cuenta: integer("id_cuenta").notNull().references(() => cuentas.id_cuenta, { onDelete: "cascade" }),
   categoria_llamada_id: text("categoria_llamada_id").notNull(),
+  canal: text("canal").notNull().default("llamada"),
   version: integer("version").notNull().default(1),
   secciones: jsonb("secciones").notNull(),
   umbral: integer("umbral").notNull().default(70),
@@ -348,12 +349,14 @@ export const guionesCoach = pgTable("guiones_coach", {
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 }, (table) => [
   index("idx_guiones_cuenta_cat").on(table.id_cuenta, table.categoria_llamada_id),
+  index("idx_guiones_cuenta_canal_cat").on(table.id_cuenta, table.canal, table.categoria_llamada_id),
 ]);
 
 export const evaluacionesCoach = pgTable("evaluaciones_coach", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   id_cuenta: integer("id_cuenta").notNull().references(() => cuentas.id_cuenta, { onDelete: "cascade" }),
   log_llamada_id: integer("log_llamada_id").notNull(),
+  canal: text("canal").notNull().default("llamada"),
   guion_id: uuid("guion_id").notNull().references(() => guionesCoach.id, { onDelete: "cascade" }),
   guion_version: integer("guion_version").notNull(),
   scores_secciones: jsonb("scores_secciones").notNull(),
@@ -364,7 +367,7 @@ export const evaluacionesCoach = pgTable("evaluaciones_coach", {
   ghl_tag_applied: text("ghl_tag_applied"),
   evaluated_at: timestamp("evaluated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  uniqueIndex("uq_eval_cuenta_llamada").on(table.id_cuenta, table.log_llamada_id),
+  uniqueIndex("uq_eval_cuenta_canal_origen").on(table.id_cuenta, table.canal, table.log_llamada_id),
   index("idx_eval_guion").on(table.guion_id),
 ]);
 

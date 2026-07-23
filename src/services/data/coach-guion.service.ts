@@ -11,10 +11,13 @@ export interface SeccionGuion {
   tipo: "must_have" | "deseable";
 }
 
+export type CanalCoach = "llamada" | "chat" | "videollamada";
+
 export interface GuionCoach {
   id: string;
   id_cuenta: number;
   categoria_llamada_id: string;
+  canal: CanalCoach;
   version: number;
   secciones: SeccionGuion[];
   umbral: number;
@@ -25,6 +28,7 @@ export interface GuionCoach {
 
 export interface UpsertGuionPayload {
   categoria_llamada_id: string;
+  canal?: CanalCoach;
   secciones: SeccionGuion[];
   umbral?: number;
 }
@@ -32,6 +36,7 @@ export interface UpsertGuionPayload {
 // ─── Validación ──────────────────────────────────────────────────────────────
 
 const TIPOS_VALIDOS = new Set(["must_have", "deseable"]);
+const CANALES_VALIDOS = new Set<CanalCoach>(["llamada", "chat", "videollamada"]);
 
 export function validateSecciones(secciones: unknown): SeccionGuion[] {
   if (!Array.isArray(secciones) || secciones.length === 0) {
@@ -92,6 +97,7 @@ export async function getGuionesByCuenta(idCuenta: number): Promise<GuionCoach[]
 export async function getGuionByCategoria(
   idCuenta: number,
   categoriaLlamadaId: string,
+  canal: CanalCoach = "llamada",
 ): Promise<GuionCoach | null> {
   const [row] = await drizzleDb
     .select()
@@ -100,6 +106,7 @@ export async function getGuionByCategoria(
       and(
         eq(guionesCoach.id_cuenta, idCuenta),
         eq(guionesCoach.categoria_llamada_id, categoriaLlamadaId),
+        eq(guionesCoach.canal, canal),
         eq(guionesCoach.activo, true),
       ),
     )
@@ -114,12 +121,16 @@ export async function upsertGuion(
   payload: UpsertGuionPayload,
 ): Promise<GuionCoach> {
   const secciones = validateSecciones(payload.secciones);
+  const canal = payload.canal ?? "llamada";
+  if (!CANALES_VALIDOS.has(canal)) {
+    throw new Error(`canal debe ser llamada, chat o videollamada, recibido: ${canal}`);
+  }
   const umbral = payload.umbral ?? 70;
   if (umbral < 0 || umbral > 100) {
     throw new Error("umbral debe estar entre 0 y 100");
   }
 
-  const existing = await getGuionByCategoria(idCuenta, payload.categoria_llamada_id);
+  const existing = await getGuionByCategoria(idCuenta, payload.categoria_llamada_id, canal);
 
   if (existing) {
     await drizzleDb
@@ -148,6 +159,7 @@ export async function upsertGuion(
     .values({
       id_cuenta: idCuenta,
       categoria_llamada_id: payload.categoria_llamada_id,
+      canal,
       version: newVersion,
       secciones: secciones as unknown as Record<string, unknown>,
       umbral,
@@ -194,6 +206,7 @@ function mapRow(row: typeof guionesCoach.$inferSelect): GuionCoach {
     id: row.id,
     id_cuenta: row.id_cuenta,
     categoria_llamada_id: row.categoria_llamada_id,
+    canal: row.canal as CanalCoach,
     version: row.version,
     secciones: row.secciones as unknown as SeccionGuion[],
     umbral: row.umbral,
