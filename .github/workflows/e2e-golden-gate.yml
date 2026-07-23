@@ -12,7 +12,11 @@ on:
 jobs:
   golden-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 10min: el seed del coach golden espera el procesamiento ASÍNCRONO de Fathom
+    # con un poll acotado (deadline 150s, AUT-1775). En el peor caso —justo cuando
+    # el race que arreglamos ocurre— el before() consume ~165s; con npm ci + tsc +
+    # el resto de la suite, 5min quedaba demasiado justo y podía cortar por timeout.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout

@@ -132,6 +132,28 @@ async function triggerDrainer(): Promise<{ status: number; body: unknown }> {
   return { status: res.status, body: await res.json().catch(() => null) };
 }
 
+// ¿Ya existe la evaluación de coach para el chat sembrado?
+async function chatEvaluationExists(): Promise<boolean> {
+  const rows = await queryDB<{ ok: number }>(
+    `SELECT 1 AS ok FROM evaluaciones_coach ec
+     JOIN chats_logs cl ON cl.id_evento = ec.log_llamada_id
+     WHERE ec.id_cuenta = $1 AND ec.canal = 'chat' AND cl.chatid = $2 LIMIT 1`,
+    [DEMO_ACCOUNT_ID, chatConversationId],
+  );
+  return rows.length > 0;
+}
+
+// ¿Ya existe la evaluación de coach para la videollamada Fathom sembrada?
+async function videollamadaEvaluationExists(): Promise<boolean> {
+  const rows = await queryDB<{ ok: number }>(
+    `SELECT 1 AS ok FROM evaluaciones_coach ec
+     JOIN resumenes_diarios_agendas a ON a.id_registro_agenda = ec.log_llamada_id
+     WHERE ec.id_cuenta = $1 AND ec.canal = 'videollamada' AND a.fathom_recording_id = $2 LIMIT 1`,
+    [DEMO_ACCOUNT_ID, videoRecordingId],
+  );
+  return rows.length > 0;
+}
+
 before(async () => {
   // Intentar semilla; si la BD es readonly, marcar seedError y saltar los tests.
   try {
@@ -168,9 +190,29 @@ before(async () => {
   });
   videoRecordingId = video.recordingId;
 
+  // El webhook de Fathom responde 200 de inmediato y procesa la transcripción de
+  // forma ASÍNCRONA (fire-and-forget en fathom.controller); fathom_processed_at se
+  // setea al terminar. Una sola corrida del drainer puede llegar antes de que la
+  // videollamada esté procesada → sin candidato → la evaluación nunca se crea y el
+  // test VIDEOLLAMADA fallaba (AUT-1775). El chat se procesa a tiempo, por eso solo
+  // fallaba la videollamada. Poll acotado: re-dispara el drainer (idempotente: la
+  // query de candidatos excluye lo ya evaluado, no hay duplicados) hasta que ambos
+  // canales tengan evaluación o se agote el presupuesto.
   await waitForProcessing(PROCESSING_WAIT);
-  await triggerDrainer();
-  await waitForProcessing(DRAIN_WAIT);
+
+  const DRAIN_DEADLINE_MS = 150_000;
+  const POLL_WAIT = 12_000;
+  const drainStart = Date.now();
+  let chatDone = false;
+  let videoDone = false;
+  while (Date.now() - drainStart < DRAIN_DEADLINE_MS) {
+    await triggerDrainer();
+    await waitForProcessing(DRAIN_WAIT);
+    if (!chatDone) chatDone = await chatEvaluationExists();
+    if (!videoDone) videoDone = await videollamadaEvaluationExists();
+    if (chatDone && videoDone) break;
+    await waitForProcessing(POLL_WAIT);
+  }
 });
 
 after(async () => {
