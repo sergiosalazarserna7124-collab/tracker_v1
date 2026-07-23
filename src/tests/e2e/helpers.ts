@@ -196,7 +196,7 @@ export async function sendVideocallWebhook(opts?: {
           display_name: "Demo Closer",
           matched_calendar_invitee_email: "closer-demo@autokpi.net",
         },
-        text: "Bienvenido a la demo de AutoKPI.",
+        text: "Bienvenido a la demo de AutoKPI. Le voy a mostrar cómo funciona el tracking de ventas para su equipo comercial.",
         timestamp: "00:00:05",
       },
       {
@@ -205,7 +205,7 @@ export async function sendVideocallWebhook(opts?: {
           matched_calendar_invitee_email:
             opts?.inviteeEmail ?? "lead-e2e@example.com",
         },
-        text: "Gracias, estoy interesado en el tracking de ventas.",
+        text: "Gracias, estoy interesado en el tracking de ventas. Quiero ver las métricas de mi equipo en tiempo real.",
         timestamp: "00:00:15",
       },
     ],

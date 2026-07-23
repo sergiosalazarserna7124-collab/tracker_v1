@@ -737,6 +737,40 @@ export async function backfillPrimerMsgLeadAt(): Promise<BackfillPrimerMsgResult
   return { success: true, actualizados, sin_mensajes_lead };
 }
 
+// ─── backfillBotDelegacionAt (AUT-1762) ──────────────────────────────────────
+
+interface BackfillBotDelegacionResult {
+  success: boolean;
+  actualizados: number;
+}
+
+export async function backfillBotDelegacionAt(): Promise<BackfillBotDelegacionResult> {
+  const result = await pgPool.query<{ id_evento: number }>(
+    `UPDATE chats_logs cl
+     SET bot_delegacion_at = (
+       SELECT MIN((t.msg->>'timestamp')::timestamptz)
+       FROM jsonb_array_elements(cl.chat) WITH ORDINALITY AS t(msg, ordinality)
+       WHERE t.msg->>'message' LIKE '%' || c.chatbot_transfer_marker || '%'
+         AND t.msg->>'timestamp' IS NOT NULL
+     )
+     FROM cuentas c
+     WHERE cl.id_cuenta = c.id_cuenta
+       AND c.chatbot_transfer_marker IS NOT NULL
+       AND c.chatbot_transfer_marker <> ''
+       AND cl.bot_delegacion_at IS NULL
+       AND cl.chat IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(cl.chat) m
+         WHERE m->>'message' LIKE '%' || c.chatbot_transfer_marker || '%'
+           AND m->>'timestamp' IS NOT NULL
+       )
+     RETURNING cl.id_evento`,
+  );
+  const actualizados = result.rowCount ?? 0;
+  console.info(`[backfillBotDelegacionAt] actualizados=${actualizados}`);
+  return { success: true, actualizados };
+}
+
 /**
  * Marca como 'no_contestado' todos los registros_de_llamada que lleven
  * más de 7 días en estado 'pdte' sin recibir un webhook de resolución.

@@ -39,6 +39,7 @@ export interface CuentaRow {
   token_ghl: string | null;
   estado_cuenta: string | null;
   ghl_app_uninstalled_at?: Date | null;
+  chatbot_transfer_marker?: string | null;
 }
 
 export interface CuentaFullRow extends CuentaRow {
@@ -109,6 +110,7 @@ export async function getAccountByLocationId(locationId: string): Promise<Cuenta
           token_ghl: cuentas.token_ghl,
           estado_cuenta: cuentas.estado_cuenta,
           ghl_app_uninstalled_at: cuentas.ghl_app_uninstalled_at,
+          chatbot_transfer_marker: cuentas.chatbot_transfer_marker,
         })
         .from(cuentas)
         .where(eq(cuentas.locationid, locationId))

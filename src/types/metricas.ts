@@ -14,7 +14,8 @@ export type ChatAgregacion =
   | "count"           // total de chats
   | "count_distinct"  // valores únicos del campo
   | "count_by_value"  // conteo agrupado por valor del campo (devuelve Record<string,number>)
-  | "avg_response_time"; // tiempo promedio de respuesta (primer_msg_lead_at)
+  | "avg_response_time" // tiempo promedio de respuesta (primer_msg_lead_at)
+  | "speed_post_bot";   // promedio minutos entre bot_delegacion_at y primer contacto del asesor (AUT-1762)
 
 export interface MetricaConfigBase {
   id: string;

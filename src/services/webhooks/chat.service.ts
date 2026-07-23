@@ -62,8 +62,9 @@ async function getAccountByLocationIdFallback(locationId: string) {
         token_ghl: string | null;
         estado_cuenta: string | null;
         ghl_app_uninstalled_at?: Date | null;
+        chatbot_transfer_marker?: string | null;
       }>(
-        `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta, ghl_app_uninstalled_at
+        `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta, ghl_app_uninstalled_at, chatbot_transfer_marker
          FROM cuentas
          WHERE locationid ILIKE $1
          LIMIT 1`,
@@ -102,8 +103,9 @@ async function getAccountByLocationIdFallback(locationId: string) {
             token_ghl: string | null;
             estado_cuenta: string | null;
             ghl_app_uninstalled_at?: Date | null;
+            chatbot_transfer_marker?: string | null;
           }>(
-            `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta, ghl_app_uninstalled_at
+            `SELECT id_cuenta, nombre_cuenta, locationid, token_ghl, estado_cuenta, ghl_app_uninstalled_at, chatbot_transfer_marker
              FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
             [oauthRows[0].id_cuenta],
           ),
@@ -492,6 +494,14 @@ export async function processChatWebhook(
     ? new Date(dateAdded).toISOString()
     : null;
 
+  // bot_delegacion_at: timestamp del mensaje donde el bot delega al asesor (AUT-1762).
+  // Se detecta cuando un mensaje outbound (bot) contiene el chatbot_transfer_marker.
+  const marker = account.chatbot_transfer_marker;
+  const botDelegacionAt =
+    marker && senderRole === "agent" && messageBody?.includes(marker) && dateAdded
+      ? new Date(dateAdded).toISOString()
+      : null;
+
   // primer_msg_at: timestamp del primer mensaje de la conversación (cualquier dirección).
   // Inmutable — se establece en el INSERT y nunca se actualiza (AUT-316).
   // Usado como filtro de fecha en el dashboard para incluir conversaciones
@@ -504,8 +514,8 @@ export async function processChatWebhook(
     () =>
       db.query(
         `INSERT INTO chats_logs
-           (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, asesor_asignado, origen, primer_msg_lead_at, primer_msg_at)
-         VALUES ($1, $2, $3, $4, NOW(), 'activo', $5, $6::jsonb, $8, $9, $10::timestamptz, $11::timestamptz)
+           (id_cuenta, nombre_lead, id_lead, chatid, fecha_y_hora_z, estado, notas_extra, chat, asesor_asignado, origen, primer_msg_lead_at, primer_msg_at, bot_delegacion_at)
+         VALUES ($1, $2, $3, $4, NOW(), 'activo', $5, $6::jsonb, $8, $9, $10::timestamptz, $11::timestamptz, $12::timestamptz)
          ON CONFLICT (chatid) DO UPDATE SET
            -- Solo append si el messageId no está ya en el array (deduplicación)
            chat = CASE
@@ -526,6 +536,8 @@ export async function processChatWebhook(
            primer_msg_lead_at = COALESCE(chats_logs.primer_msg_lead_at, EXCLUDED.primer_msg_lead_at),
            -- Inmutable: solo se escribe si aún no existe (primer mensaje cualquier dir.)
            primer_msg_at = COALESCE(chats_logs.primer_msg_at, EXCLUDED.primer_msg_at),
+           -- Inmutable: primer delegación bot→asesor (AUT-1762)
+           bot_delegacion_at = COALESCE(chats_logs.bot_delegacion_at, EXCLUDED.bot_delegacion_at),
            excluida_dashboard = chats_logs.excluida_dashboard`,
         [
           idCuenta,
@@ -539,6 +551,7 @@ export async function processChatWebhook(
           channelType,
           primerMsgLeadAt,
           primerMsgAt,
+          botDelegacionAt,
         ],
       ),
     { label: "chat/upsertChatLog" },

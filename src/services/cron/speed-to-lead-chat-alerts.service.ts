@@ -56,7 +56,9 @@ export async function runSpeedToLeadChatAlerts(): Promise<SpeedToLeadChatAlertsR
   };
 
   // ── 1. Chats que necesitan alerta de 60 minutos ───────────────────────────
-  // primer_msg_lead_at entre 60 min y 48h atrás, sin alerta previa, sin respuesta de agente.
+  // Para cuentas con bot (chatbot_transfer_marker): usa bot_delegacion_at como referencia
+  // y excluye mensajes de bot (source=workflow/api/campaign) del check de respuesta.
+  // Para cuentas sin bot: usa primer_msg_lead_at (comportamiento original).
   const chats60m = await withRetry(
     () =>
       pgPool.query<ChatPendiente>(
@@ -68,23 +70,28 @@ export async function runSpeedToLeadChatAlerts(): Promise<SpeedToLeadChatAlertsR
            cl.asesor_asignado,
            c.token_ghl,
            c.nombre_cuenta,
-           cl.primer_msg_lead_at,
-           EXTRACT(EPOCH FROM (NOW() - cl.primer_msg_lead_at)) / 60 AS minutos_sin_respuesta
+           COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) AS primer_msg_lead_at,
+           EXTRACT(EPOCH FROM (NOW() - COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at))) / 60 AS minutos_sin_respuesta
          FROM chats_logs cl
          JOIN cuentas c ON c.id_cuenta = cl.id_cuenta
          JOIN metas_cuenta mc ON mc.id_cuenta = cl.id_cuenta
-         WHERE cl.primer_msg_lead_at IS NOT NULL
+         WHERE COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) IS NOT NULL
            AND cl.chat_stl_alerted_at IS NULL
-           AND cl.primer_msg_lead_at >= NOW() - INTERVAL '48 hours'
-           AND cl.primer_msg_lead_at < NOW() - INTERVAL '60 minutes'
+           AND COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) >= NOW() - INTERVAL '48 hours'
+           AND COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) < NOW() - INTERVAL '60 minutes'
            AND NOT EXISTS (
              SELECT 1 FROM jsonb_array_elements(cl.chat) m
              WHERE m->>'role' = 'agent'
+               AND (
+                 c.chatbot_transfer_marker IS NULL
+                 OR c.chatbot_transfer_marker = ''
+                 OR (m->>'_ghl_source' IS NULL OR m->>'_ghl_source' NOT IN ('workflow', 'api', 'campaign'))
+               )
            )
            AND mc.meta_speed_chat_min IS NOT NULL
            AND c.estado_cuenta = 'activo'
            AND c.monto_mensualidad > 0
-         ORDER BY cl.primer_msg_lead_at ASC
+         ORDER BY COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) ASC
          LIMIT $1`,
         [MAX_CHATS_PER_RUN],
       ),
@@ -130,24 +137,29 @@ export async function runSpeedToLeadChatAlerts(): Promise<SpeedToLeadChatAlertsR
              cl.asesor_asignado,
              c.token_ghl,
              c.nombre_cuenta,
-             cl.primer_msg_lead_at,
-             EXTRACT(EPOCH FROM (NOW() - cl.primer_msg_lead_at)) / 60 AS minutos_sin_respuesta
+             COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) AS primer_msg_lead_at,
+             EXTRACT(EPOCH FROM (NOW() - COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at))) / 60 AS minutos_sin_respuesta
            FROM chats_logs cl
            JOIN cuentas c ON c.id_cuenta = cl.id_cuenta
            JOIN metas_cuenta mc ON mc.id_cuenta = cl.id_cuenta
-           WHERE cl.primer_msg_lead_at IS NOT NULL
+           WHERE COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) IS NOT NULL
              AND cl.chat_stl_alerted_at IS NOT NULL
              AND cl.chat_stl_4h_alerted_at IS NULL
-             AND cl.primer_msg_lead_at >= NOW() - INTERVAL '48 hours'
-             AND cl.primer_msg_lead_at < NOW() - INTERVAL '4 hours'
+             AND COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) >= NOW() - INTERVAL '48 hours'
+             AND COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) < NOW() - INTERVAL '4 hours'
              AND NOT EXISTS (
                SELECT 1 FROM jsonb_array_elements(cl.chat) m
                WHERE m->>'role' = 'agent'
+                 AND (
+                   c.chatbot_transfer_marker IS NULL
+                   OR c.chatbot_transfer_marker = ''
+                   OR (m->>'_ghl_source' IS NULL OR m->>'_ghl_source' NOT IN ('workflow', 'api', 'campaign'))
+                 )
              )
              AND mc.meta_speed_chat_min IS NOT NULL
              AND c.estado_cuenta = 'activo'
              AND c.monto_mensualidad > 0
-           ORDER BY cl.primer_msg_lead_at ASC
+           ORDER BY COALESCE(cl.bot_delegacion_at, cl.primer_msg_lead_at) ASC
            LIMIT $1`,
           [capacidad4h],
         ),

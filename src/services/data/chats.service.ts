@@ -18,7 +18,10 @@ import {
 
 interface ChatMessage {
   role?: string;
+  name?: string;
   message?: string;
+  timestamp?: string;
+  _ghl_source?: string;
 }
 
 interface ChatRow {
@@ -32,6 +35,7 @@ interface ChatRow {
   ia_objeciones: unknown;
   tags_internos: unknown;
   primer_msg_lead_at: string | null;
+  bot_delegacion_at: string | null;
   es_calificado: boolean;
   excluido_metricas: boolean;
   calificacion_manual: string | null;
@@ -116,6 +120,37 @@ export function computeChatMetrica(
         if (!isNaN(lead) && !isNaN(inicio) && lead > inicio) {
           tiempos.push((lead - inicio) / 60_000);
         }
+      }
+    }
+    const avg =
+      tiempos.length > 0
+        ? Math.round(tiempos.reduce((a, b) => a + b, 0) / tiempos.length)
+        : 0;
+    return { id, nombre, tipo: "chat", valor: avg };
+  }
+
+  if (chatAgregacion === "speed_post_bot") {
+    const BOT_SOURCES = new Set(["workflow", "api", "campaign"]);
+    const tiempos: number[] = [];
+    for (const row of filtered) {
+      if (!row.bot_delegacion_at) continue;
+      const delegacionMs = new Date(row.bot_delegacion_at).getTime();
+      if (isNaN(delegacionMs)) continue;
+      const transcript = (row as ChatRowWithTranscript).chat;
+      if (!Array.isArray(transcript)) continue;
+      let firstHumanAgentTs: number | null = null;
+      for (const msg of transcript) {
+        if (msg.role !== "agent" || !msg.timestamp) continue;
+        if (BOT_SOURCES.has(msg._ghl_source ?? "")) continue;
+        const ts = new Date(msg.timestamp).getTime();
+        if (!isNaN(ts) && ts > delegacionMs) {
+          if (firstHumanAgentTs === null || ts < firstHumanAgentTs) {
+            firstHumanAgentTs = ts;
+          }
+        }
+      }
+      if (firstHumanAgentTs !== null) {
+        tiempos.push((firstHumanAgentTs - delegacionMs) / 60_000);
       }
     }
     const avg =
@@ -269,7 +304,8 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
 
   const standardChatConfigs = metricasConfig.filter(isStandardChatConfig);
   const keywordConfigs = metricasConfig.filter(isKeywordConfig);
-  const needTranscript = keywordConfigs.length > 0;
+  const needTranscript = keywordConfigs.length > 0
+    || standardChatConfigs.some(c => c.chatAgregacion === "speed_post_bot");
 
   // ── 2. Obtener chats_logs ───────────────────────────────────────────────
   const conditions: string[] = ["id_cuenta = $1", "excluida_dashboard = false"];
@@ -297,7 +333,7 @@ export async function getChatsData(params: GetChatsParams): Promise<GetChatsResu
     `SELECT
        id_evento, id_cuenta, fecha_y_hora_z, estado, origen,
        asesor_asignado, ia_categoria, ia_objeciones, tags_internos,
-       primer_msg_lead_at, COALESCE(excluido_metricas, false) AS excluido_metricas,
+       primer_msg_lead_at, bot_delegacion_at, COALESCE(excluido_metricas, false) AS excluido_metricas,
        calificacion_manual${chatColumn}
      FROM chats_logs
      WHERE ${where}
