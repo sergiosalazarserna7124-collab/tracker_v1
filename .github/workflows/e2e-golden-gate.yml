@@ -9,6 +9,23 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# ─── Serialización global del gate (AUT-1783) ────────────────────────────────
+# La suite golden corre contra infra COMPARTIDA y viva: la semilla del coach
+# (guiones_coach con prefijo e2e_coach_% + coach_habilitado=true en demo cuenta 52)
+# y su cleanup en after() operan sobre la MISMA cuenta 52 en todas las corridas.
+# Si dos corridas del gate se solapan (dos PRs a la vez), el after() de una borra
+# los guiones e inhabilita coach_habilitado mientras el before() de la otra sigue
+# drenando → sus candidatos desaparecen → evaluaciones_coach nunca aterrizan y el
+# subtest de coach falla intermitentemente (both-channels fail cuando hay solape,
+# video-only cuando el race es parcial). Evidencia: runs 30044447776 (FAIL both) y
+# 30044507557 (PASS) solapados 21:01–21:04 UTC el 2026-07-23 sobre cuenta 52.
+# Un único group GLOBAL (sin keyear por ref/PR) fuerza que solo una corrida toque
+# la cuenta 52 a la vez. cancel-in-progress=false → las demás encolan, no se cancela
+# un gate ya corriendo (evita marcar rojo un gate legítimo a medio drenar).
+concurrency:
+  group: e2e-golden-gate-demo-52
+  cancel-in-progress: false
+
 jobs:
   golden-e2e:
     runs-on: ubuntu-latest
