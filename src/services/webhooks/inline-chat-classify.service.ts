@@ -1,6 +1,7 @@
 import { db as pgPool } from "../../config/database.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
+import { evaluateReglas, type DynamicValueContext } from "../ai/reglas-evaluator.service.js";
 import { parseCriteriosCalificacion } from "../data/criterios-calificacion.utils.js";
 
 // Classify on the very first lead message to prevent night-drift (AUT-1706)
@@ -13,12 +14,27 @@ interface AccountConfigRow {
   criterios_calificacion: unknown;
   reglas_etiquetas: unknown;
   canales_activos: unknown;
+  token_ghl: string | null;
+  locationid: string | null;
 }
 
 interface ChatRow {
   id_evento: number;
   chat: unknown;
   ia_categoria: string | null;
+  id_lead: string | null;
+}
+
+type ChatMessage = { role: string; message: string; timestamp: string; name?: string };
+
+function formatChatAsTranscript(messages: ChatMessage[]): string {
+  return messages
+    .map((m) => {
+      const role = m.role === "lead" ? "Lead" : m.role === "agent" ? "Asesor" : m.role;
+      const name = m.name ? ` (${m.name})` : "";
+      return `${role}${name}: ${m.message ?? ""}`;
+    })
+    .join("\n");
 }
 
 /**
@@ -32,12 +48,13 @@ interface ChatRow {
 export async function tryInlineChatClassification(
   conversationId: string,
   idCuenta: number,
+  ghlContext?: { contactId?: string | null; tokenGhl?: string | null; locationId?: string | null },
 ): Promise<void> {
   try {
     // 1. Check if chat needs classification
     const chatResult = await withRetry(
       () => pgPool.query<ChatRow>(
-        `SELECT id_evento, chat, ia_categoria
+        `SELECT id_evento, chat, ia_categoria, id_lead
          FROM chats_logs
          WHERE chatid = $1 AND id_cuenta = $2`,
         [conversationId, idCuenta],
@@ -50,7 +67,7 @@ export async function tryInlineChatClassification(
     if (chatRow.ia_categoria !== null) return;
 
     const messages = Array.isArray(chatRow.chat)
-      ? (chatRow.chat as Array<{ role: string; message: string; timestamp: string; name?: string }>)
+      ? (chatRow.chat as ChatMessage[])
       : [];
 
     const leadMessages = messages.filter((m) => m.role === "lead");
@@ -60,7 +77,8 @@ export async function tryInlineChatClassification(
     const configResult = await withRetry(
       () => pgPool.query<AccountConfigRow>(
         `SELECT openai_api_key, prompt_ventas, embudo_personalizado,
-                criterios_calificacion, reglas_etiquetas, canales_activos
+                criterios_calificacion, reglas_etiquetas, canales_activos,
+                token_ghl, locationid
          FROM cuentas WHERE id_cuenta = $1`,
         [idCuenta],
       ),
@@ -123,6 +141,50 @@ export async function tryInlineChatClassification(
     console.info(
       `[inlineClassify] chat=${chatRow.id_evento} cuenta=${idCuenta} → "${result.categoria}" (confianza=${result.confianza})`,
     );
+
+    // 5. Run reglas GHL-write actions for chats (AUT-1781)
+    const contactId = ghlContext?.contactId ?? chatRow.id_lead;
+    const bearerToken = ghlContext?.tokenGhl ?? config.token_ghl;
+    const locationId = ghlContext?.locationId ?? config.locationid;
+
+    if (contactId && bearerToken && reglasEtiquetas.length > 0) {
+      const hasGhlWriteReglas = reglasEtiquetas.some((r) => {
+        const matchesChat = !r.fuentes || r.fuentes.length === 0 ||
+          r.fuentes.some((f: string) => ["chat", "chats", "todas"].includes(f));
+        if (!matchesChat) return false;
+        const acciones = Array.isArray((r as Record<string, unknown>).acciones)
+          ? (r as Record<string, unknown>).acciones as Array<{ tipo: string }>
+          : [{ tipo: (r as Record<string, unknown>).accion ?? "asignar_etiqueta" }];
+        return acciones.some((a) =>
+          a.tipo === "escribir_campo_ghl" || a.tipo === "escribir_campo_ghl_ia",
+        );
+      });
+
+      if (hasGhlWriteReglas) {
+        try {
+          const transcript = formatChatAsTranscript(messages);
+          const dynCtx: DynamicValueContext = {
+            contactId,
+            bearerToken,
+            locationId: locationId ?? null,
+          };
+          await evaluateReglas(
+            transcript,
+            reglasEtiquetas,
+            "chat",
+            config.prompt_ventas ?? null,
+            config.openai_api_key,
+            idCuenta,
+            dynCtx,
+          );
+          console.info(
+            `[inlineClassify] GHL-write reglas executed for chat=${chatRow.id_evento} cuenta=${idCuenta} contact=${contactId}`,
+          );
+        } catch (err) {
+          console.error(`[inlineClassify] Error running GHL-write reglas for chat=${chatRow.id_evento}:`, err);
+        }
+      }
+    }
   } catch (err) {
     console.error(`[inlineClassify] Error para conversationId="${conversationId}" cuenta=${idCuenta}:`, err);
   }

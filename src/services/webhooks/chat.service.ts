@@ -549,7 +549,11 @@ export async function processChatWebhook(
   // ── 10b. Inline classification — classify immediately so MQL/SQL metrics
   // don't drift when the batch cron runs hours later (AUT-1657) ───────────────
   if (senderRole === "lead") {
-    void tryInlineChatClassification(conversationId, idCuenta);
+    void tryInlineChatClassification(conversationId, idCuenta, {
+      contactId: contactId ?? null,
+      tokenGhl: tokenGhl || null,
+      locationId: locationId || null,
+    });
   }
 
   // ── 11. Auto-remove tag sin_responder_chat cuando un agente responde ──────

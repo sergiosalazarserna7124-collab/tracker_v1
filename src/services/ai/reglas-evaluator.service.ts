@@ -81,7 +81,7 @@ const evaluatorSchema = jsonSchema<{ matched_rule_ids: string[] }>({
 
 // ─── Prompt del evaluador ────────────────────────────────────────────────────
 
-const EVALUATOR_PROMPT = `Eres un evaluador de reglas de etiquetado para transcripciones de llamadas y videollamadas de ventas. Se te da una transcripción y una lista de REGLAS. Cada regla tiene un "id" y una "condition" (descripción en lenguaje natural de cuándo aplicar esa etiqueta).
+const EVALUATOR_PROMPT = `Eres un evaluador de reglas de etiquetado para transcripciones de llamadas, videollamadas y conversaciones de chat de ventas. Se te da una transcripción o conversación y una lista de REGLAS. Cada regla tiene un "id" y una "condition" (descripción en lenguaje natural de cuándo aplicar esa etiqueta).
 
 Tu tarea EXACTA:
 1. Lee la transcripción completa.
@@ -212,7 +212,7 @@ async function resolveDynamicValue(
 export async function evaluateReglas(
   transcript: string,
   reglasRaw: unknown,
-  source: "call" | "meeting",
+  source: "call" | "meeting" | "chat",
   promptVentas: string | null,
   openaiApiKey?: string | null,
   idCuenta?: number | null,
