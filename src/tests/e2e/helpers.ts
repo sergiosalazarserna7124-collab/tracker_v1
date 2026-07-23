@@ -11,10 +11,31 @@ const DB_URL =
 
 let pool: pg.Pool | null = null;
 
+/**
+ * Quita cualquier `sslmode` del connection string.
+ *
+ * node-postgres, cuando el connectionString trae `sslmode=require|verify-full`,
+ * construye su propio objeto ssl que SOBREESCRIBE el `ssl: { rejectUnauthorized: false }`
+ * que le pasamos al Pool. El cert TLS de `mainbd.automatizacionesia.com` expiró el
+ * 2025-12-13, así que con verificación activa el handshake falla con
+ * "certificate has expired" y toda la suite golden se cae (gate rojo en cada PR).
+ * Las apps de prod conectan a mainbd sin verificar el cert; replicamos ese contrato
+ * aquí eliminando el sslmode del string para que `rejectUnauthorized: false` mande.
+ */
+function stripSslmode(url: string): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.delete("sslmode");
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function getPool(): pg.Pool {
   if (!pool) {
     pool = new pg.Pool({
-      connectionString: DB_URL,
+      connectionString: stripSslmode(DB_URL),
       max: 3,
       ssl: { rejectUnauthorized: false },
     });
