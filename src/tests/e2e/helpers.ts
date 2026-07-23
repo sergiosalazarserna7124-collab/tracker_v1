@@ -6,7 +6,7 @@ const CEREBRO_URL =
 const DEMO_ACCOUNT_ID = 52;
 const DEMO_LOCATION_ID = "QfAM4c37M8mR2xBxqJaJ";
 const DB_URL =
-  process.env.E2E_DATABASE_URL ??
+  process.env.E2E_DATABASE_URL ||
   "postgresql://agente_readonly:readonly_autokpi_2026@mainbd.automatizacionesia.com:5432/postgres";
 
 let pool: pg.Pool | null = null;

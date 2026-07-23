@@ -27,6 +27,7 @@
 
 import { describe, test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import {
   sendChatWebhook,
   sendVideocallWebhook,
@@ -34,7 +35,6 @@ import {
   queryDB,
   getPool,
   closePool,
-  uid,
   DEMO_ACCOUNT_ID,
 } from "./helpers.js";
 
@@ -87,7 +87,11 @@ async function seedCoachConfig(): Promise<void> {
   );
 
   for (const canal of ["chat", "videollamada"] as const) {
-    const id = uid();
+    // guiones_coach.id es UUID en la BD; uid() genera "e2e-..." (no UUID) y el
+    // INSERT reventaba con "invalid input syntax for type uuid" en cuanto la
+    // semilla tenía permisos de escritura (antes quedaba oculto: el rol readonly
+    // fallaba antes, en el DELETE). Usar un UUID real (AUT-1775).
+    const id = randomUUID();
     await pool.query(
       `INSERT INTO guiones_coach
          (id, id_cuenta, categoria_llamada_id, version, secciones, umbral, activo,
