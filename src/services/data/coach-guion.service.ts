@@ -22,6 +22,10 @@ export interface GuionCoach {
   secciones: SeccionGuion[];
   umbral: number;
   activo: boolean;
+  nota_cumplido: string | null;
+  nota_no_cumplido: string | null;
+  tags_cumplido: string[] | null;
+  tags_no_cumplido: string[] | null;
   created_at: Date | null;
   updated_at: Date | null;
 }
@@ -31,6 +35,10 @@ export interface UpsertGuionPayload {
   canal?: CanalCoach;
   secciones: SeccionGuion[];
   umbral?: number;
+  nota_cumplido?: string | null;
+  nota_no_cumplido?: string | null;
+  tags_cumplido?: string[] | null;
+  tags_no_cumplido?: string[] | null;
 }
 
 // ─── Validación ──────────────────────────────────────────────────────────────
@@ -164,6 +172,10 @@ export async function upsertGuion(
       secciones: secciones as unknown as Record<string, unknown>,
       umbral,
       activo: true,
+      nota_cumplido: payload.nota_cumplido ?? null,
+      nota_no_cumplido: payload.nota_no_cumplido ?? null,
+      tags_cumplido: (payload.tags_cumplido ?? null) as unknown as Record<string, unknown>,
+      tags_no_cumplido: (payload.tags_no_cumplido ?? null) as unknown as Record<string, unknown>,
     })
     .returning();
 
@@ -211,6 +223,10 @@ function mapRow(row: typeof guionesCoach.$inferSelect): GuionCoach {
     secciones: row.secciones as unknown as SeccionGuion[],
     umbral: row.umbral,
     activo: row.activo,
+    nota_cumplido: row.nota_cumplido,
+    nota_no_cumplido: row.nota_no_cumplido,
+    tags_cumplido: row.tags_cumplido as unknown as string[] | null,
+    tags_no_cumplido: row.tags_no_cumplido as unknown as string[] | null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

@@ -14,6 +14,11 @@ export interface ScoreSeccion {
   observacion: string;
 }
 
+export interface NotaPromptConfig {
+  nota_cumplido?: string | null;
+  nota_no_cumplido?: string | null;
+}
+
 export interface CoachEvaluationResult {
   scores: ScoreSeccion[];
   score_total: number;
@@ -95,13 +100,39 @@ const CANAL_LABELS: Record<CanalCoach, { tipo: string; interaccion: string }> = 
   videollamada: { tipo: "videollamada", interaccion: "videollamada" },
 };
 
-function buildSystemPrompt(secciones: SeccionGuion[], canal: CanalCoach = "llamada"): string {
+function buildSystemPrompt(
+  secciones: SeccionGuion[],
+  canal: CanalCoach = "llamada",
+  notaConfig?: NotaPromptConfig,
+): string {
   const seccionesDesc = secciones.map((s) => {
     const tipo = s.tipo === "must_have" ? "OBLIGATORIA" : "DESEABLE";
     return `- **${s.nombre}** (ID: ${s.id}, ${tipo}): ${s.criterio}`;
   }).join("\n");
 
   const labels = CANAL_LABELS[canal];
+
+  let notaInstruccion = `4. La nota_accionable debe ser concreta y útil: máximo 1-2 mejoras específicas que el asesor pueda aplicar en su próxima ${labels.interaccion}. No repitas todo el guion; enfócate en lo más impactante.
+5. Si el asesor hizo bien todo, la nota puede ser un refuerzo positivo breve.`;
+
+  if (notaConfig?.nota_cumplido || notaConfig?.nota_no_cumplido) {
+    const parts: string[] = [];
+    parts.push("4. Para generar la nota_accionable, sigue estas instrucciones según el resultado:");
+    if (notaConfig.nota_no_cumplido) {
+      parts.push(`   - Si el asesor NO cumple el umbral: ${notaConfig.nota_no_cumplido}`);
+    }
+    if (notaConfig.nota_cumplido) {
+      parts.push(`   - Si el asesor SÍ cumple el umbral: ${notaConfig.nota_cumplido}`);
+    }
+    if (!notaConfig.nota_cumplido) {
+      parts.push(`   - Si el asesor SÍ cumple el umbral: escribe un refuerzo positivo breve.`);
+    }
+    if (!notaConfig.nota_no_cumplido) {
+      parts.push(`   - Si el asesor NO cumple el umbral: escribe 1-2 mejoras concretas y accionables.`);
+    }
+    parts.push("5. La nota_accionable siempre debe ser máximo 2 oraciones.");
+    notaInstruccion = parts.join("\n");
+  }
 
   return `Eres un evaluador de ${labels.tipo}s de ventas. Tu tarea es evaluar una transcripción contra un guion de ventas específico.
 
@@ -114,8 +145,7 @@ ${seccionesDesc}
 1. Evalúa CADA sección del guion y asigna un score de 0 a 100.
 2. "cumple" = true si el asesor cubrió al menos el criterio mínimo de esa sección (score ≥ 50).
 3. Sé justo: no exijas coincidencia literal, evalúa si el OBJETIVO de la sección se cumplió.
-4. La nota_accionable debe ser concreta y útil: máximo 1-2 mejoras específicas que el asesor pueda aplicar en su próxima ${labels.interaccion}. No repitas todo el guion; enfócate en lo más impactante.
-5. Si el asesor hizo bien todo, la nota puede ser un refuerzo positivo breve.
+${notaInstruccion}
 
 ## REGLAS
 - Score 0-30: No se mencionó o se hizo muy mal
@@ -134,11 +164,12 @@ export async function evaluateCallAgainstGuion(
   openaiApiKey?: string | null,
   idCuenta?: number | null,
   canal: CanalCoach = "llamada",
+  notaConfig?: NotaPromptConfig,
 ): Promise<CoachEvaluationResult> {
   const model = resolveModel(openaiApiKey);
   const seccionIds = secciones.map((s) => s.id);
   const schema = buildEvalSchema(seccionIds);
-  const systemPrompt = buildSystemPrompt(secciones, canal);
+  const systemPrompt = buildSystemPrompt(secciones, canal, notaConfig);
   const labels = CANAL_LABELS[canal];
 
   const { object, usage } = await generateObject({

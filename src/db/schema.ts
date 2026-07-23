@@ -196,6 +196,8 @@ export const cuentas = pgTable("cuentas", {
   // NULL = sin etiquetas de descarte configuradas.
   // Shape: string[] — nombres de etiquetas GHL que marcan un lead como descartado.
   etiquetas_descarte: jsonb("etiquetas_descarte"),
+  // ── V18: exclusiones de análisis del coach (AUT-1767) ───────────────────
+  exclusiones_coach: jsonb("exclusiones_coach"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────
@@ -345,6 +347,10 @@ export const guionesCoach = pgTable("guiones_coach", {
   secciones: jsonb("secciones").notNull(),
   umbral: integer("umbral").notNull().default(70),
   activo: boolean("activo").notNull().default(true),
+  nota_cumplido: text("nota_cumplido"),
+  nota_no_cumplido: text("nota_no_cumplido"),
+  tags_cumplido: jsonb("tags_cumplido"),
+  tags_no_cumplido: jsonb("tags_no_cumplido"),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 }, (table) => [

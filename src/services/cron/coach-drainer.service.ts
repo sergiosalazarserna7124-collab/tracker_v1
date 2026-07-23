@@ -4,6 +4,7 @@ import { evaluacionesCoach, guionesCoach, cuentas } from "../../db/schema.js";
 import { eq, and, sql } from "drizzle-orm";
 import { withRetry } from "../../utils/retry.utils.js";
 import { evaluateCallAgainstGuion } from "../ai/coach-evaluation.service.js";
+import type { NotaPromptConfig } from "../ai/coach-evaluation.service.js";
 import {
   safeAddContactTags,
   createLocationTag,
@@ -22,6 +23,18 @@ interface CoachCuentaRow {
   categorias_llamadas: unknown;
   zona_horaria_iana: string | null;
   ghl_native_task_workflow: boolean;
+  exclusiones_coach: unknown;
+}
+
+interface ExclusionRegla {
+  canal: string;
+  campo: string;
+  operador: "eq" | "neq" | "contains" | "not_contains";
+  valor: string;
+}
+
+interface ExclusionesConfig {
+  reglas: ExclusionRegla[];
 }
 
 interface EvalCandidate {
@@ -104,7 +117,8 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
   const cuentasResult = await withRetry(
     () => pgPool.query<CoachCuentaRow>(
       `SELECT c.id_cuenta, c.openai_api_key, c.token_ghl, c.locationid,
-              c.categorias_llamadas, c.zona_horaria_iana, c.ghl_native_task_workflow
+              c.categorias_llamadas, c.zona_horaria_iana, c.ghl_native_task_workflow,
+              c.exclusiones_coach
        FROM cuentas c
        WHERE c.coach_habilitado = true
          AND (c.estado_cuenta NOT IN ('cancelado', 'inactivo') OR c.estado_cuenta IS NULL)`,
@@ -171,6 +185,8 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
       `[coachDrainer] cuenta=${cuenta.id_cuenta}: ${candidates.length} candidatos pendientes de evaluación`,
     );
 
+    const exclusiones = parseExclusiones(cuenta.exclusiones_coach);
+
     for (const candidate of candidates) {
       if (totalEvaluated() >= MAX_EVALUATIONS_PER_RUN) break;
       if (Date.now() - startTime > MAX_RUNTIME_MS) break;
@@ -185,6 +201,11 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
           skipped++;
           continue;
         }
+      }
+
+      if (shouldExclude(candidate, exclusiones)) {
+        skipped++;
+        continue;
       }
 
       const canalMap = guionsByCanal.get(candidate.canal);
@@ -207,6 +228,11 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
 
       const label = `[coachDrainer c=${cuenta.id_cuenta} ${candidate.canal}=${candidate.id}]`;
 
+      const notaConfig: NotaPromptConfig = {
+        nota_cumplido: guion.nota_cumplido,
+        nota_no_cumplido: guion.nota_no_cumplido,
+      };
+
       try {
         const result = await evaluateCallAgainstGuion(
           candidate.transcript,
@@ -215,6 +241,7 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
           cuenta.openai_api_key,
           cuenta.id_cuenta,
           candidate.canal,
+          notaConfig,
         );
 
         await drizzleDb.insert(evaluacionesCoach).values({
@@ -234,25 +261,31 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
         else if (candidate.canal === "chat") evaluadasChats++;
         else evaluadasVideo++;
 
-        if (!result.cumple_umbral && candidate.contact_id_ghl && cuenta.token_ghl && cuenta.locationid) {
-          const ghlResult = await applyCoachTagAndTask(
+        const tagsToApply: string[] = result.cumple_umbral
+          ? (guion.tags_cumplido as unknown as string[] | null) ?? []
+          : (guion.tags_no_cumplido as unknown as string[] | null) ?? [COACH_TAG];
+
+        if (tagsToApply.length > 0 && candidate.contact_id_ghl && cuenta.token_ghl && cuenta.locationid) {
+          const ghlResult = await applyCoachTagsAndTask(
             candidate.contact_id_ghl,
             cuenta.token_ghl,
             cuenta.locationid,
             cuenta.id_cuenta,
+            tagsToApply,
             result.nota_accionable,
             result.score_total,
             guion.umbral,
             cuenta.ghl_native_task_workflow,
+            !result.cumple_umbral,
             label,
           );
 
-          if (ghlResult.tag) tagsApplied++;
+          if (ghlResult.tags) tagsApplied += ghlResult.tags;
           if (ghlResult.tarea) tareasCreadas++;
 
           await drizzleDb
             .update(evaluacionesCoach)
-            .set({ ghl_tag_applied: ghlResult.tag ? COACH_TAG : null })
+            .set({ ghl_tag_applied: ghlResult.appliedTagNames })
             .where(
               and(
                 eq(evaluacionesCoach.id_cuenta, cuenta.id_cuenta),
@@ -433,34 +466,92 @@ function resolveGuionForCanal(
   return null;
 }
 
-async function applyCoachTagAndTask(
+function parseExclusiones(raw: unknown): ExclusionesConfig | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  if (!Array.isArray(obj.reglas)) return null;
+  const reglas: ExclusionRegla[] = [];
+  for (const r of obj.reglas) {
+    if (typeof r !== "object" || r === null) continue;
+    const rule = r as Record<string, unknown>;
+    if (typeof rule.canal !== "string" || typeof rule.campo !== "string" ||
+        typeof rule.operador !== "string" || typeof rule.valor !== "string") continue;
+    reglas.push({
+      canal: rule.canal,
+      campo: rule.campo,
+      operador: rule.operador as ExclusionRegla["operador"],
+      valor: rule.valor,
+    });
+  }
+  return reglas.length > 0 ? { reglas } : null;
+}
+
+function shouldExclude(candidate: EvalCandidate, exclusiones: ExclusionesConfig | null): boolean {
+  if (!exclusiones) return false;
+  for (const regla of exclusiones.reglas) {
+    if (regla.canal !== "todos" && regla.canal !== candidate.canal) continue;
+    const fieldValue = getCandidateField(candidate, regla.campo);
+    if (matchesRule(fieldValue, regla.operador, regla.valor)) return true;
+  }
+  return false;
+}
+
+function getCandidateField(candidate: EvalCandidate, campo: string): string {
+  switch (campo) {
+    case "estado_resultado": return (candidate.estado_resultado ?? "").toLowerCase().trim().replace(/\s+/g, "_");
+    case "tipo_evento": return candidate.tipo_evento ?? "";
+    case "canal": return candidate.canal;
+    default: return "";
+  }
+}
+
+function matchesRule(fieldValue: string, operador: ExclusionRegla["operador"], valor: string): boolean {
+  const normalizedValor = valor.toLowerCase().trim();
+  switch (operador) {
+    case "eq": return fieldValue === normalizedValor;
+    case "neq": return fieldValue !== normalizedValor;
+    case "contains": return fieldValue.includes(normalizedValor);
+    case "not_contains": return !fieldValue.includes(normalizedValor);
+    default: return false;
+  }
+}
+
+async function applyCoachTagsAndTask(
   contactId: string,
   tokenGhl: string,
   locationId: string,
   idCuenta: number,
+  tags: string[],
   notaAccionable: string,
   scoreTotal: number,
   umbral: number,
   ghlNativeTaskWorkflow: boolean,
+  createTask: boolean,
   label: string,
-): Promise<{ tag: boolean; tarea: boolean }> {
-  let tagApplied = false;
+): Promise<{ tags: number; tarea: boolean; appliedTagNames: string | null }> {
+  let tagsApplied = 0;
   let tareaCreated = false;
 
-  try {
-    await createLocationTag(locationId, tokenGhl, COACH_TAG);
-    await safeAddContactTags(contactId, tokenGhl, [COACH_TAG], locationId);
-    tagApplied = true;
-  } catch (err) {
-    const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
-    if (isTokenInvalid) {
-      await savePendingTag(idCuenta, contactId, COACH_TAG, "Token GHL inválido (coach)");
-    } else {
-      console.error(`${label} Error aplicando tag coach:`, err);
+  if (tags.length > 0) {
+    try {
+      for (const tag of tags) {
+        await createLocationTag(locationId, tokenGhl, tag);
+      }
+      await safeAddContactTags(contactId, tokenGhl, tags, locationId);
+      tagsApplied = tags.length;
+    } catch (err) {
+      const isTokenInvalid = (err as Error & { isTokenInvalid?: boolean }).isTokenInvalid;
+      if (isTokenInvalid) {
+        for (const tag of tags) {
+          await savePendingTag(idCuenta, contactId, tag, "Token GHL inválido (coach)");
+        }
+      } else {
+        console.error(`${label} Error aplicando tags coach:`, err);
+      }
     }
   }
 
-  if (!ghlNativeTaskWorkflow) {
+  if (createTask && !ghlNativeTaskWorkflow) {
     try {
       const dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
       await createContactTask(contactId, tokenGhl, {
@@ -474,5 +565,9 @@ async function applyCoachTagAndTask(
     }
   }
 
-  return { tag: tagApplied, tarea: tareaCreated };
+  return {
+    tags: tagsApplied,
+    tarea: tareaCreated,
+    appliedTagNames: tagsApplied > 0 ? tags.join(",") : null,
+  };
 }
