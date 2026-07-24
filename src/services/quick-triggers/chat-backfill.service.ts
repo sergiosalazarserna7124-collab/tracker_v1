@@ -4,6 +4,7 @@ import { db } from "../../config/database.js";
 import { cuentas } from "../../db/schema.js";
 import { fetchWithTimeout } from "../../utils/fetch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
+import { tryInlineChatClassification } from "../webhooks/inline-chat-classify.service.js";
 import type { ChatBackfillBodyType } from "../../schemas/quick-triggers/chat-backfill.schema.js";
 
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
@@ -325,6 +326,16 @@ export async function executeChatBackfill(
           result.newConversations++;
         }
         result.totalMessagesImported += res.count;
+
+        // Run inline classification + GHL-write rules (e.g. escribir_campo_ghl_ia)
+        // for newly imported conversations (AUT-1816)
+        if (!existed && messages.some((m) => m.direction === "inbound")) {
+          void tryInlineChatClassification(conv.id, idCuenta, {
+            contactId: conv.contactId,
+            tokenGhl: account.token_ghl,
+            locationId: account.locationid,
+          });
+        }
       }),
     );
 

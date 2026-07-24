@@ -2,6 +2,7 @@ import { db as pgPool } from "../../config/database.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { analyzeChatBatch, analyzeLlamadaBatch } from "../ai/batch-conversation-analysis.service.js";
 import { parseCriteriosCalificacion } from "../data/criterios-calificacion.utils.js";
+import { evaluateReglas, type DynamicValueContext } from "../ai/reglas-evaluator.service.js";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -12,6 +13,9 @@ interface CuentaBatchRow {
   criterios_calificacion: unknown;
   prompt_ventas: string | null;
   prompt_llamadas: string | null;
+  reglas_etiquetas: unknown;
+  token_ghl: string | null;
+  locationid: string | null;
 }
 
 interface ChatPendienteRow {
@@ -19,6 +23,7 @@ interface ChatPendienteRow {
   id_cuenta: number;
   chat: unknown;
   ia_categoria: string | null;
+  id_lead: string | null;
 }
 
 interface LlamadaPendienteRow {
@@ -37,6 +42,36 @@ export interface BatchAnalysisResult {
 }
 
 type EmbudoEtapaConFuentes = { id: string; nombre: string; fuentes?: string[] };
+
+type ChatMessage = { role: string; message: string; timestamp?: string; name?: string };
+
+function formatChatAsTranscript(messages: ChatMessage[]): string {
+  return messages
+    .map((m) => {
+      const role = m.role === "lead" ? "Lead" : m.role === "agent" ? "Asesor" : m.role;
+      const name = m.name ? ` (${m.name})` : "";
+      return `${role}${name}: ${m.message ?? ""}`;
+    })
+    .join("\n");
+}
+
+interface GhlWriteRegla {
+  fuentes: string[];
+  acciones: Array<{ tipo: string }>;
+}
+
+function accountHasGhlWriteReglasForChats(reglasRaw: unknown): boolean {
+  if (!Array.isArray(reglasRaw)) return false;
+  return (reglasRaw as GhlWriteRegla[]).some((r) => {
+    const matchesChat = !r.fuentes || r.fuentes.length === 0 ||
+      r.fuentes.some((f: string) => ["chat", "chats", "todas"].includes(f));
+    if (!matchesChat) return false;
+    const acciones = Array.isArray(r.acciones) ? r.acciones : [];
+    return acciones.some((a) =>
+      a.tipo === "escribir_campo_ghl" || a.tipo === "escribir_campo_ghl_ia",
+    );
+  });
+}
 
 function filterEmbudoByFuente(
   embudo: EmbudoEtapaConFuentes[],
@@ -88,7 +123,8 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
   const cuentasResult = await withRetry(
     () => pgPool.query<CuentaBatchRow>(
       `SELECT c.id_cuenta, c.openai_api_key, c.embudo_personalizado,
-              c.criterios_calificacion, c.prompt_ventas, c.prompt_llamadas
+              c.criterios_calificacion, c.prompt_ventas, c.prompt_llamadas,
+              c.reglas_etiquetas, c.token_ghl, c.locationid
        FROM cuentas c
        WHERE (c.estado_cuenta NOT IN ('cancelado', 'inactivo') OR c.estado_cuenta IS NULL)
        ${accountFilter}
@@ -110,6 +146,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
     embudo: EmbudoEtapaConFuentes[];
     categorias_custom: Array<{ slug: string; label: string; descripcion: string }>;
     prompt_calificacion_chats: string | null;
+    hasGhlWriteReglas: boolean;
   }
 
   const cuentasConPendientes: CuentaConPendientes[] = [];
@@ -122,7 +159,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
     const [chatsResult, llamadasResult] = await Promise.all([
       withRetry(
         () => pgPool.query<ChatPendienteRow>(
-          `SELECT id_evento, id_cuenta, chat, ia_categoria
+          `SELECT id_evento, id_cuenta, chat, ia_categoria, id_lead
            FROM chats_logs
            WHERE id_cuenta = $1
              AND ia_objeciones IS NULL
@@ -177,6 +214,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
       embudo,
       categorias_custom: categoriasCustom,
       prompt_calificacion_chats: promptCalificacionChats,
+      hasGhlWriteReglas: accountHasGhlWriteReglasForChats(cuenta.reglas_etiquetas),
     });
 
     console.info(
@@ -260,6 +298,41 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
         `[batchAnalysis] chat=${chat.id_evento} cuenta=${item.cuenta.id_cuenta} ` +
         `sentimiento=${result.ia_objeciones.sentimiento} objeciones=${result.ia_objeciones.objeciones.length}`,
       );
+
+      // Run GHL-write reglas for chats classified for the first time (AUT-1816)
+      if (
+        chat.ia_categoria === null &&
+        item.hasGhlWriteReglas &&
+        chat.id_lead &&
+        item.cuenta.token_ghl
+      ) {
+        try {
+          const transcript = formatChatAsTranscript(messages);
+          const dynCtx: DynamicValueContext = {
+            contactId: chat.id_lead,
+            bearerToken: item.cuenta.token_ghl,
+            locationId: item.cuenta.locationid ?? null,
+          };
+          await evaluateReglas(
+            transcript,
+            item.cuenta.reglas_etiquetas,
+            "chat",
+            item.cuenta.prompt_ventas ?? null,
+            item.cuenta.openai_api_key,
+            item.cuenta.id_cuenta,
+            dynCtx,
+          );
+          apiCalls++;
+          console.info(
+            `[batchAnalysis] GHL-write reglas executed for chat=${chat.id_evento} cuenta=${item.cuenta.id_cuenta} contact=${chat.id_lead}`,
+          );
+        } catch (err) {
+          console.error(
+            `[batchAnalysis] Error running GHL-write reglas for chat=${chat.id_evento}:`,
+            err,
+          );
+        }
+      }
     } catch (err) {
       errors++;
       console.error(
