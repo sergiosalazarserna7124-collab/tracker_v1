@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, integer, text, timestamp, jsonb, boolean, date, unique, index, uniqueIndex, uuid, numeric } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, integer, smallint, text, timestamp, jsonb, boolean, date, unique, index, uniqueIndex, uuid, numeric } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 /**
@@ -41,6 +41,7 @@ export const agendas = pgTable("resumenes_diarios_agendas", {
   gemini_enriquecimiento: jsonb("gemini_enriquecimiento"),
   duracion_segundos: integer("duracion_segundos"),
   ubicacion_aprox: text("ubicacion_aprox"),
+  gemini_intentos: smallint("gemini_intentos").notNull().default(0),
 }, (table) => [
   // ── Índices parciales para lookup en effectivePath() (categoria = PDTE) ──
   index("idx_agendas_cuenta_contact_pdte")
@@ -127,6 +128,7 @@ export const logLlamadas = pgTable("log_llamadas", {
   ubicacion_aprox: text("ubicacion_aprox"),
   ia_objeciones: jsonb("ia_objeciones"),
   calificacion_manual: text("calificacion_manual"),
+  gemini_intentos: smallint("gemini_intentos").notNull().default(0),
 });
 
 /**

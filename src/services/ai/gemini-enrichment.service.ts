@@ -45,33 +45,67 @@ REGLAS:
 - Para presupuesto_detectado, incluir moneda si se menciona.
 - razon_calificacion debe explicar en una oración por qué el lead es o no un buen prospecto.`;
 
-const VALID_TONO = new Set(["positivo", "neutro", "negativo", "hostil"]);
-const VALID_RECEPCION = new Set(["abierto", "interesado", "indiferente", "resistente", "hostil"]);
-const VALID_ACEPTACION = new Set(["aceptó", "considerando", "rechazó", "no_hubo_propuesta"]);
-const VALID_ENGAGEMENT = new Set(["alto", "medio", "bajo"]);
-const VALID_CIERRE = new Set(["excelente", "bueno", "regular", "malo", "no_aplica"]);
+const VALID_TONO = new Set<GeminiEnrichment["tono_lead"]>(["positivo", "neutro", "negativo", "hostil"]);
+const VALID_RECEPCION = new Set<GeminiEnrichment["recepcion_lead"]>(["abierto", "interesado", "indiferente", "resistente", "hostil"]);
+const VALID_ACEPTACION = new Set<GeminiEnrichment["aceptacion_propuesta"]>(["aceptó", "considerando", "rechazó", "no_hubo_propuesta"]);
+const VALID_ENGAGEMENT = new Set<GeminiEnrichment["engagement"]>(["alto", "medio", "bajo"]);
+const VALID_CIERRE = new Set<GeminiEnrichment["calidad_cierre"]>(["excelente", "bueno", "regular", "malo", "no_aplica"]);
+
+const ALIAS_MAP: Record<string, string> = {
+  "acepto": "aceptó",
+  "rechazo": "rechazó",
+  "no hubo propuesta": "no_hubo_propuesta",
+  "no aplica": "no_aplica",
+  "no_aplica": "no_aplica",
+  "muy positivo": "positivo",
+  "muy negativo": "negativo",
+  "muy alto": "alto",
+  "muy bajo": "bajo",
+};
+
+function normalizeEnumValue(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  let v = raw.trim().toLowerCase();
+  v = v.replace(/^[`"']+|[`"']+$/g, "");
+  v = v.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  v = v.replace(/\s+/g, " ").trim();
+  return ALIAS_MAP[v] ?? v.replace(/ /g, "_");
+}
+
+function matchEnum<T extends string>(raw: unknown, valid: Set<T>): T | null {
+  const normalized = normalizeEnumValue(raw);
+  if (valid.has(normalized as T)) return normalized as T;
+  const withAccent = normalized.normalize("NFC");
+  if (valid.has(withAccent as T)) return withAccent as T;
+  for (const candidate of valid) {
+    const candidateNorm = candidate.normalize("NFD").replace(/[̀-ͯ]/g, "");
+    if (candidateNorm === normalized) return candidate;
+  }
+  return null;
+}
 
 function validateEnrichment(obj: unknown): GeminiEnrichment | null {
   if (!obj || typeof obj !== "object") return null;
   const o = obj as Record<string, unknown>;
-  if (!VALID_TONO.has(o.tono_lead as string)) return null;
-  if (!VALID_RECEPCION.has(o.recepcion_lead as string)) return null;
-  if (!VALID_ACEPTACION.has(o.aceptacion_propuesta as string)) return null;
-  if (!VALID_ENGAGEMENT.has(o.engagement as string)) return null;
-  if (!VALID_CIERRE.has(o.calidad_cierre as string)) return null;
-  if (!Array.isArray(o.frases_relevantes)) return null;
+  const tono = matchEnum(o.tono_lead, VALID_TONO);
+  const recepcion = matchEnum(o.recepcion_lead, VALID_RECEPCION);
+  const aceptacion = matchEnum(o.aceptacion_propuesta, VALID_ACEPTACION);
+  const engagement = matchEnum(o.engagement, VALID_ENGAGEMENT);
+  const cierre = matchEnum(o.calidad_cierre, VALID_CIERRE);
+  if (!tono || !recepcion || !aceptacion || !engagement || !cierre) return null;
+  const frases = Array.isArray(o.frases_relevantes) ? o.frases_relevantes : [];
   return {
-    tono_lead: o.tono_lead as GeminiEnrichment["tono_lead"],
-    recepcion_lead: o.recepcion_lead as GeminiEnrichment["recepcion_lead"],
-    aceptacion_propuesta: o.aceptacion_propuesta as GeminiEnrichment["aceptacion_propuesta"],
-    engagement: o.engagement as GeminiEnrichment["engagement"],
-    calidad_cierre: o.calidad_cierre as GeminiEnrichment["calidad_cierre"],
+    tono_lead: tono,
+    recepcion_lead: recepcion,
+    aceptacion_propuesta: aceptacion,
+    engagement,
+    calidad_cierre: cierre,
     motivo_compra: typeof o.motivo_compra === "string" ? o.motivo_compra : null,
     perfil_compra: typeof o.perfil_compra === "string" ? o.perfil_compra : null,
     edad_estimada: typeof o.edad_estimada === "string" ? o.edad_estimada : null,
     presupuesto_detectado: typeof o.presupuesto_detectado === "string" ? o.presupuesto_detectado : null,
     razon_calificacion: typeof o.razon_calificacion === "string" ? o.razon_calificacion : null,
-    frases_relevantes: (o.frases_relevantes as unknown[]).filter((s): s is string => typeof s === "string").slice(0, 5),
+    frases_relevantes: frases.filter((s): s is string => typeof s === "string").slice(0, 5),
   };
 }
 

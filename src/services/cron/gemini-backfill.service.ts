@@ -6,6 +6,7 @@ import { env } from "../../config/env.js";
 const MAX_RUNTIME_MS = 210_000;
 const DELAY_MS = 50;
 const BATCH_SIZE = 50;
+const MAX_GEMINI_ATTEMPTS = 3;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,6 +43,7 @@ async function backfillLlamadas(
     `SELECT id, id_cuenta, transcripcion
      FROM log_llamadas
      WHERE gemini_enriquecimiento IS NULL
+       AND COALESCE(gemini_intentos, 0) < ${MAX_GEMINI_ATTEMPTS}
        AND transcripcion IS NOT NULL
        AND LENGTH(transcripcion) >= 50
        AND ts > NOW() - ($1 || ' days')::interval
@@ -80,9 +82,17 @@ async function backfillLlamadas(
         );
         enriquecidos++;
       } else {
+        await pgPool.query(
+          `UPDATE log_llamadas SET gemini_intentos = COALESCE(gemini_intentos, 0) + 1 WHERE id = $1`,
+          [row.id],
+        );
         skipped++;
       }
     } catch (err) {
+      await pgPool.query(
+        `UPDATE log_llamadas SET gemini_intentos = COALESCE(gemini_intentos, 0) + 1 WHERE id = $1`,
+        [row.id],
+      ).catch(() => {});
       errores++;
       console.error(`[gemini-backfill] log_llamadas id=${row.id}:`, err);
     }
@@ -124,6 +134,7 @@ async function backfillAgendas(
             resumen_ia
      FROM resumenes_diarios_agendas
      WHERE gemini_enriquecimiento IS NULL
+       AND COALESCE(gemini_intentos, 0) < ${MAX_GEMINI_ATTEMPTS}
        AND (transcripcion_fathom IS NOT NULL OR resumen_ia IS NOT NULL)
        AND LENGTH(COALESCE(transcripcion_fathom, resumen_ia, '')) >= 50
        AND fecha > NOW() - ($1 || ' days')::interval
@@ -163,9 +174,17 @@ async function backfillAgendas(
         );
         enriquecidos++;
       } else {
+        await pgPool.query(
+          `UPDATE resumenes_diarios_agendas SET gemini_intentos = COALESCE(gemini_intentos, 0) + 1 WHERE id_registro_agenda = $1`,
+          [row.id_registro_agenda],
+        );
         skipped++;
       }
     } catch (err) {
+      await pgPool.query(
+        `UPDATE resumenes_diarios_agendas SET gemini_intentos = COALESCE(gemini_intentos, 0) + 1 WHERE id_registro_agenda = $1`,
+        [row.id_registro_agenda],
+      ).catch(() => {});
       errores++;
       console.error(`[gemini-backfill] agendas id=${row.id_registro_agenda}:`, err);
     }
@@ -204,6 +223,7 @@ async function backfillChats(
     `SELECT id_evento, id_cuenta, chat
      FROM chats_logs
      WHERE gemini_enriquecimiento IS NULL
+       AND COALESCE(gemini_intentos, 0) < ${MAX_GEMINI_ATTEMPTS}
        AND chat IS NOT NULL
        AND jsonb_array_length(chat) > 0
        AND fecha_y_hora_z > NOW() - ($1 || ' days')::interval
@@ -252,9 +272,17 @@ async function backfillChats(
         );
         enriquecidos++;
       } else {
+        await pgPool.query(
+          `UPDATE chats_logs SET gemini_intentos = COALESCE(gemini_intentos, 0) + 1 WHERE id_evento = $1`,
+          [row.id_evento],
+        );
         skipped++;
       }
     } catch (err) {
+      await pgPool.query(
+        `UPDATE chats_logs SET gemini_intentos = COALESCE(gemini_intentos, 0) + 1 WHERE id_evento = $1`,
+        [row.id_evento],
+      ).catch(() => {});
       errores++;
       console.error(`[gemini-backfill] chats id=${row.id_evento}:`, err);
     }
