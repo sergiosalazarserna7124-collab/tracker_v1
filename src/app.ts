@@ -44,6 +44,7 @@ import { descartarLeadRoute } from "./routes/data/descartar-lead.route.js";
 import { objecionesDetalleRoute } from "./routes/data/objeciones-detalle.route.js";
 import { metricasWebhookRoute } from "./routes/webhooks/metricas-webhook.route.js";
 import { calificacionWebhookRoute } from "./routes/webhooks/calificacion.route.js";
+import { byokBackfillRoute } from "./routes/quick-triggers/byok-backfill.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -77,6 +78,7 @@ export async function buildApp() {
   await app.register(reprocessReglasRoute, { prefix: "/api/quick-triggers" });
   await app.register(backfillMetricasReRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatBackfillRoute, { prefix: "/api/quick-triggers" });
+  await app.register(byokBackfillRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatWebhookRoute, { prefix: "/webhooks" });
   await app.register(vozWebhookRoute, { prefix: "/webhooks" });
   await app.register(ghlCallbackRoute);

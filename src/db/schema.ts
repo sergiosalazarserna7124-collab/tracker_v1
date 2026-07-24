@@ -203,6 +203,9 @@ export const cuentas = pgTable("cuentas", {
   // ── V19: BYOK Gemini — llave por tenant + estado premium (AUT-1805) ───
   gemini_api_key: text("gemini_api_key"),
   gemini_premium_status: text("gemini_premium_status").default("off"),
+  // ── V20: BYOK Gemini backfill al activar llave (AUT-1808) ────────────
+  gemini_backfill_status: text("gemini_backfill_status"),
+  gemini_backfill_cap: integer("gemini_backfill_cap").default(200),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────
