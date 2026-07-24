@@ -200,6 +200,9 @@ export const cuentas = pgTable("cuentas", {
   etiquetas_descarte: jsonb("etiquetas_descarte"),
   // ── V18: exclusiones de análisis del coach (AUT-1767) ───────────────────
   exclusiones_coach: jsonb("exclusiones_coach"),
+  // ── V19: BYOK Gemini — llave por tenant + estado premium (AUT-1805) ───
+  gemini_api_key: text("gemini_api_key"),
+  gemini_premium_status: text("gemini_premium_status").default("off"),
 });
 
 // ── Tablas de ingesta externa ────────────────────────────────────────────────

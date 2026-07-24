@@ -1,6 +1,8 @@
 import { db as pgPool } from "../../config/database.js";
-import { enrichWithGemini } from "../ai/gemini-enrichment.service.js";
+import { enrichWithGemini, resolveGeminiKey } from "../ai/gemini-enrichment.service.js";
 import { env } from "../../config/env.js";
+
+type GeminiKeyMap = Map<number, string | null>;
 
 // 30s margin before Cloud Run's 240s request timeout
 const MAX_RUNTIME_MS = 210_000;
@@ -27,6 +29,7 @@ async function backfillLlamadas(
   accountIds: number[] | undefined,
   daysBack: number,
   startTime: number,
+  keyMap: GeminiKeyMap,
 ): Promise<GeminiBackfillResult> {
   const accountFilter = accountIds?.length
     ? "AND id_cuenta = ANY($2::int[])"
@@ -74,7 +77,7 @@ async function backfillLlamadas(
 
     procesados++;
     try {
-      const result = await enrichWithGemini(row.transcripcion, "llamada", row.id_cuenta);
+      const result = await enrichWithGemini(row.transcripcion, "llamada", row.id_cuenta, keyMap.get(row.id_cuenta) ?? null);
       if (result) {
         await pgPool.query(
           `UPDATE log_llamadas SET gemini_enriquecimiento = $1::jsonb WHERE id = $2`,
@@ -115,6 +118,7 @@ async function backfillAgendas(
   accountIds: number[] | undefined,
   daysBack: number,
   startTime: number,
+  keyMap: GeminiKeyMap,
 ): Promise<GeminiBackfillResult> {
   const accountFilter = accountIds?.length
     ? "AND id_cuenta = ANY($2::int[])"
@@ -166,7 +170,7 @@ async function backfillAgendas(
     procesados++;
     const text = row.transcripcion_fathom || row.resumen_ia;
     try {
-      const result = await enrichWithGemini(text, "videollamada", row.id_cuenta);
+      const result = await enrichWithGemini(text, "videollamada", row.id_cuenta, keyMap.get(row.id_cuenta) ?? null);
       if (result) {
         await pgPool.query(
           `UPDATE resumenes_diarios_agendas SET gemini_enriquecimiento = $1::jsonb WHERE id_registro_agenda = $2`,
@@ -207,6 +211,7 @@ async function backfillChats(
   accountIds: number[] | undefined,
   daysBack: number,
   startTime: number,
+  keyMap: GeminiKeyMap,
 ): Promise<GeminiBackfillResult> {
   const accountFilter = accountIds?.length
     ? "AND id_cuenta = ANY($2::int[])"
@@ -264,7 +269,7 @@ async function backfillChats(
     }
 
     try {
-      const result = await enrichWithGemini(chatText, "chat", row.id_cuenta);
+      const result = await enrichWithGemini(chatText, "chat", row.id_cuenta, keyMap.get(row.id_cuenta) ?? null);
       if (result) {
         await pgPool.query(
           `UPDATE chats_logs SET gemini_enriquecimiento = $1::jsonb WHERE id_evento = $2`,
@@ -303,6 +308,17 @@ async function backfillChats(
 
 export type BackfillTable = "log_llamadas" | "resumenes_diarios_agendas" | "chats_logs" | "all";
 
+async function loadGeminiKeyMap(): Promise<GeminiKeyMap> {
+  const { rows } = await pgPool.query<{ id_cuenta: number; gemini_api_key: string | null; gemini_premium_status: string | null }>(
+    `SELECT id_cuenta, gemini_api_key, gemini_premium_status FROM cuentas WHERE gemini_api_key IS NOT NULL`,
+  );
+  const map: GeminiKeyMap = new Map();
+  for (const r of rows) {
+    map.set(r.id_cuenta, resolveGeminiKey(r));
+  }
+  return map;
+}
+
 export async function runGeminiBackfill(
   tabla: BackfillTable,
   accountIds?: number[],
@@ -312,6 +328,7 @@ export async function runGeminiBackfill(
     throw new Error("GEMINI_API_KEY no configurada — el backfill requiere esta variable de entorno");
   }
 
+  const keyMap = await loadGeminiKeyMap();
   const startTime = Date.now();
   const results: GeminiBackfillResult[] = [];
 
@@ -325,11 +342,11 @@ export async function runGeminiBackfill(
     console.info(`[gemini-backfill] Iniciando backfill de ${t}...`);
 
     if (t === "log_llamadas") {
-      results.push(await backfillLlamadas(accountIds, daysBack, startTime));
+      results.push(await backfillLlamadas(accountIds, daysBack, startTime, keyMap));
     } else if (t === "resumenes_diarios_agendas") {
-      results.push(await backfillAgendas(accountIds, daysBack, startTime));
+      results.push(await backfillAgendas(accountIds, daysBack, startTime, keyMap));
     } else {
-      results.push(await backfillChats(accountIds, daysBack, startTime));
+      results.push(await backfillChats(accountIds, daysBack, startTime, keyMap));
     }
   }
 

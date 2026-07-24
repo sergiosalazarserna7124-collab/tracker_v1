@@ -37,7 +37,7 @@ import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service
 import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
 import { updateContactCustomFields, createLocationTag, createContactTask, contactHasTag, getContactAppointmentInfo } from "../ghl-api.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
-import { enrichWithGemini } from "../ai/gemini-enrichment.service.js";
+import { enrichWithGemini, resolveGeminiKey } from "../ai/gemini-enrichment.service.js";
 import { ubicacionPorTelefono } from "../../utils/lada.utils.js";
 import { parseConfigLlamadas, countWords, filterEmbudoForCalls } from "../data/config-llamadas.utils.js";
 import type { TwilioEventBody } from "../../schemas/webhooks/twilio.schema.js";
@@ -217,9 +217,11 @@ async function resolveAccountFull(
   categoriasLlamadas: unknown;
   ghlOpportunityFieldsConfig: unknown;
   ghlNativeTaskWorkflow: boolean;
+  geminiApiKey: string | null;
+  geminiPremiumStatus: string | null;
   isCancelled: boolean;
 }> {
-  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, configLlamadas: null, categoriasLlamadas: null, ghlOpportunityFieldsConfig: null, ghlNativeTaskWorkflow: false, isCancelled: false };
+  const empty = { idCuenta: null, tokenGhl: null, twilioSid: null, authTwilio: null, openaiApiKey: null, embudoPersonalizado: null, promptVentas: null, promptLlamadas: null, reglasEtiquetas: null, configLlamadas: null, categoriasLlamadas: null, ghlOpportunityFieldsConfig: null, ghlNativeTaskWorkflow: false, geminiApiKey: null, geminiPremiumStatus: null, isCancelled: false };
   if (!locationId) {
     console.warn(`[${label}] Payload sin locationId; no se puede resolver id_cuenta`);
     return empty;
@@ -254,6 +256,8 @@ async function resolveAccountFull(
       categoriasLlamadas: account.categorias_llamadas,
       ghlOpportunityFieldsConfig: account.ghl_opportunity_fields_config,
       ghlNativeTaskWorkflow: account.ghl_native_task_workflow,
+      geminiApiKey: account.gemini_api_key,
+      geminiPremiumStatus: account.gemini_premium_status,
       isCancelled: false,
     };
   } catch (err) {
@@ -748,7 +752,7 @@ export async function processNoAnswerCall(body: TwilioEventBody): Promise<Servic
 export async function processEffectiveCall(body: TwilioEventBody): Promise<ServiceResult> {
   const fields = extractFields(body);
 
-  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, configLlamadas, categoriasLlamadas, ghlOpportunityFieldsConfig, ghlNativeTaskWorkflow, isCancelled } =
+  const { idCuenta, tokenGhl, twilioSid, authTwilio, openaiApiKey, embudoPersonalizado, promptVentas, promptLlamadas, reglasEtiquetas, configLlamadas, categoriasLlamadas, ghlOpportunityFieldsConfig, ghlNativeTaskWorkflow, geminiApiKey, geminiPremiumStatus, isCancelled } =
     await resolveAccountFull(fields.locationId, "Effective", fields.locationIdFallback);
   if (isCancelled) return { success: true, data: { id_cuenta: idCuenta, cancelled: true } };
 
@@ -798,7 +802,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     if (classification.buzon === true || classification.buzon === null) {
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
     }
-    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas, preReglasResult, ghlOpportunityFieldsConfig, null, ghlNativeTaskWorkflow);
+    return effectivePath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification, openaiApiKey, embudoPersonalizado, promptVentas, reglasEtiquetas, promptLlamadas, preReglasResult, ghlOpportunityFieldsConfig, null, ghlNativeTaskWorkflow, geminiApiKey, geminiPremiumStatus);
   }
 
   // ── Fase 1: Pipeline Twilio (calls → recordings → download) ───────────────
@@ -979,6 +983,8 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     ghlOpportunityFieldsConfig,
     callDurationSeconds,
     ghlNativeTaskWorkflow,
+    geminiApiKey,
+    geminiPremiumStatus,
   );
 }
 
@@ -1000,6 +1006,8 @@ async function effectivePath(
   ghlOpportunityFieldsConfig?: unknown,
   callDurationSeconds?: number | null,
   ghlNativeTaskWorkflow?: boolean,
+  geminiApiKey?: string | null,
+  geminiPremiumStatus?: string | null,
 ): Promise<ServiceResult> {
   const { nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl } = fields;
   const now = new Date();
@@ -1081,8 +1089,9 @@ async function effectivePath(
   }
 
   // AUT-1301: Gemini enrichment + ubicación por lada
+  const tenantGeminiKey = resolveGeminiKey({ gemini_api_key: geminiApiKey ?? null, gemini_premium_status: geminiPremiumStatus ?? null });
   const geminiResult = transcript.trim().length >= 50
-    ? await enrichWithGemini(transcript, "llamada", idCuenta).catch((err: unknown) => {
+    ? await enrichWithGemini(transcript, "llamada", idCuenta, tenantGeminiKey).catch((err: unknown) => {
         console.error("[Effective] Error enriquecimiento Gemini:", err);
         return null;
       })

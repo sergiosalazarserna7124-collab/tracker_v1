@@ -21,7 +21,7 @@ import { analyzeCall } from "../ai/call-analysis.service.js";
 import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
 import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
-import { enrichWithGemini, estimateDurationFromTranscript } from "../ai/gemini-enrichment.service.js";
+import { enrichWithGemini, resolveGeminiKey, estimateDurationFromTranscript } from "../ai/gemini-enrichment.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { FathomEventBody } from "../../schemas/webhooks/fathom.schema.js";
 
@@ -214,6 +214,8 @@ export async function processFathomCall(
     reglas_etiquetas: unknown;
     canales_activos: unknown;
     ghl_native_task_workflow: boolean;
+    gemini_api_key: string | null;
+    gemini_premium_status: string | null;
   } | null = null;
   // configuracion_ui no está en el schema Drizzle del Cerebro — se lee via pgPool
   let ghlNotasConfig: GhlNotasConfig = { ia: true, transcripcion: false };
@@ -232,6 +234,8 @@ export async function processFathomCall(
             reglas_etiquetas: cuentas.reglas_etiquetas,
             canales_activos: cuentas.canales_activos,
             ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
+            gemini_api_key: cuentas.gemini_api_key,
+            gemini_premium_status: cuentas.gemini_premium_status,
           })
           .from(cuentas)
           .where(eq(cuentas.id_cuenta, idCuenta))
@@ -428,8 +432,9 @@ export async function processFathomCall(
   }
 
   // AUT-1301: Gemini enrichment + duración estimada desde transcript
+  const tenantGeminiKey = resolveGeminiKey(account);
   const geminiResult = formattedTranscript
-    ? await enrichWithGemini(formattedTranscript, "videollamada", idCuenta).catch((err: unknown) => {
+    ? await enrichWithGemini(formattedTranscript, "videollamada", idCuenta, tenantGeminiKey).catch((err: unknown) => {
         console.error("[Fathom] Error enriquecimiento Gemini:", err);
         return null;
       })

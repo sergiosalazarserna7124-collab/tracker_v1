@@ -55,6 +55,8 @@ export interface CuentaFullRow extends CuentaRow {
   ghl_opportunity_fields_config: unknown;
   ghl_native_task_workflow: boolean;
   coach_habilitado: boolean;
+  gemini_api_key: string | null;
+  gemini_premium_status: string | null;
 }
 
 export interface GhlContact {
@@ -167,6 +169,8 @@ export async function getAccountFullById(idCuenta: number): Promise<CuentaFullRo
           ghl_opportunity_fields_config: cuentas.ghl_opportunity_fields_config,
           ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
           coach_habilitado: cuentas.coach_habilitado,
+          gemini_api_key: cuentas.gemini_api_key,
+          gemini_premium_status: cuentas.gemini_premium_status,
         })
         .from(cuentas)
         .where(eq(cuentas.id_cuenta, idCuenta))
@@ -201,6 +205,8 @@ export async function getAccountFullByLocationId(locationId: string): Promise<Cu
           ghl_opportunity_fields_config: cuentas.ghl_opportunity_fields_config,
           ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
           coach_habilitado: cuentas.coach_habilitado,
+          gemini_api_key: cuentas.gemini_api_key,
+          gemini_premium_status: cuentas.gemini_premium_status,
         })
         .from(cuentas)
         .where(eq(cuentas.locationid, locationId))

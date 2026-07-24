@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "../../config/env.js";
 import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
+import { db as pgPool } from "../../config/database.js";
 
 // gemini-2.0-flash fue retirado por Google (generateContent → 404 "no longer available").
 // gemini-2.5-flash es el modelo flash estable vigente y verificado con la key de prod.
@@ -109,15 +110,46 @@ function validateEnrichment(obj: unknown): GeminiEnrichment | null {
   };
 }
 
+export class GeminiKeyError extends Error {
+  constructor(
+    public readonly kind: "invalid_key" | "quota_exceeded",
+    public readonly idCuenta: number | null,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GeminiKeyError";
+  }
+}
+
+export function resolveGeminiKey(cuenta: { gemini_api_key?: string | null; gemini_premium_status?: string | null } | null): string | null {
+  if (!cuenta?.gemini_api_key) return null;
+  if (cuenta.gemini_premium_status === "paused_invalid_key" || cuenta.gemini_premium_status === "paused_quota_exceeded") return null;
+  return cuenta.gemini_api_key;
+}
+
+async function pauseGeminiPremium(idCuenta: number, status: "paused_invalid_key" | "paused_quota_exceeded"): Promise<void> {
+  try {
+    await pgPool.query(
+      `UPDATE cuentas SET gemini_premium_status = $1 WHERE id_cuenta = $2`,
+      [status, idCuenta],
+    );
+    console.warn(`[GeminiEnrichment] Premium pausado para cuenta ${idCuenta}: ${status}`);
+  } catch (err) {
+    console.error(`[GeminiEnrichment] Error pausando premium para cuenta ${idCuenta}:`, err);
+  }
+}
+
 export async function enrichWithGemini(
   transcript: string,
   canal: "llamada" | "videollamada" | "chat",
   idCuenta: number | null,
+  apiKey?: string | null,
 ): Promise<GeminiEnrichment | null> {
-  if (!env.GEMINI_API_KEY || !transcript || transcript.length < 50) return null;
+  const effectiveKey = apiKey ?? env.GEMINI_API_KEY;
+  if (!effectiveKey || !transcript || transcript.length < 50) return null;
 
   try {
-    const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
+    const genAI = new GoogleGenerativeAI(effectiveKey);
     const model = genAI.getGenerativeModel({
       model: GEMINI_MODEL,
       generationConfig: { responseMimeType: "application/json" },
@@ -137,7 +169,17 @@ export async function enrichWithGemini(
 
     const parsed = JSON.parse(text);
     return validateEnrichment(parsed);
-  } catch (err) {
+  } catch (err: unknown) {
+    const usingTenantKey = !!apiKey;
+    const status = (err as { status?: number })?.status ?? (err as { httpCode?: number })?.httpCode;
+    if (usingTenantKey && idCuenta && (status === 401 || status === 403)) {
+      await pauseGeminiPremium(idCuenta, "paused_invalid_key");
+      throw new GeminiKeyError("invalid_key", idCuenta, `Gemini API key inválida para cuenta ${idCuenta}`);
+    }
+    if (usingTenantKey && idCuenta && status === 429) {
+      await pauseGeminiPremium(idCuenta, "paused_quota_exceeded");
+      throw new GeminiKeyError("quota_exceeded", idCuenta, `Gemini API quota excedida para cuenta ${idCuenta}`);
+    }
     console.error(`[GeminiEnrichment] Error enriqueciendo ${canal} para cuenta ${idCuenta}:`, err);
     return null;
   }

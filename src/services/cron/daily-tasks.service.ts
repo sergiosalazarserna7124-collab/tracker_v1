@@ -6,7 +6,7 @@ import { processInChunks } from "../../utils/batch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { db as pgPool } from "../../config/database.js";
 import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
-import { enrichWithGemini } from "../ai/gemini-enrichment.service.js";
+import { enrichWithGemini, resolveGeminiKey } from "../ai/gemini-enrichment.service.js";
 import { parseCriteriosCalificacion } from "../data/criterios-calificacion.utils.js";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -390,6 +390,8 @@ interface CuentaAnalisisRow {
   prompt_ventas: string | null;
   canales_activos: string[] | null;
   criterios_calificacion: unknown;
+  gemini_api_key: string | null;
+  gemini_premium_status: string | null;
 }
 
 interface AnalyzeChatsResult {
@@ -429,7 +431,8 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
   const cuentasQuery = `
     SELECT c.id_cuenta, c.token_ghl, c.openai_api_key,
            c.embudo_personalizado, c.reglas_etiquetas, c.prompt_ventas,
-           c.canales_activos, c.criterios_calificacion
+           c.canales_activos, c.criterios_calificacion,
+           c.gemini_api_key, c.gemini_premium_status
     FROM cuentas c
     WHERE c.embudo_personalizado IS NOT NULL
       AND jsonb_array_length(c.embudo_personalizado::jsonb) > 0
@@ -581,7 +584,8 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
           .map((m) => `${m.role === "lead" ? "Lead" : "Asesor"}: ${m.message}`)
           .join("\n");
         if (chatText.length >= 50) {
-          const gemini = await enrichWithGemini(chatText, "chat", cuenta.id_cuenta).catch(() => null);
+          const tenantGeminiKey = resolveGeminiKey(cuenta);
+          const gemini = await enrichWithGemini(chatText, "chat", cuenta.id_cuenta, tenantGeminiKey).catch(() => null);
           if (gemini) {
             await pgPool.query(
               `UPDATE chats_logs SET gemini_enriquecimiento = $1::jsonb WHERE id_evento = $2`,
