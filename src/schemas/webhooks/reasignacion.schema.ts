@@ -8,6 +8,7 @@ const ReasignacionCustomData = Type.Object(
     nombrecloser: Type.Optional(Type.String()),
     nombre: Type.Optional(Type.String()),
     telefono: Type.Optional(Type.String()),
+    utm: Type.Optional(Type.String()),
   },
   { additionalProperties: true },
 );

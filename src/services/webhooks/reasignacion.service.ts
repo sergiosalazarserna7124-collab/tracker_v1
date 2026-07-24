@@ -13,6 +13,7 @@ function extractFields(body: ReasignacionBodyPayload) {
   const nombreLead = (cd.nombre ?? "").trim() || (body.full_name ?? "").trim() || (body.first_name ?? "").trim();
   const telefonoLead = (cd.telefono ?? "").trim() || (body.phone ?? "").trim();
   const locationId = (cd.locationid ?? "").trim() || (body.location?.id ?? "").trim();
+  const utm = (cd.utm ?? "").trim();
   return {
     idUserGhl: (cd.idusuario ?? "").trim(),
     locationId,
@@ -21,6 +22,7 @@ function extractFields(body: ReasignacionBodyPayload) {
     nombreCloser: (cd.nombrecloser ?? "").trim(),
     nombreLead,
     telefonoLead,
+    utm,
   };
 }
 
@@ -65,6 +67,7 @@ export async function processReasignacion(
       ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
       ...(fields.nombreLead && { nombre_lead: fields.nombreLead }),
       ...(fields.telefonoLead && { phone_raw_format: fields.telefonoLead }),
+      ...(fields.utm && { creativo_origen: fields.utm }),
     };
     if (Object.keys(llamadasPayload).length === 0) {
       console.warn(`[${label}] registros_de_llamada: sin campos a actualizar, omitiendo UPDATE`);
@@ -93,6 +96,7 @@ export async function processReasignacion(
     const logLlamadasPayload = {
       ...(fields.closerMail && { closer_mail: fields.closerMail }),
       ...(fields.nombreCloser && { nombre_closer: fields.nombreCloser }),
+      ...(fields.utm && { creativo_origen: fields.utm }),
     };
     if (Object.keys(logLlamadasPayload).length === 0) {
       console.warn(`[${label}] log_llamadas: sin campos a actualizar, omitiendo UPDATE`);
@@ -141,6 +145,9 @@ export async function processReasignacion(
   }
 
   const total = Object.values(results).reduce((s, v) => s + v, 0);
+  if (fields.utm) {
+    console.info(`[${label}] UTM actualizado contactId=${contactId} idCuenta=${idCuenta} → creativo_origen="${fields.utm}"`);
+  }
   console.info(`[${label}] Reasignado contactId=${contactId} → closer="${fields.nombreCloser}" <${fields.closerMail}> | registros: ${JSON.stringify(results)}`);
 
   return {
@@ -150,6 +157,7 @@ export async function processReasignacion(
       id_cuenta: idCuenta,
       closer_mail: fields.closerMail,
       nombre_closer: fields.nombreCloser,
+      utm: fields.utm || null,
       registros_actualizados: results,
       total_actualizados: total,
     },
