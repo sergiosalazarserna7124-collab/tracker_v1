@@ -38,9 +38,10 @@ export async function upsertMetricasWebhook(
   zonaHoraria: string | null,
   body: Record<string, unknown>,
 ): Promise<UpsertResult> {
+  const rawUserId = body.userId ?? body.asesor ?? body.correo;
   const ghlUserId =
-    typeof body.userId === "string" && body.userId.trim()
-      ? body.userId.trim()
+    typeof rawUserId === "string" && rawUserId.trim()
+      ? rawUserId.trim()
       : null;
   const ghlCustomerId =
     typeof body.customerId === "string" && body.customerId.trim()
@@ -69,7 +70,7 @@ export async function upsertMetricasWebhook(
     }
   }
 
-  const reserved = new Set(["userId", "customerId", "fecha"]);
+  const reserved = new Set(["userId", "customerId", "fecha", "asesor", "correo"]);
   const campos_guardados: string[] = [];
 
   for (const [campo, valor] of Object.entries(body)) {
