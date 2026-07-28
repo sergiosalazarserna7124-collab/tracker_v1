@@ -45,6 +45,7 @@ import { objecionesDetalleRoute } from "./routes/data/objeciones-detalle.route.j
 import { metricasWebhookRoute } from "./routes/webhooks/metricas-webhook.route.js";
 import { calificacionWebhookRoute } from "./routes/webhooks/calificacion.route.js";
 import { byokBackfillRoute } from "./routes/quick-triggers/byok-backfill.route.js";
+import { cronOutboundEnrichmentRoute } from "./routes/cron/outbound-enrichment.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -95,6 +96,7 @@ export async function buildApp() {
   await app.register(bulkTagRoute, { prefix: "/api" });
   await app.register(coachGuionRoute, { prefix: "/api" });
   await app.register(cronCoachDrainerRoute, { prefix: "/cron" });
+  await app.register(cronOutboundEnrichmentRoute, { prefix: "/cron" });
   await app.register(etiquetasDescarteRoute, { prefix: "/api" });
   await app.register(descartarLeadRoute, { prefix: "/api" });
   await app.register(objecionesDetalleRoute, { prefix: "/api/data" });
