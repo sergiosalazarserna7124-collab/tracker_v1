@@ -24,6 +24,7 @@ import {
   classifyCall,
   applyAnsweredCallGuard,
   mapEstadoToTag,
+  resolveWebhookCategoria,
   type CallClassification,
 } from "../ai/call-classification.service.js";
 import { generateLlamadaAnalysisText, diarizarTranscripcion, extractLlamadaObjections } from "../ai/call-analysis.service.js";
@@ -154,8 +155,10 @@ function extractFields(body: TwilioEventBody) {
   const idUserGhl = cd.id_customer_ghl?.trim() || null;
   // Transcripción ya generada (cuentas GHL sin Twilio)
   const preTranscript = cd.transcript?.trim() || null;
+  // AUT-1863: categoría enviada por el webhook (autoritativa si presente)
+  const categoriaWebhook = cd.categoria?.trim() || null;
 
-  return { locationId, locationIdFallback, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl, preTranscript };
+  return { locationId, locationIdFallback, nombreLead, mailLead, phone, creativoOrigen, closerMail, nombreCloser, contactId, idUserGhl, preTranscript, categoriaWebhook };
 }
 
 // ─── Lookup de cuenta (básico: sin Twilio) ───────────────────────────────────
@@ -785,7 +788,13 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
         console.error("[Effective/GHL] Error evaluando reglas pre-clasificación:", err);
       }
     }
-    const categoriaGhl = collectCategoria(preReglasResult.matched_rules) ?? preReglasResult.matched_categoria;
+    // AUT-1863: webhook category is authoritative; fall back to reglas / matched_categoria
+    const categoriaGhl = resolveWebhookCategoria(fields.categoriaWebhook, categoriasLlamadas)
+      ?? collectCategoria(preReglasResult.matched_rules)
+      ?? preReglasResult.matched_categoria;
+    if (fields.categoriaWebhook) {
+      console.log(`[Effective/GHL] Categoría webhook: "${fields.categoriaWebhook}" → resolved: ${categoriaGhl ?? "no match"}`);
+    }
 
     // AUT-1739: filter embudo stages to only those applicable to calls
     const embudoLlamadas = filterEmbudoForCalls(embudoPersonalizado);
@@ -935,7 +944,13 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
       console.error("[Effective] Error evaluando reglas pre-clasificación:", err);
     }
   }
-  const categoriaMain = collectCategoria(mainReglasResult.matched_rules) ?? mainReglasResult.matched_categoria;
+  // AUT-1863: webhook category is authoritative; fall back to reglas / matched_categoria
+  const categoriaMain = resolveWebhookCategoria(fields.categoriaWebhook, categoriasLlamadas)
+    ?? collectCategoria(mainReglasResult.matched_rules)
+    ?? mainReglasResult.matched_categoria;
+  if (fields.categoriaWebhook) {
+    console.log(`[Effective] Categoría webhook: "${fields.categoriaWebhook}" → resolved: ${categoriaMain ?? "no match"}`);
+  }
 
   // AUT-1739: filter embudo stages to only those applicable to calls
   const embudoLlamadasMain = filterEmbudoForCalls(embudoPersonalizado);

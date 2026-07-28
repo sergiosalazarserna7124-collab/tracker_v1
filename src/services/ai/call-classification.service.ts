@@ -341,9 +341,23 @@ function resolveCategoryMatch(
   categoriasLlamadas: unknown,
 ): CategoriaLlamada | null {
   if (!categoria || !Array.isArray(categoriasLlamadas)) return null;
-  return (categoriasLlamadas as CategoriaLlamada[]).find(
-    (c) => c.id === categoria,
-  ) ?? null;
+  const cats = categoriasLlamadas as CategoriaLlamada[];
+  return cats.find((c) => c.id === categoria)
+    ?? cats.find((c) => c.nombre.toLowerCase() === categoria.toLowerCase())
+    ?? null;
+}
+
+/**
+ * AUT-1863: Resolver categoría enviada por webhook (por id o nombre) al id canónico.
+ * Retorna el id de la categoría si matchea, null si no.
+ */
+export function resolveWebhookCategoria(
+  categoriaWebhook: string | null | undefined,
+  categoriasLlamadas: unknown,
+): string | null {
+  if (!categoriaWebhook) return null;
+  const match = resolveCategoryMatch(categoriaWebhook, categoriasLlamadas);
+  return match?.id ?? null;
 }
 
 // ─── Helper: inyectar contexto de empresa + prompt específico de llamadas ────

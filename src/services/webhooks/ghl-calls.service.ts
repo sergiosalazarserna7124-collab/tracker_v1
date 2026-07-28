@@ -31,6 +31,7 @@ import {
 import {
   classifyCall,
   mapEstadoToTag,
+  resolveWebhookCategoria,
   type CallClassification,
 } from "../ai/call-classification.service.js";
 import { generateLlamadaAnalysisText, diarizarTranscripcion, extractLlamadaObjections } from "../ai/call-analysis.service.js";
@@ -110,6 +111,8 @@ function extractFields(body: GhlCallEventBody) {
 
   const idUserGhl = cd.id_customer_ghl?.trim() || null;
   const transcript = cd.transcript?.trim() || null;
+  // AUT-1863: categoría enviada por el webhook (autoritativa si presente)
+  const categoriaWebhook = cd.categoria?.trim() || null;
 
   const rawIdCuenta = (cd as Record<string, unknown>).idcuenta;
   const idCuentaFromPayload =
@@ -131,6 +134,7 @@ function extractFields(body: GhlCallEventBody) {
     contactId,
     idUserGhl,
     transcript,
+    categoriaWebhook,
   };
 }
 
@@ -1076,7 +1080,13 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
       console.error("[GhlCalls/Effective] Error evaluando reglas pre-clasificación:", err);
     }
   }
-  const categoriaGhl = collectCategoria(ghlReglasResult.matched_rules) ?? ghlReglasResult.matched_categoria;
+  // AUT-1863: webhook category is authoritative; fall back to reglas / matched_categoria
+  const categoriaGhl = resolveWebhookCategoria(fields.categoriaWebhook, categoriasLlamadas)
+    ?? collectCategoria(ghlReglasResult.matched_rules)
+    ?? ghlReglasResult.matched_categoria;
+  if (fields.categoriaWebhook) {
+    console.log(`[GhlCalls/Effective] Categoría webhook: "${fields.categoriaWebhook}" → resolved: ${categoriaGhl ?? "no match"}`);
+  }
 
   // AUT-1739: filter embudo stages to only those applicable to calls
   const embudoLlamadas = filterEmbudoForCalls(embudoPersonalizado);

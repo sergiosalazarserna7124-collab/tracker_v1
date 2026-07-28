@@ -34,6 +34,9 @@ const TwilioCustomData = Type.Object(
     id_customer_ghl: Type.Optional(Type.String()),
     // Transcripción ya generada (cuentas GHL sin Twilio — saltarse Whisper)
     transcript: Type.Optional(Type.String()),
+    // Categoría de llamada enviada por el webhook (AUT-1863)
+    // Acepta id o nombre de categoría; si se envía, se usa como autoritativa
+    categoria: Type.Optional(Type.String()),
   },
   { additionalProperties: true },
 );
