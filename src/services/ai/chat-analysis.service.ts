@@ -42,6 +42,7 @@ export interface ReglaEtiqueta {
 export interface ObjecionDetectada {
   objecion: string;
   categoria: string;
+  respuesta_vendedor: string;
 }
 
 export interface ChatAnalysisResult {
@@ -113,8 +114,12 @@ function buildChatClassificationSchema(estadosEnum: string[]) {
               enum: ["precio", "tiempo", "confianza", "competencia", "necesidad", "autoridad", "otra"],
               description: "Categoría de la objeción",
             },
+            respuesta_vendedor: {
+              type: "string",
+              description: "Respuesta LITERAL (verbatim) del asesor a esta objeción, copiada exactamente de la conversación",
+            },
           },
-          required: ["objecion", "categoria"],
+          required: ["objecion", "categoria", "respuesta_vendedor"],
           additionalProperties: false,
         },
       },
@@ -194,7 +199,9 @@ Detecta todas las objeciones que el lead haya expresado. Usa estas categorías:
 - "necesidad": "no lo necesito ahora", "ya lo hacemos internamente"
 - "autoridad": "no soy quien decide", "tengo que consultarlo"
 - "otra": cualquier otra objeción que no encaje en las anteriores
-Si no hay objeciones detectadas, devuelve [].`);
+Si no hay objeciones detectadas, devuelve [].
+
+RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye "respuesta_vendedor" con las palabras EXACTAS que el asesor/vendedor dijo al responder esa objeción. NO parafrasees — copia VERBATIM de la conversación. Si no respondió, usa "". Máximo 300 caracteres.`);
 
   if (canales_activos && canales_activos.length > 0) {
     parts.push(`## CANALES ACTIVOS DEL CLIENTE

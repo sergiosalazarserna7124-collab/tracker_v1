@@ -21,6 +21,7 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
 export interface ObjecionBatch {
   objecion: string;
   categoria: "precio" | "tiempo" | "confianza" | "competencia" | "necesidad" | "autoridad" | "otra";
+  respuesta_vendedor: string;
 }
 
 /** Formato extendido guardado en ia_objeciones por el cron batch */
@@ -68,8 +69,12 @@ function buildChatBatchSchema(estadosEnum: string[]) {
               type: "string",
               enum: ["precio", "tiempo", "confianza", "competencia", "necesidad", "autoridad", "otra"],
             },
+            respuesta_vendedor: {
+              type: "string",
+              description: "Respuesta LITERAL (verbatim) del vendedor/asesor a esta objeción, copiada exactamente de la conversación",
+            },
           },
-          required: ["objecion", "categoria"],
+          required: ["objecion", "categoria", "respuesta_vendedor"],
           additionalProperties: false,
         },
       },
@@ -134,7 +139,12 @@ Detecta objeciones EXPLÍCITAS del lead. Categorías:
 - "necesidad": no lo necesito, ya lo tenemos internamente
 - "autoridad": no soy quien decide, debo consultar
 - "otra": cualquier otra barrera de compra
-Si no hay objeciones reales, devuelve [].`);
+Si no hay objeciones reales, devuelve [].
+
+RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye la respuesta LITERAL del asesor/vendedor.
+- Copia las palabras EXACTAS tal cual aparecen en la conversación — NO parafrasees ni resumas.
+- Si el asesor no respondió a esa objeción, usa "" (cadena vacía).
+- Máximo 300 caracteres.`);
 
   parts.push(`## SENTIMIENTO GENERAL
 - "positivo": lead receptivo, interesado, con intención de avanzar
@@ -231,7 +241,7 @@ export async function analyzeChatBatch(params: {
 const llamadaBatchSchema = jsonSchema<{
   resumen: string;
   sentimiento: "positivo" | "neutro" | "negativo";
-  objeciones: Array<{ objecion: string; categoria: string }>;
+  objeciones: Array<{ objecion: string; categoria: string; respuesta_vendedor: string }>;
   senales_compra: string[];
 }>({
   type: "object",
@@ -255,8 +265,12 @@ const llamadaBatchSchema = jsonSchema<{
             type: "string",
             enum: ["precio", "tiempo", "confianza", "competencia", "necesidad", "autoridad", "otra"],
           },
+          respuesta_vendedor: {
+            type: "string",
+            description: "Respuesta LITERAL (verbatim) del vendedor a esta objeción, copiada exactamente de la transcripción",
+          },
         },
-        required: ["objecion", "categoria"],
+        required: ["objecion", "categoria", "respuesta_vendedor"],
         additionalProperties: false,
       },
     },
@@ -283,6 +297,8 @@ OBJECIONES — Solo barreras EXPLÍCITAS para cerrar la venta:
 - "autoridad": no decido solo, debo consultar
 - "otra": otra barrera real de compra
 Si no hay objeciones, devuelve [].
+
+RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye "respuesta_vendedor" con las palabras EXACTAS que el vendedor dijo al responder esa objeción. NO parafrasees — copia VERBATIM de la transcripción. Si no respondió, usa "". Máximo 300 chars.
 
 SENTIMIENTO: positivo (receptivo/interesado) | neutro (sin señales claras) | negativo (desinteresado/irritado)
 

@@ -28,6 +28,7 @@ export interface ClassifierResult {
 export interface ObjecionItem {
   objecion: string;
   categoria: string;
+  respuesta_vendedor: string;
 }
 
 export interface CallAnalysisResult {
@@ -253,6 +254,12 @@ EJEMPLOS DE OBJECIONES REALES:
 
 ALGORITMO: Solo extrae frases del PROSPECTO que respondan a "¿Por qué NO puedes o NO quieres comprar AHORA?".
 
+RESPUESTA DEL VENDEDOR: Para CADA objeción detectada, extrae la respuesta LITERAL del vendedor/asesor/closer a esa objeción.
+- Busca las palabras EXACTAS que el vendedor dijo INMEDIATAMENTE DESPUÉS de la objeción del prospecto.
+- NO parafrasees ni resumas — copia el texto VERBATIM tal cual aparece en la transcripción.
+- Si el vendedor no respondió directamente a la objeción, usa "" (cadena vacía).
+- Máximo 300 caracteres de la respuesta. Si es más larga, corta al final de la oración más cercana.
+
 Si no encuentras objeciones válidas, devuelve {"objeciones": []}.`;
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -267,8 +274,12 @@ const objectionsSchema = jsonSchema<{ objeciones: ObjecionItem[] }>({
         properties: {
           objecion: { type: "string" },
           categoria: { type: "string" },
+          respuesta_vendedor: {
+            type: "string",
+            description: "Respuesta LITERAL (verbatim) del vendedor a esta objeción, copiada exactamente de la transcripción",
+          },
         },
-        required: ["objecion", "categoria"],
+        required: ["objecion", "categoria", "respuesta_vendedor"],
         additionalProperties: false,
       },
     },

@@ -84,15 +84,15 @@ function filterEmbudoByFuente(
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
 // Max API calls por ejecución (entre chats + llamadas)
-const MAX_API_CALLS = 100;
+const MAX_API_CALLS = 200;
 // Chats por cuenta por ejecución (sin key propia)
 const MAX_CHATS_SERVER_KEY = 10;
 // Chats por cuenta por ejecución (con key propia)
 const MAX_CHATS_OWN_KEY = 25;
 // Llamadas por cuenta por ejecución (sin key propia)
-const MAX_LLAMADAS_SERVER_KEY = 5;
+const MAX_LLAMADAS_SERVER_KEY = 25;
 // Llamadas por cuenta por ejecución (con key propia)
-const MAX_LLAMADAS_OWN_KEY = 10;
+const MAX_LLAMADAS_OWN_KEY = 50;
 // Delay entre batches de 20 conversaciones (ms)
 const BATCH_DELAY_MS = 1000;
 const BATCH_SIZE = 20;
@@ -180,7 +180,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
              AND (ia_descripcion IS NULL OR ia_objeciones IS NULL)
              AND transcripcion IS NOT NULL
              AND transcripcion <> ''
-             AND ts >= NOW() - INTERVAL '48 hours'
+             AND ts >= NOW() - INTERVAL '30 days'
            ORDER BY ts DESC
            LIMIT $2`,
           [cuenta.id_cuenta, maxLlamadas],
