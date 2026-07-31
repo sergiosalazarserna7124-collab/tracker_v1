@@ -475,8 +475,8 @@ async function followUpPath(
               // no queden marcados como "sin contacto" pese a tener llamadas.
               ...(existing!.fecha_primera_llamada == null && { fecha_primera_llamada: now }),
               ...(callSid && { callsid: callSid }),
-              ...(transcript && { trancription: transcript }),
-              ...(iadesc && { iadescripcion: iadesc }),
+              ...(!isEffective && transcript && { trancription: transcript }),
+              ...(!isEffective && iadesc && { iadescripcion: iadesc }),
               ...(idUserGhl && { id_user_ghl: idUserGhl }),
               ...(contactId && { ghl_contact_id: contactId }),
               ...(stl !== null && { speed_to_lead: stl }),
@@ -798,6 +798,19 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
     // AUT-1739: filter embudo stages to only those applicable to calls
     const embudoLlamadas = filterEmbudoForCalls(embudoPersonalizado);
+
+    // AUT-1943: short-transcript guard (misma lógica que el path Twilio principal)
+    const cfgLlamadasPre = parseConfigLlamadas(configLlamadas);
+    const wordCountPre = countWords(fields.preTranscript);
+    const minPalabrasPre = cfgLlamadasPre?.min_palabras ?? 0;
+    const shortByWordsPre = minPalabrasPre > 0 && wordCountPre < minPalabrasPre;
+    const shortByCharsPre = minPalabrasPre === 0 && fields.preTranscript.trim().length < 80;
+    if (shortByWordsPre || shortByCharsPre) {
+      console.warn(
+        `[Effective/GHL] Transcripción muy corta (${wordCountPre} palabras, ${fields.preTranscript.trim().length} chars); clasificando como seguimiento sin consumir IA`,
+      );
+      return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, "Transcripción demasiado corta para ser una conversación real.", "Effective/GHL/short-transcript");
+    }
 
     let classification: CallClassification;
     try {

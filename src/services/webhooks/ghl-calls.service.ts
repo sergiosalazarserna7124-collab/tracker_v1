@@ -443,8 +443,8 @@ async function followUpPath(
               // Se setea siempre que esté NULL (no solo en el primer intento), para que
               // no queden marcados como "sin contacto" pese a tener llamadas.
               ...(existing!.fecha_primera_llamada == null && { fecha_primera_llamada: now }),
-              ...(transcript && { trancription: transcript }),
-              ...(iadesc && { iadescripcion: iadesc }),
+              ...(!isEffective && transcript && { trancription: transcript }),
+              ...(!isEffective && iadesc && { iadescripcion: iadesc }),
               ...(idUserGhl && { id_user_ghl: idUserGhl }),
               ...(stl !== null && { speed_to_lead: stl }),
             })
