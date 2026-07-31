@@ -30,6 +30,8 @@ import {
 } from "../ghl-api.service.js";
 import {
   classifyCall,
+  applyAnsweredCallGuard,
+  applyVoicemailCatchGuard,
   mapEstadoToTag,
   resolveWebhookCategoria,
   type CallClassification,
@@ -1316,7 +1318,10 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     return followUpPath(fields, idCuenta, tokenGhl, transcript, null, "GhlCalls/Effective/ai-error");
   }
 
-  // Buzón detectado por IA
+  // AUT-1083 + AUT-1975: guards defensivos (falso buzón / falso contestada)
+  classification = applyAnsweredCallGuard(classification, transcript, "[GhlCalls/Effective]");
+  classification = applyVoicemailCatchGuard(classification, transcript, "[GhlCalls/Effective]");
+
   if (classification.buzon === true || classification.buzon === null) {
     return followUpPath(
       fields,

@@ -23,6 +23,7 @@ import {
   transcribeAudio,
   classifyCall,
   applyAnsweredCallGuard,
+  applyVoicemailCatchGuard,
   mapEstadoToTag,
   resolveWebhookCategoria,
   type CallClassification,
@@ -929,6 +930,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
     }
     // AUT-1083: guard defensivo contra falso buzón en llamadas contestadas cortas
     classification = applyAnsweredCallGuard(classification, fields.preTranscript, "[Effective/GHL]");
+    classification = applyVoicemailCatchGuard(classification, fields.preTranscript, "[Effective/GHL]");
     if (classification.buzon === true || classification.buzon === null) {
       return followUpPath(fields, idCuenta, tokenGhl, null, fields.preTranscript, classification.iadesc, "Effective/GHL/buzon");
     }
@@ -1088,6 +1090,7 @@ export async function processEffectiveCall(body: TwilioEventBody): Promise<Servi
 
   // AUT-1083: guard defensivo contra falso buzón en llamadas contestadas cortas
   classification = applyAnsweredCallGuard(classification, transcript, "[Effective]");
+  classification = applyVoicemailCatchGuard(classification, transcript, "[Effective]");
 
   if (classification.buzon === true || classification.buzon === null) {
     return followUpPath(

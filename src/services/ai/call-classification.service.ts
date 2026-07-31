@@ -505,6 +505,36 @@ export function applyAnsweredCallGuard(
   };
 }
 
+// ─── AUT-1975: guard inverso — voicemail clasificado como contestada ────────
+export const VOICEMAIL_CATCH_MAX_CHARS = Number(
+  process.env.VOICEMAIL_CATCH_MAX_CHARS ?? "500",
+);
+
+export function looksLikeVoicemail(
+  transcript: string | null | undefined,
+): boolean {
+  const t = (transcript ?? "").trim();
+  if (!t) return false;
+  if (!VOICEMAIL_MARKERS.test(t)) return false;
+  if (t.length > VOICEMAIL_CATCH_MAX_CHARS) return false;
+  if (LEAD_ENGAGEMENT_MARKERS.test(t)) return false;
+  return true;
+}
+
+export function applyVoicemailCatchGuard(
+  classification: CallClassification,
+  transcript: string | null | undefined,
+  label = "[VoicemailCatch]",
+): CallClassification {
+  if (classification.buzon !== false) return classification;
+  if (!looksLikeVoicemail(transcript)) return classification;
+
+  console.warn(
+    `${label} AUT-1975: buzon=false reclasificado a buzón (estado original=${classification.estado}) — transcripción contiene marcadores de buzón sin conversación real.`,
+  );
+  return { ...classification, buzon: true, estado: "seguimiento" };
+}
+
 // ─── Mapeo estado IA → tag GHL ───────────────────────────────────────────────
 // "seguimiento" cuando buzon=false significa que la persona SÍ contestó pero
 // no hubo resultado comercial claro → tag propio, NO el de "no contestó".
