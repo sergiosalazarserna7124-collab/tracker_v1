@@ -49,6 +49,15 @@ import type { ServiceResult } from "../../types/index.js";
 
 const ESTADOS_ACTIVOS = ["pdte", "seguimiento", "programado", "no_contestada", "no_contestado"] as const;
 
+// AUT-1960: Ventana para detectar webhooks fuera de orden. GHL dispara el "pdte"
+// y el evento de llamada (no-answer/buzon/efectiva) casi simultáneamente en la
+// misma automatización; si el evento de llamada se procesa PRIMERO, el registro
+// ya quedó en estado resuelto y el pdte que llega después crearía un registro
+// fantasma "pendiente por llamar" al lado de la llamada ya hecha. 10 min cubre el
+// retraso/reintento de entrega de webhooks sin colisionar con un ciclo real nuevo
+// (que se re-encola horas/días después).
+const PDTE_DEDUP_WINDOW_MS = 10 * 60 * 1000;
+
 // Estados terminales: leads cerrados que NO deben re-abrirse con nuevas llamadas
 const ESTADOS_TERMINALES = ["venta", "ganado", "ganada", "perdido", "perdida", "cerrado", "cerrada"] as const;
 
@@ -676,6 +685,102 @@ export async function processTwilioWebhook(body: TwilioEventBody): Promise<Servi
     if (existingPdte) {
       console.info(`[Twilio] Registro PDTE ya existe (id=${existingPdte.id_registro}), ignorando webhook duplicado.`);
       return { success: true, data: { id_registro: existingPdte.id_registro, id_cuenta: idCuenta, action: "already_exists" } };
+    }
+
+    // AUT-1960: dedup de webhooks fuera de orden. El check anterior solo mira estado="pdte";
+    // si el evento de llamada llegó primero, el registro ya está en un estado resuelto
+    // (no_contestada, seguimiento, calificada…) y no lo encuentra. Buscamos aquí un registro
+    // RECIENTE (< ventana) del mismo lead en CUALQUIER estado: si existe, el pdte pertenece al
+    // mismo ciclo y no debe duplicarse — solo se registra el evento en el log y se enriquece el
+    // registro existente con el closer si le faltaba.
+    const recentCols = {
+      id_registro: llamadas.id_registro,
+      closer_mail: llamadas.closer_mail,
+      nombre_closer: llamadas.nombre_closer,
+      id_user_ghl: llamadas.id_user_ghl,
+    };
+    const windowStart = new Date(Date.now() - PDTE_DEDUP_WINDOW_MS);
+    const recencyCond = gte(llamadas.fecha_evento, windowStart);
+    let recentSibling: { id_registro: number; closer_mail: string | null; nombre_closer: string | null; id_user_ghl: string | null } | null = null;
+
+    if (fields.mailLead) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(recentCols)
+            .from(llamadas)
+            .where(and(sql`LOWER(${llamadas.mail_lead}) = LOWER(${fields.mailLead!})`, accountCond, recencyCond))
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: "Twilio/Pending/recentByEmail" },
+      );
+      recentSibling = rows[0] ?? null;
+    }
+    if (!recentSibling && fields.phone) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(recentCols)
+            .from(llamadas)
+            .where(and(eq(llamadas.phone_raw_format, fields.phone!), accountCond, recencyCond))
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: "Twilio/Pending/recentByPhone" },
+      );
+      recentSibling = rows[0] ?? null;
+    }
+    if (!recentSibling && fields.contactId) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(recentCols)
+            .from(llamadas)
+            .where(and(eq(llamadas.ghl_contact_id, fields.contactId!), accountCond, recencyCond))
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: "Twilio/Pending/recentByContactId" },
+      );
+      recentSibling = rows[0] ?? null;
+    }
+    if (!recentSibling && fields.idUserGhl) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(recentCols)
+            .from(llamadas)
+            .where(and(eq(llamadas.id_user_ghl, fields.idUserGhl!), accountCond, recencyCond))
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: "Twilio/Pending/recentByGhlUserId" },
+      );
+      recentSibling = rows[0] ?? null;
+    }
+
+    if (recentSibling) {
+      console.info(
+        `[Twilio] pdte fuera de orden: ya existe registro reciente id=${recentSibling.id_registro} del mismo lead; se omite el pdte duplicado (AUT-1960).`,
+      );
+      // Enriquecer el registro existente con datos del closer si le faltaban (el evento de
+      // llamada a veces llega sin closer/id_user_ghl y el pdte sí los trae).
+      const enrich = {
+        ...(!recentSibling.closer_mail && fields.closerMail ? { closer_mail: fields.closerMail } : {}),
+        ...(!recentSibling.nombre_closer && fields.nombreCloser ? { nombre_closer: fields.nombreCloser } : {}),
+        ...(!recentSibling.id_user_ghl && fields.idUserGhl ? { id_user_ghl: fields.idUserGhl } : {}),
+      };
+      if (Object.keys(enrich).length > 0) {
+        await withRetry(
+          () => drizzleDb.update(llamadas).set(enrich).where(eq(llamadas.id_registro, recentSibling!.id_registro)),
+          { label: "Twilio/Pending/enrichCloser" },
+        );
+      }
+      await insertLogEntry({
+        idRegistro: recentSibling.id_registro,
+        idCuenta,
+        fields,
+        tipoEvento: "pdte",
+        estadoResultado: "pdte",
+      });
+      return { success: true, data: { id_registro: recentSibling.id_registro, id_cuenta: idCuenta, action: "out_of_order_merged" } };
     }
 
     const [inserted] = await withRetry(

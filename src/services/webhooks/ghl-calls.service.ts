@@ -49,6 +49,11 @@ import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service
 // Estados activos (solo para decidir transición de estado, NO para lookup)
 const ESTADOS_ACTIVOS = ["pdte", "seguimiento", "programado", "no_contestada", "no_contestado"] as const;
 
+// AUT-1960: ventana para detectar webhooks fuera de orden (pdte que llega después del evento
+// de llamada de la misma automatización). 10 min cubre el retraso/reintento de entrega sin
+// colisionar con un ciclo real nuevo (que se re-encola horas/días después).
+const PDTE_DEDUP_WINDOW_MS = 10 * 60 * 1000;
+
 // Estados terminales: leads cerrados que NO deben re-abrirse con nuevas llamadas
 const ESTADOS_TERMINALES = ["venta", "ganado", "ganada", "perdido", "perdida", "cerrado", "cerrada"] as const;
 
@@ -939,6 +944,99 @@ export async function processGhlCallPending(body: GhlCallEventBody): Promise<Ser
     if (existingPdte) {
       console.info(`[GhlCalls/Pending] Registro PDTE ya existe (id=${existingPdte.id_registro}), ignorando duplicado.`);
       return { success: true, data: { id_registro: existingPdte.id_registro, action: "already_exists" } };
+    }
+
+    // AUT-1960: dedup de webhooks fuera de orden (mismo caso que Twilio). El check anterior solo
+    // mira estado="pdte"; si el evento de llamada llegó primero, el registro ya está resuelto y no
+    // lo encuentra → se creaba un pdte fantasma "pendiente por llamar" al lado de la llamada hecha.
+    // Buscamos un registro RECIENTE del mismo lead en cualquier estado dentro de la ventana.
+    {
+      const recentCols = {
+        id_registro: llamadas.id_registro,
+        closer_mail: llamadas.closer_mail,
+        nombre_closer: llamadas.nombre_closer,
+        id_user_ghl: llamadas.id_user_ghl,
+      };
+      const recencyCond = gte(llamadas.fecha_evento, new Date(Date.now() - PDTE_DEDUP_WINDOW_MS));
+      let recentSibling: { id_registro: number; closer_mail: string | null; nombre_closer: string | null; id_user_ghl: string | null } | null = null;
+
+      if (fields.mailLead) {
+        const rows = await withRetry(
+          () =>
+            drizzleDb
+              .select(recentCols)
+              .from(llamadas)
+              .where(and(sql`LOWER(${llamadas.mail_lead}) = LOWER(${fields.mailLead!})`, accountCond, recencyCond))
+              .orderBy(desc(llamadas.fecha_evento))
+              .limit(1),
+          { label: "GhlCalls/Pending/recentByEmail" },
+        );
+        recentSibling = rows[0] ?? null;
+      }
+      if (!recentSibling && fields.phone) {
+        const rows = await withRetry(
+          () =>
+            drizzleDb
+              .select(recentCols)
+              .from(llamadas)
+              .where(and(eq(llamadas.phone_raw_format, fields.phone!), accountCond, recencyCond))
+              .orderBy(desc(llamadas.fecha_evento))
+              .limit(1),
+          { label: "GhlCalls/Pending/recentByPhone" },
+        );
+        recentSibling = rows[0] ?? null;
+      }
+      if (!recentSibling && fields.contactId) {
+        const rows = await withRetry(
+          () =>
+            drizzleDb
+              .select(recentCols)
+              .from(llamadas)
+              .where(and(eq(llamadas.ghl_contact_id, fields.contactId!), accountCond, recencyCond))
+              .orderBy(desc(llamadas.fecha_evento))
+              .limit(1),
+          { label: "GhlCalls/Pending/recentByContactId" },
+        );
+        recentSibling = rows[0] ?? null;
+      }
+      if (!recentSibling && fields.idUserGhl) {
+        const rows = await withRetry(
+          () =>
+            drizzleDb
+              .select(recentCols)
+              .from(llamadas)
+              .where(and(eq(llamadas.id_user_ghl, fields.idUserGhl!), accountCond, recencyCond))
+              .orderBy(desc(llamadas.fecha_evento))
+              .limit(1),
+          { label: "GhlCalls/Pending/recentByGhlUserId" },
+        );
+        recentSibling = rows[0] ?? null;
+      }
+
+      if (recentSibling) {
+        console.info(
+          `[GhlCalls/Pending] pdte fuera de orden: ya existe registro reciente id=${recentSibling.id_registro} del mismo lead; se omite el pdte duplicado (AUT-1960).`,
+        );
+        const enrich = {
+          ...(!recentSibling.closer_mail && fields.closerMail ? { closer_mail: fields.closerMail } : {}),
+          ...(!recentSibling.nombre_closer && fields.nombreCloser ? { nombre_closer: fields.nombreCloser } : {}),
+          ...(!recentSibling.id_user_ghl && fields.idUserGhl ? { id_user_ghl: fields.idUserGhl } : {}),
+        };
+        if (Object.keys(enrich).length > 0) {
+          await withRetry(
+            () => drizzleDb.update(llamadas).set(enrich).where(eq(llamadas.id_registro, recentSibling!.id_registro)),
+            { label: "GhlCalls/Pending/enrichCloser" },
+          );
+        }
+        await insertLogEntry({
+          idRegistro: recentSibling.id_registro,
+          idCuenta,
+          fields,
+          tipoEvento: "pdte",
+          estadoResultado: "pdte",
+        });
+        return { success: true, data: { id_registro: recentSibling.id_registro, action: "out_of_order_merged" } };
+      }
     }
 
     const [inserted] = await withRetry(
