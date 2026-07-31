@@ -22,6 +22,7 @@ export interface ObjecionBatch {
   objecion: string;
   categoria: "precio" | "tiempo" | "confianza" | "competencia" | "necesidad" | "autoridad" | "otra";
   respuesta_vendedor: string;
+  contexto: string;
 }
 
 /** Formato extendido guardado en ia_objeciones por el cron batch */
@@ -73,8 +74,12 @@ function buildChatBatchSchema(estadosEnum: string[]) {
               type: "string",
               description: "Respuesta LITERAL (verbatim) del vendedor/asesor a esta objeción, copiada exactamente de la conversación",
             },
+            contexto: {
+              type: "string",
+              description: "Breve contexto de la situación: qué estaban hablando cuando el lead dijo la objeción (máx 200 chars)",
+            },
           },
-          required: ["objecion", "categoria", "respuesta_vendedor"],
+          required: ["objecion", "categoria", "respuesta_vendedor", "contexto"],
           additionalProperties: false,
         },
       },
@@ -131,20 +136,27 @@ Responde ÚNICAMENTE con el JSON solicitado. Sin texto adicional.`);
   }
 
   parts.push(`## OBJECIONES DE VENTA
-Detecta objeciones EXPLÍCITAS del lead. Categorías:
-- "precio": demasiado caro, sin presupuesto, pedir descuento
-- "tiempo": sin tiempo ahora, en otro momento
-- "confianza": no te conozco, necesito investigar, ¿cómo sé que funciona?
+Detecta SOLO objeciones que representen barreras REALES y DIRECTAS para cerrar la venta. Categorías:
+- "precio": demasiado caro, sin presupuesto, encontré algo más barato
+- "tiempo": ahora no es buen momento, quizás el próximo mes, necesito pensarlo
+- "confianza": no estoy seguro de que funcione, necesito investigar, he tenido malas experiencias
 - "competencia": ya tengo otra empresa, viendo otras opciones
 - "necesidad": no lo necesito, ya lo tenemos internamente
-- "autoridad": no soy quien decide, debo consultar
-- "otra": cualquier otra barrera de compra
+- "autoridad": no soy quien decide, debo consultar con mi jefe
+- "otra": cualquier otra barrera real de compra
+
+REGLA ANTI-FALSOS POSITIVOS: Lee el contexto completo antes de marcar algo como objeción.
+- Si el lead TAMBIÉN expresa interés o aceptación en el mismo segmento → NO es objeción.
+- Preferencias logísticas, roleplay, simulaciones o ejemplos hipotéticos → NO son objeciones.
+- Si NO puedes explicar claramente POR QUÉ esa frase impide la venta → NO la incluyas.
 Si no hay objeciones reales, devuelve [].
 
 RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye la respuesta LITERAL del asesor/vendedor.
 - Copia las palabras EXACTAS tal cual aparecen en la conversación — NO parafrasees ni resumas.
 - Si el asesor no respondió a esa objeción, usa "" (cadena vacía).
-- Máximo 300 caracteres.`);
+- Máximo 300 caracteres.
+
+CONTEXTO: Para CADA objeción, incluye "contexto" con una breve descripción (1-2 oraciones, máx 200 chars) de qué estaban hablando cuando el lead dijo la objeción.`);
 
   parts.push(`## SENTIMIENTO GENERAL
 - "positivo": lead receptivo, interesado, con intención de avanzar
@@ -241,7 +253,7 @@ export async function analyzeChatBatch(params: {
 const llamadaBatchSchema = jsonSchema<{
   resumen: string;
   sentimiento: "positivo" | "neutro" | "negativo";
-  objeciones: Array<{ objecion: string; categoria: string; respuesta_vendedor: string }>;
+  objeciones: Array<{ objecion: string; categoria: string; respuesta_vendedor: string; contexto: string }>;
   senales_compra: string[];
 }>({
   type: "object",
@@ -269,8 +281,12 @@ const llamadaBatchSchema = jsonSchema<{
             type: "string",
             description: "Respuesta LITERAL (verbatim) del vendedor a esta objeción, copiada exactamente de la transcripción",
           },
+          contexto: {
+            type: "string",
+            description: "Breve contexto de la situación: qué estaban hablando cuando el prospecto dijo la objeción (máx 200 chars)",
+          },
         },
-        required: ["objecion", "categoria", "respuesta_vendedor"],
+        required: ["objecion", "categoria", "respuesta_vendedor", "contexto"],
         additionalProperties: false,
       },
     },
@@ -288,17 +304,24 @@ const LLAMADA_BATCH_SYSTEM = `Eres un Analista de Ventas. Analiza transcripcione
 Extrae métricas clave para el equipo comercial.
 Responde ÚNICAMENTE con el JSON solicitado. Sin texto adicional.
 
-OBJECIONES — Solo barreras EXPLÍCITAS para cerrar la venta:
-- "precio": caro, sin presupuesto, descuento
-- "tiempo": sin tiempo, en otro momento
-- "confianza": no te conozco, necesito investigar
+OBJECIONES — Solo barreras REALES y DIRECTAS para cerrar la venta:
+- "precio": demasiado caro, sin presupuesto, encontré algo más barato
+- "tiempo": ahora no es buen momento, quizás el próximo mes, necesito pensarlo
+- "confianza": no estoy seguro de que funcione, necesito investigar, malas experiencias
 - "competencia": otras opciones, otra empresa
 - "necesidad": no lo necesito, ya lo tenemos
-- "autoridad": no decido solo, debo consultar
+- "autoridad": no decido solo, debo consultar con mi jefe
 - "otra": otra barrera real de compra
-Si no hay objeciones, devuelve [].
+
+REGLA ANTI-FALSOS POSITIVOS: Lee el contexto completo antes de marcar algo como objeción.
+- Si el prospecto TAMBIÉN expresa interés en el mismo segmento → NO es objeción.
+- Preferencias logísticas, roleplay, simulaciones → NO son objeciones.
+- Si NO puedes explicar POR QUÉ esa frase impide la venta → NO la incluyas.
+Si no hay objeciones reales, devuelve [].
 
 RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye "respuesta_vendedor" con las palabras EXACTAS que el vendedor dijo al responder esa objeción. NO parafrasees — copia VERBATIM de la transcripción. Si no respondió, usa "". Máximo 300 chars.
+
+CONTEXTO: Para CADA objeción, incluye "contexto" con una breve descripción (1-2 oraciones, máx 200 chars) de qué estaban hablando cuando el prospecto dijo la objeción.
 
 SENTIMIENTO: positivo (receptivo/interesado) | neutro (sin señales claras) | negativo (desinteresado/irritado)
 

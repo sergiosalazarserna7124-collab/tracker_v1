@@ -43,6 +43,7 @@ export interface ObjecionDetectada {
   objecion: string;
   categoria: string;
   respuesta_vendedor: string;
+  contexto: string;
 }
 
 export interface ChatAnalysisResult {
@@ -118,8 +119,12 @@ function buildChatClassificationSchema(estadosEnum: string[]) {
               type: "string",
               description: "Respuesta LITERAL (verbatim) del asesor a esta objeción, copiada exactamente de la conversación",
             },
+            contexto: {
+              type: "string",
+              description: "Breve contexto de la situación: qué estaban hablando cuando el lead dijo la objeción (máx 200 chars)",
+            },
           },
-          required: ["objecion", "categoria", "respuesta_vendedor"],
+          required: ["objecion", "categoria", "respuesta_vendedor", "contexto"],
           additionalProperties: false,
         },
       },
@@ -191,17 +196,25 @@ Devuelve solo los tags que EFECTIVAMENTE aplican. Si ninguno aplica, devuelve []
   }
 
   parts.push(`## OBJECIONES DE VENTA
-Detecta todas las objeciones que el lead haya expresado. Usa estas categorías:
-- "precio": "es muy caro", "no tengo presupuesto", "¿puedes hacer un descuento?"
-- "tiempo": "no tengo tiempo", "llámame en otro momento", "estoy muy ocupado"
-- "confianza": "no te conozco", "necesito investigar más", "¿cómo sé que funciona?"
+Detecta SOLO objeciones que representen barreras REALES y DIRECTAS para cerrar la venta. Usa estas categorías:
+- "precio": "es muy caro", "no tengo presupuesto", "encontré algo más barato"
+- "tiempo": "ahora no es buen momento", "quizás el próximo mes", "necesito pensarlo"
+- "confianza": "no estoy seguro de que funcione", "necesito investigar más", "he tenido malas experiencias"
 - "competencia": "ya lo tengo con otra empresa", "estoy viendo otras opciones"
 - "necesidad": "no lo necesito ahora", "ya lo hacemos internamente"
-- "autoridad": "no soy quien decide", "tengo que consultarlo"
-- "otra": cualquier otra objeción que no encaje en las anteriores
-Si no hay objeciones detectadas, devuelve [].
+- "autoridad": "no soy quien decide", "tengo que consultarlo con mi jefe"
+- "otra": cualquier otra barrera real de compra
 
-RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye "respuesta_vendedor" con las palabras EXACTAS que el asesor/vendedor dijo al responder esa objeción. NO parafrasees — copia VERBATIM de la conversación. Si no respondió, usa "". Máximo 300 caracteres.`);
+REGLA ANTI-FALSOS POSITIVOS: Antes de marcar algo como objeción, lee el contexto completo.
+- Si el lead TAMBIÉN expresa interés o aceptación en el mismo segmento → NO es objeción.
+- Si la frase es una preferencia logística ("prefiero ir allá", "mejor en la mañana") → NO es objeción.
+- Si la frase fue dicha en roleplay, simulación o ejemplo hipotético → NO es objeción.
+- Si NO puedes explicar claramente POR QUÉ esa frase impide la venta → NO la incluyas.
+Si no hay objeciones reales, devuelve [].
+
+RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye "respuesta_vendedor" con las palabras EXACTAS que el asesor/vendedor dijo al responder esa objeción. NO parafrasees — copia VERBATIM de la conversación. Si no respondió, usa "". Máximo 300 caracteres.
+
+CONTEXTO: Para CADA objeción, incluye "contexto" con una breve descripción (1-2 oraciones, máx 200 chars) de qué estaban hablando cuando el lead dijo la objeción. Ejemplo: "El asesor presentó el precio mensual y el lead respondió con esta objeción."`);
 
   if (canales_activos && canales_activos.length > 0) {
     parts.push(`## CANALES ACTIVOS DEL CLIENTE

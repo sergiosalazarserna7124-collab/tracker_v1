@@ -29,6 +29,7 @@ export interface ObjecionItem {
   objecion: string;
   categoria: string;
   respuesta_vendedor: string;
+  contexto: string;
 }
 
 export interface CallAnalysisResult {
@@ -230,18 +231,29 @@ CATEGORÍAS VÁLIDAS: PRECIO, AUTORIDAD, TIEMPO, CONFIANZA, NECESIDAD, COMPARACI
 
 DEFINICIÓN ESTRICTA: Una objeción es una declaración EXPLÍCITA del prospecto que:
 - Impide cerrar la venta EN ESTE MOMENTO
-- Expresa una barrera ESPECÍFICA para comprar
+- Expresa una barrera ESPECÍFICA y DIRECTA para comprar
 - Se refiere directamente a ESTA oferta específica
+- Es dicha EN SERIO por el prospecto (no en roleplay, simulación ni ejemplo hipotético)
+
+REGLA DE ORO ANTI-FALSOS POSITIVOS:
+Antes de marcar algo como objeción, LEE EL CONTEXTO COMPLETO alrededor de la frase.
+- Si el prospecto TAMBIÉN expresa interés, aceptación o entusiasmo en el mismo segmento → NO es objeción. Ejemplo: "me interesa y sigo con la espina" NO es objeción si en contexto el lead dice que le interesa.
+- Si la frase fue dicha en un ROLEPLAY, escenario hipotético, ejemplo o simulación ("imagina que...", "sería como si...") → NO es objeción.
+- Si la frase es una PREFERENCIA LOGÍSTICA, no una barrera de compra ("prefiero ir allá", "mejor en la mañana") → NO es objeción.
+- Si la frase requiere contexto externo para entenderse como rechazo y aislada NO comunica resistencia a comprar → NO es objeción.
+- Si NO puedes explicar claramente POR QUÉ esa frase impide la venta → NO la incluyas.
 
 FILTROS CRÍTICOS — Esto NUNCA es una objeción:
-- Preguntas logísticas: "¿a qué hora abren?", "¿dónde quedan?", "¿cómo llego?", "¿cuál es la dirección?"
+- Preguntas logísticas: "¿a qué hora abren?", "¿dónde quedan?", "¿cómo llego?", "prefiero ir allá"
 - Coordinación de pago: "te pago a las 5", "dame los datos para pagar", "envío el comprobante"
-- Preguntas informativas: "¿cuánto cuesta?", "¿qué incluye?", "¿cómo funciona?" (son consultas normales del proceso de venta, NO barreras)
+- Preguntas informativas: "¿cuánto cuesta?", "¿qué incluye?", "¿cómo funciona?" (consultas normales, NO barreras)
 - Interrupciones: "tengo que irme", "me llaman por la otra línea", "espérame un momento"
 - Descripciones del negocio del prospecto: "mi audiencia no está en redes", "tenemos 10 empleados"
 - Problemas operativos del prospecto: "las ventas están bajas", "no tenemos suficiente tráfico"
-- Conversación trivial o saludos: "hola", "¿cómo estás?", "mucho gusto"
-- Preguntas sobre el producto que NO expresan rechazo: "¿tienen arroz con pollo?", "¿qué colores hay?"
+- Conversación trivial o saludos
+- Preguntas sobre el producto que NO expresan rechazo
+- Frases dentro de un roleplay o ejercicio de ventas simulado
+- Expresiones de interés con matiz emocional ("me da un poco de miedo pero quiero", "tengo dudas pero me convence")
 
 EJEMPLOS DE OBJECIONES REALES:
 - PRECIO: "Es muy caro para mí", "No tengo ese presupuesto", "Encontré algo más barato"
@@ -252,13 +264,19 @@ EJEMPLOS DE OBJECIONES REALES:
 - COMPARACION: "Estoy viendo otras opciones", "La competencia ofrece X"
 - CAPACIDAD: "No creo que pueda implementarlo", "No tengo el equipo para eso"
 
-ALGORITMO: Solo extrae frases del PROSPECTO que respondan a "¿Por qué NO puedes o NO quieres comprar AHORA?".
+ALGORITMO: Solo extrae frases del PROSPECTO que respondan a "¿Por qué NO puedes o NO quieres comprar AHORA?". Si la respuesta no es obvia y directa, NO la incluyas.
 
 RESPUESTA DEL VENDEDOR: Para CADA objeción detectada, extrae la respuesta LITERAL del vendedor/asesor/closer a esa objeción.
 - Busca las palabras EXACTAS que el vendedor dijo INMEDIATAMENTE DESPUÉS de la objeción del prospecto.
 - NO parafrasees ni resumas — copia el texto VERBATIM tal cual aparece en la transcripción.
 - Si el vendedor no respondió directamente a la objeción, usa "" (cadena vacía).
 - Máximo 300 caracteres de la respuesta. Si es más larga, corta al final de la oración más cercana.
+
+CONTEXTO DE LA OBJECIÓN: Para CADA objeción, incluye un breve contexto de la situación en la conversación.
+- Describe en 1-2 oraciones QUÉ estaban hablando justo antes de que el prospecto dijera la objeción.
+- Ejemplo: "El vendedor presentó el precio del paquete premium y el prospecto respondió con esta objeción."
+- Ejemplo: "Mientras discutían los plazos de entrega, el prospecto expresó que no tiene tiempo."
+- Máximo 200 caracteres.
 
 Si no encuentras objeciones válidas, devuelve {"objeciones": []}.`;
 
@@ -278,8 +296,12 @@ const objectionsSchema = jsonSchema<{ objeciones: ObjecionItem[] }>({
             type: "string",
             description: "Respuesta LITERAL (verbatim) del vendedor a esta objeción, copiada exactamente de la transcripción",
           },
+          contexto: {
+            type: "string",
+            description: "Breve contexto de la situación: qué estaban hablando cuando el prospecto dijo la objeción (máx 200 chars)",
+          },
         },
-        required: ["objecion", "categoria", "respuesta_vendedor"],
+        required: ["objecion", "categoria", "respuesta_vendedor", "contexto"],
         additionalProperties: false,
       },
     },
@@ -563,5 +585,69 @@ Retorna SOLO la transcripción formateada, sin explicaciones adicionales.`;
   } catch (err) {
     console.warn("[diarizarTranscripcion] Error diarizando, retornando original:", err);
     return transcript;
+  }
+}
+
+// ─── Resumen estructurado de llamada (AUT-1945) ─────────────────────────────
+
+export interface ResumenLlamada {
+  ubicacion: string;
+  objetivo: string;
+  presupuesto: string;
+  decisor: string;
+  desenlace: string;
+}
+
+const RESUMEN_PROMPT = `Eres un asistente que extrae información clave de transcripciones de llamadas de ventas inmobiliarias.
+
+A partir de la transcripción, extrae estos 5 campos en español. Cada campo debe ser una oración corta y directa (máximo 80 caracteres). Si la información NO se menciona en la transcripción, escribe exactamente "No mencionado".
+
+Campos:
+1. ubicacion — ¿Dónde vive actualmente el lead? Ciudad, estado o zona.
+2. objetivo — ¿Para qué quiere la propiedad? (vivir, invertir, rentar, etc.)
+3. presupuesto — ¿Cuál es su presupuesto o rango de precio mencionado?
+4. decisor — ¿Con quién toma la decisión de compra? (solo, pareja, socio, familia, etc.)
+5. desenlace — ¿En qué terminó la llamada? (se agendó cita, pidió más info, no le interesó, etc.)
+
+REGLAS ESTRICTAS:
+- Solo extrae lo que EXPLÍCITAMENTE se dice en la transcripción.
+- NUNCA inventes ni infieras información que no se mencionó.
+- Si hay ambigüedad, usa "No mencionado".`;
+
+const resumenSchema = jsonSchema<ResumenLlamada>({
+  type: "object",
+  properties: {
+    ubicacion: { type: "string", description: "Dónde vive el lead actualmente" },
+    objetivo: { type: "string", description: "Para qué quiere la propiedad" },
+    presupuesto: { type: "string", description: "Presupuesto o rango de precio" },
+    decisor: { type: "string", description: "Con quién toma la decisión de compra" },
+    desenlace: { type: "string", description: "En qué terminó la llamada" },
+  },
+  required: ["ubicacion", "objetivo", "presupuesto", "decisor", "desenlace"],
+  additionalProperties: false,
+});
+
+export async function generateResumenLlamada(
+  transcript: string,
+  openaiApiKey?: string | null,
+  idCuenta?: number | null,
+): Promise<ResumenLlamada | null> {
+  if (!transcript.trim() || transcript.length < 100) return null;
+
+  const model = resolveModel(openaiApiKey);
+
+  try {
+    const result = await generateObject({
+      model,
+      schema: resumenSchema,
+      system: RESUMEN_PROMPT,
+      prompt: `Transcripción:\n${transcript.slice(0, 8000)}`,
+      temperature: 0,
+    });
+    void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, result.usage.totalTokens ?? 0);
+    return result.object;
+  } catch (err) {
+    console.error("[generateResumenLlamada] Error:", err);
+    return null;
   }
 }
