@@ -33,6 +33,8 @@ export interface CitaTareaExtraction {
     titulo: string | null;
     descripcion: string | null;
     fecha_vencimiento: string | null;
+    callback_datetime: string | null;
+    contexto_lead: string | null;
   };
 }
 
@@ -73,8 +75,16 @@ const extractionSchema = jsonSchema<CitaTareaExtraction>({
           anyOf: [{ type: "string" }, { type: "null" }],
           description: "Fecha de vencimiento en formato ISO 8601 (YYYY-MM-DDTHH:mm:ss). Usar heurística si no es explícita.",
         },
+        callback_datetime: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          description: "Fecha y hora en que el lead pidió que le devuelvan la llamada (ej: 'llámame mañana a las 3', 'después de las 5'). ISO 8601 local (YYYY-MM-DDTHH:mm:ss). null si no pidió callback.",
+        },
+        contexto_lead: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          description: "Resumen breve (1-2 oraciones) de qué quiere el lead y qué se discutió. Ej: 'Interesado en departamento de 2 recámaras, pidió cotización con financiamiento'.",
+        },
       },
-      required: ["detectada", "titulo", "descripcion", "fecha_vencimiento"],
+      required: ["detectada", "titulo", "descripcion", "fecha_vencimiento", "callback_datetime", "contexto_lead"],
       additionalProperties: false,
     },
   },
@@ -112,10 +122,24 @@ Una tarea es una acción de seguimiento que el vendedor debe realizar.
   - Acción sin fecha → +3 días (fecha tentativa)
 - Devolver fecha_vencimiento en formato ISO 8601 local (YYYY-MM-DDTHH:mm:ss).
 
+### callback_datetime
+Si el lead pide explícitamente que le devuelvan la llamada en un momento específico:
+- "llámame mañana a las 3" → día siguiente, 15:00
+- "después de las 5" → mismo día (o siguiente si ya pasaron las 5), 17:00
+- "llámame el lunes" → próximo lunes, 10:00 (hora por defecto)
+- "llámame después" / "ahorita no puedo" → null (no hay hora concreta)
+Solo llenar si hay una referencia temporal específica. Si solo dice "después" sin hora, dejar null.
+
+### contexto_lead
+Resumen breve (1-2 oraciones) de lo que quiere el lead y lo más relevante que se discutió.
+Incluir: interés del lead, producto/servicio mencionado, objeciones principales, siguiente paso acordado.
+Ejemplo: "Interesado en departamento de 2 recámaras en zona norte. Pidió cotización con opciones de financiamiento."
+
 ## REGLAS
 1. Si NO hay cita ni tarea → ambos detectada=false con campos null.
 2. No inventar citas o tareas que no estén en la conversación.
-3. Sé conservador: si no es claro, no lo extraigas.`;
+3. Sé conservador: si no es claro, no lo extraigas.
+4. contexto_lead debe llenarse SIEMPRE que tarea.detectada=true, incluso si el contexto es breve.`;
 }
 
 // ─── Extracción principal ───────────────────────────────────────────────────

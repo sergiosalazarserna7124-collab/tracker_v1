@@ -1529,8 +1529,12 @@ async function effectivePath(
       } else if (!alreadyTagged) {
         try {
           const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
-          const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
-          let dueDate = citaTareaResult.tarea.fecha_vencimiento;
+          const bodyParts: string[] = [];
+          if (citaTareaResult.tarea.contexto_lead) bodyParts.push(`Contexto: ${citaTareaResult.tarea.contexto_lead}`);
+          if (citaTareaResult.tarea.descripcion) bodyParts.push(citaTareaResult.tarea.descripcion);
+          if (citaTareaResult.tarea.callback_datetime) bodyParts.push(`Callback solicitado: ${citaTareaResult.tarea.callback_datetime}`);
+          const tareaBody = bodyParts.length > 0 ? bodyParts.join("\n") : undefined;
+          let dueDate = citaTareaResult.tarea.callback_datetime ?? citaTareaResult.tarea.fecha_vencimiento;
           if (!dueDate) {
             const fallback = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
             dueDate = fallback.toISOString();
