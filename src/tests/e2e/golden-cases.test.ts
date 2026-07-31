@@ -142,7 +142,18 @@ describe("Golden: Call webhook → BD", () => {
     });
     assert.equal(result.status, 200, "Call webhook debe responder 200");
     callId = result.callId;
+    // IA classification (CitaTarea + CallSummary) can take 15-20s; poll instead of fixed wait.
+    const deadline = Date.now() + 60_000;
+    const poll = 4_000;
     await waitForProcessing(PROCESSING_WAIT);
+    while (Date.now() < deadline) {
+      const rows = await queryDB(
+        `SELECT 1 FROM registros_de_llamada WHERE id_cuenta = $1 AND callsid = $2 LIMIT 1`,
+        [String(DEMO_ACCOUNT_ID), callId],
+      );
+      if (rows.length > 0) break;
+      await waitForProcessing(poll);
+    }
   });
 
   test("crea registro en registros_de_llamada con id_cuenta=52", async () => {
