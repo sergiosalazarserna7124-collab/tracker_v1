@@ -91,6 +91,7 @@ export const llamadas = pgTable("registros_de_llamada", {
   ia_objeciones: jsonb("ia_objeciones"),
   excluido_metricas: boolean("excluido_metricas").notNull().default(false),
   calificacion_manual: text("calificacion_manual"),
+  resumen_llamada: jsonb("resumen_llamada"),
 });
 
 /**
@@ -129,6 +130,7 @@ export const logLlamadas = pgTable("log_llamadas", {
   ia_objeciones: jsonb("ia_objeciones"),
   calificacion_manual: text("calificacion_manual"),
   gemini_intentos: smallint("gemini_intentos").notNull().default(0),
+  resumen_llamada: jsonb("resumen_llamada"),
 });
 
 /**

@@ -36,6 +36,7 @@ import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingNote, savePendingTag } from "../ghl-token-guard.service.js";
 import { writebackOpportunityFields } from "../ghl-opportunity-writeback.service.js";
 import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
+import { extractCallSummary, type CallSummary } from "../ai/call-summary.service.js";
 import { updateContactCustomFields, createLocationTag, createContactTask, contactHasTag, getContactAppointmentInfo } from "../ghl-api.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { enrichWithGemini, resolveGeminiKey } from "../ai/gemini-enrichment.service.js";
@@ -87,6 +88,7 @@ interface LogEntry {
   duracionSegundos?: number | null;
   ubicacionAprox?: string | null;
   iaObjeciones?: ObjecionItem[] | null;
+  resumenLlamada?: CallSummary | null;
 }
 
 async function insertLogEntry(entry: LogEntry): Promise<void> {
@@ -116,6 +118,7 @@ async function insertLogEntry(entry: LogEntry): Promise<void> {
           ...(entry.duracionSegundos != null && { duracion_segundos: entry.duracionSegundos }),
           ...(entry.ubicacionAprox && { ubicacion_aprox: entry.ubicacionAprox }),
           ...(entry.iaObjeciones && { ia_objeciones: entry.iaObjeciones }),
+          ...(entry.resumenLlamada && { resumen_llamada: entry.resumenLlamada }),
         }),
       { label: "insertLogEntry" },
     );
@@ -1116,6 +1119,23 @@ async function effectivePath(
     }
   }
 
+  // ── Resumen estructurado de la llamada (AUT-1945) ──────────────────────────
+  let callSummaryResult: CallSummary | null = null;
+  if (transcript.trim().length >= 100) {
+    try {
+      callSummaryResult = await extractCallSummary(
+        transcript,
+        openaiApiKey,
+        idCuenta,
+      );
+      if (callSummaryResult) {
+        console.info(`[Effective] CallSummary: extracted OK`);
+      }
+    } catch (err) {
+      console.warn(`[Effective] CallSummary extraction error (fail-open):`, err instanceof Error ? err.message : err);
+    }
+  }
+
   // AUT-1301: Gemini enrichment + ubicación por lada
   const tenantGeminiKey = resolveGeminiKey({ gemini_api_key: geminiApiKey ?? null, gemini_premium_status: geminiPremiumStatus ?? null });
   const geminiResult = transcript.trim().length >= 50
@@ -1292,6 +1312,7 @@ async function effectivePath(
               ...(callDurationSeconds != null && { duracion_segundos: callDurationSeconds }),
               ...(ubicacionAprox && { ubicacion_aprox: ubicacionAprox }),
               ...(objections && { ia_objeciones: objections }),
+              ...(callSummaryResult && { resumen_llamada: callSummaryResult }),
             })
             .where(eq(llamadas.id_registro, existing!.id_registro)),
         { label: "effectivePath/update" },
@@ -1333,6 +1354,7 @@ async function effectivePath(
               ...(callDurationSeconds != null && { duracion_segundos: callDurationSeconds }),
               ...(ubicacionAprox && { ubicacion_aprox: ubicacionAprox }),
               ...(objections && { ia_objeciones: objections }),
+              ...(callSummaryResult && { resumen_llamada: callSummaryResult }),
             })
             .returning({ id_registro: llamadas.id_registro }),
         { label: "effectivePath/insert" },
@@ -1558,6 +1580,7 @@ async function effectivePath(
     duracionSegundos: callDurationSeconds,
     ubicacionAprox: ubicacionAprox,
     iaObjeciones: objections,
+    resumenLlamada: callSummaryResult,
   });
 
   return {

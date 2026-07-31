@@ -20,6 +20,7 @@ import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import { classifyCall } from "../ai/call-classification.service.js";
 import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
+import { extractCallSummary, type CallSummary } from "../ai/call-summary.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { VozCallCompletedPayload } from "../../schemas/webhooks/voz.schema.js";
 
@@ -376,6 +377,24 @@ async function processVozInternal(
     }
   }
 
+  // ── 4d. Resumen estructurado de la llamada (AUT-1945) ──────────────────────
+  let callSummaryResult: CallSummary | null = null;
+
+  if (transcript.trim().length >= 100) {
+    try {
+      callSummaryResult = await extractCallSummary(
+        transcript,
+        cuenta.openai_api_key,
+        idCuenta,
+      );
+      if (callSummaryResult) {
+        console.info(`${label} CallSummary: extracted OK`);
+      }
+    } catch (err) {
+      console.warn(`${label} CallSummary extraction error (fail-open):`, err instanceof Error ? err.message : err);
+    }
+  }
+
   // ── 5. Persistir en registros_de_llamada (idempotente por call_id) ─────────
   let idRegistro: number | null = null;
 
@@ -408,6 +427,7 @@ async function processVozInternal(
             fecha_y_hora_de_seguimiento: fechaSeguimiento,
             tags_internos: tagsInternos,
             agentid,
+            ...(callSummaryResult && { resumen_llamada: callSummaryResult }),
           })
           .where(eq(llamadas.id_registro, existingByCallId[0].id_registro)),
       { label: "Voz/updateByCallId" },
@@ -440,6 +460,7 @@ async function processVozInternal(
             ghl_contact_id: ghlContactIdPayload,
             tags_internos: tagsInternos,
             agentid,
+            ...(callSummaryResult && { resumen_llamada: callSummaryResult }),
           })
           .returning({ id_registro: llamadas.id_registro }),
       { label: "Voz/insert" },
@@ -471,6 +492,7 @@ async function processVozInternal(
           speed_to_lead: null,
           tags_internos: tagsInternos,
           agentid,
+          ...(callSummaryResult && { resumen_llamada: callSummaryResult }),
         }),
       { label: "Voz/logLlamadas" },
     );
