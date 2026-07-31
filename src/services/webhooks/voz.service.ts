@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { llamadas, logLlamadas, eventosHuerfanos } from "../../db/schema.js";
 import {
@@ -435,38 +435,160 @@ async function processVozInternal(
     idRegistro = existingByCallId[0].id_registro;
     console.info(`${label} Registro actualizado (idempotencia): id_registro=${idRegistro}`);
   } else {
-    const [inserted] = await withRetry(
-      () =>
-        drizzleDb
-          .insert(llamadas)
-          .values({
-            fecha_evento: now,
-            id_cuenta: idCuenta,
-            nombre_lead: nombreLead,
-            estado: estadoFinal,
-            mail_lead: mailLead,
-            phone_raw_format: phone,
-            creativo_origen: null,
-            closer_mail: "voz@autokpi.net",
-            nombre_closer: "Agente de voz - Auto KPI",
-            fecha_y_hora_de_seguimiento: fechaSeguimiento,
-            speed_to_lead: null,
-            intentos_contacto: 1,
-            fecha_primera_llamada: now,
-            trancription: transcript || null,
-            callsid: callId,
-            iadescripcion,
-            id_user_ghl: idUserGhl,
-            ghl_contact_id: ghlContactIdPayload,
-            tags_internos: tagsInternos,
-            agentid,
-            ...(callSummaryResult && { resumen_llamada: callSummaryResult }),
-          })
-          .returning({ id_registro: llamadas.id_registro }),
-      { label: "Voz/insert" },
-    );
-    idRegistro = inserted?.id_registro ?? null;
-    console.info(`${label} Registro insertado: id_registro=${idRegistro}`);
+    // AUT-1962: antes de insertar, buscar un registro pdte reciente del mismo lead
+    // para actualizarlo (dirección B: pdte creado por GHL/Twilio, voz_callai llega después).
+    const PDTE_DEDUP_WINDOW_MS = 10 * 60 * 1000;
+    const windowStart = new Date(now.getTime() - PDTE_DEDUP_WINDOW_MS);
+    const pdteCols = {
+      id_registro: llamadas.id_registro,
+      fecha_evento: llamadas.fecha_evento,
+      closer_mail: llamadas.closer_mail,
+      id_user_ghl: llamadas.id_user_ghl,
+    };
+    let recentPdte: { id_registro: number; fecha_evento: Date | null; closer_mail: string | null; id_user_ghl: string | null } | null = null;
+
+    if (mailLead) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(pdteCols)
+            .from(llamadas)
+            .where(and(
+              sql`LOWER(${llamadas.mail_lead}) = LOWER(${mailLead})`,
+              eq(llamadas.id_cuenta, idCuenta),
+              eq(llamadas.estado, "pdte"),
+              gte(llamadas.fecha_evento, windowStart),
+            ))
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: "Voz/pdteByEmail" },
+      );
+      recentPdte = rows[0] ?? null;
+    }
+    if (!recentPdte && phone) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(pdteCols)
+            .from(llamadas)
+            .where(and(
+              eq(llamadas.phone_raw_format, phone),
+              eq(llamadas.id_cuenta, idCuenta),
+              eq(llamadas.estado, "pdte"),
+              gte(llamadas.fecha_evento, windowStart),
+            ))
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: "Voz/pdteByPhone" },
+      );
+      recentPdte = rows[0] ?? null;
+    }
+    if (!recentPdte && ghlContactIdPayload) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(pdteCols)
+            .from(llamadas)
+            .where(and(
+              eq(llamadas.ghl_contact_id, ghlContactIdPayload),
+              eq(llamadas.id_cuenta, idCuenta),
+              eq(llamadas.estado, "pdte"),
+              gte(llamadas.fecha_evento, windowStart),
+            ))
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: "Voz/pdteByContactId" },
+      );
+      recentPdte = rows[0] ?? null;
+    }
+    if (!recentPdte && idUserGhl) {
+      const rows = await withRetry(
+        () =>
+          drizzleDb
+            .select(pdteCols)
+            .from(llamadas)
+            .where(and(
+              eq(llamadas.id_user_ghl, idUserGhl),
+              eq(llamadas.id_cuenta, idCuenta),
+              eq(llamadas.estado, "pdte"),
+              gte(llamadas.fecha_evento, windowStart),
+            ))
+            .orderBy(desc(llamadas.fecha_evento))
+            .limit(1),
+        { label: "Voz/pdteByGhlUserId" },
+      );
+      recentPdte = rows[0] ?? null;
+    }
+
+    if (recentPdte) {
+      const stl = recentPdte.fecha_evento
+        ? String(Math.max(0, Math.round((now.getTime() - recentPdte.fecha_evento.getTime()) / 60_000)))
+        : null;
+      await withRetry(
+        () =>
+          drizzleDb
+            .update(llamadas)
+            .set({
+              nombre_lead: nombreLead,
+              estado: estadoFinal,
+              mail_lead: mailLead,
+              phone_raw_format: phone,
+              nombre_closer: "Agente de voz - Auto KPI",
+              closer_mail: "voz@autokpi.net",
+              trancription: transcript || null,
+              callsid: callId,
+              iadescripcion,
+              id_user_ghl: idUserGhl,
+              ghl_contact_id: ghlContactIdPayload,
+              fecha_y_hora_de_seguimiento: fechaSeguimiento,
+              tags_internos: tagsInternos,
+              agentid,
+              intentos_contacto: 1,
+              fecha_primera_llamada: now,
+              ...(stl !== null && { speed_to_lead: stl }),
+              ...(callSummaryResult && { resumen_llamada: callSummaryResult }),
+            })
+            .where(eq(llamadas.id_registro, recentPdte.id_registro)),
+        { label: "Voz/updatePdte" },
+      );
+      idRegistro = recentPdte.id_registro;
+      console.info(
+        `${label} pdte reciente actualizado (AUT-1962): id_registro=${idRegistro} → estado=${estadoFinal}`,
+      );
+    } else {
+      const [inserted] = await withRetry(
+        () =>
+          drizzleDb
+            .insert(llamadas)
+            .values({
+              fecha_evento: now,
+              id_cuenta: idCuenta,
+              nombre_lead: nombreLead,
+              estado: estadoFinal,
+              mail_lead: mailLead,
+              phone_raw_format: phone,
+              creativo_origen: null,
+              closer_mail: "voz@autokpi.net",
+              nombre_closer: "Agente de voz - Auto KPI",
+              fecha_y_hora_de_seguimiento: fechaSeguimiento,
+              speed_to_lead: null,
+              intentos_contacto: 1,
+              fecha_primera_llamada: now,
+              trancription: transcript || null,
+              callsid: callId,
+              iadescripcion,
+              id_user_ghl: idUserGhl,
+              ghl_contact_id: ghlContactIdPayload,
+              tags_internos: tagsInternos,
+              agentid,
+              ...(callSummaryResult && { resumen_llamada: callSummaryResult }),
+            })
+            .returning({ id_registro: llamadas.id_registro }),
+        { label: "Voz/insert" },
+      );
+      idRegistro = inserted?.id_registro ?? null;
+      console.info(`${label} Registro insertado: id_registro=${idRegistro}`);
+    }
   }
 
   // ── 6. Insertar en log_llamadas (best-effort, inmutable) ───────────────────
