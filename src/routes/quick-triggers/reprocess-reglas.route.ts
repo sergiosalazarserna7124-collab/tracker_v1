@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
+import type { FastifyReply } from "fastify";
 import { Type } from "@sinclair/typebox";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, logLlamadas } from "../../db/schema.js";
 import { env } from "../../config/env.js";
@@ -20,6 +21,7 @@ export async function reprocessReglasRoute(app: FastifyInstance) {
     Body: {
       id_registro_agenda?: number;
       id_log_llamada?: number;
+      id_log_llamadas?: number[];
       mode?: "replace" | "merge";
     };
   }>(
@@ -30,6 +32,7 @@ export async function reprocessReglasRoute(app: FastifyInstance) {
         body: Type.Object({
           id_registro_agenda: Type.Optional(Type.Number()),
           id_log_llamada: Type.Optional(Type.Number()),
+          id_log_llamadas: Type.Optional(Type.Array(Type.Number())),
           mode: Type.Optional(Type.Union([Type.Literal("replace"), Type.Literal("merge")])),
         }),
       },
@@ -40,12 +43,16 @@ export async function reprocessReglasRoute(app: FastifyInstance) {
         return reply.status(401).send({ success: false, error: "Unauthorized" });
       }
 
-      const { id_registro_agenda, id_log_llamada, mode = "replace" } = request.body;
+      const { id_registro_agenda, id_log_llamada, id_log_llamadas, mode = "replace" } = request.body;
+
+      if (id_log_llamadas && id_log_llamadas.length > 0) {
+        return await processBatch(id_log_llamadas, mode, reply);
+      }
 
       if (!id_registro_agenda && !id_log_llamada) {
         return reply.status(400).send({
           success: false,
-          error: "Provide either id_registro_agenda or id_log_llamada",
+          error: "Provide either id_registro_agenda, id_log_llamada, or id_log_llamadas[]",
         });
       }
       if (id_registro_agenda && id_log_llamada) {
@@ -174,4 +181,118 @@ export async function reprocessReglasRoute(app: FastifyInstance) {
       });
     },
   );
+
+  async function processBatch(
+    ids: number[],
+    mode: "replace" | "merge",
+    reply: FastifyReply,
+  ) {
+    const rows = await drizzleDb
+      .select({
+        id: logLlamadas.id,
+        id_cuenta: logLlamadas.id_cuenta,
+        nombre_lead: logLlamadas.nombre_lead,
+        transcript: logLlamadas.transcripcion,
+        ghl_contact_id: logLlamadas.contact_id_ghl,
+        tags_internos: logLlamadas.tags_internos,
+      })
+      .from(logLlamadas)
+      .where(inArray(logLlamadas.id, ids));
+
+    if (!rows.length) {
+      return reply.status(404).send({ success: false, error: "No records found for given IDs" });
+    }
+
+    const accountIds = [...new Set(rows.map((r) => r.id_cuenta))];
+    const accounts = new Map<number, {
+      token_ghl: string | null;
+      prompt_ventas: string | null;
+      prompt_llamadas: string | null;
+      openai_api_key: string | null;
+      reglas_etiquetas: unknown;
+      locationid: string | null;
+    }>();
+
+    for (const accountId of accountIds) {
+      const [acc] = await drizzleDb
+        .select({
+          token_ghl: cuentas.token_ghl,
+          prompt_ventas: cuentas.prompt_ventas,
+          prompt_llamadas: cuentas.prompt_llamadas,
+          openai_api_key: cuentas.openai_api_key,
+          reglas_etiquetas: cuentas.reglas_etiquetas,
+          locationid: cuentas.locationid,
+        })
+        .from(cuentas)
+        .where(eq(cuentas.id_cuenta, accountId))
+        .limit(1);
+      if (acc) accounts.set(accountId, acc);
+    }
+
+    const results: Array<{
+      id: number;
+      nombre_lead: string | null;
+      tags_prev: unknown;
+      tags_final: string[];
+      matched_tags: string[];
+      error?: string;
+    }> = [];
+
+    for (const row of rows) {
+      const acc = accounts.get(row.id_cuenta);
+      if (!acc) {
+        results.push({ id: row.id, nombre_lead: row.nombre_lead, tags_prev: row.tags_internos, tags_final: [], matched_tags: [], error: "Account not found" });
+        continue;
+      }
+      if (!row.transcript) {
+        results.push({ id: row.id, nombre_lead: row.nombre_lead, tags_prev: row.tags_internos, tags_final: [], matched_tags: [], error: "No transcript" });
+        continue;
+      }
+
+      const dynCtx: DynamicValueContext = {
+        contactId: row.ghl_contact_id,
+        bearerToken: acc.token_ghl,
+        locationId: acc.locationid,
+      };
+
+      const result = await evaluateReglas(
+        row.transcript,
+        acc.reglas_etiquetas,
+        "call",
+        acc.prompt_llamadas ?? acc.prompt_ventas ?? null,
+        acc.openai_api_key,
+        row.id_cuenta,
+        dynCtx,
+      );
+
+      let finalTags: string[];
+      if (mode === "merge") {
+        const existing = Array.isArray(row.tags_internos) ? row.tags_internos as string[] : [];
+        finalTags = [...new Set([...existing, ...result.matched_tags])];
+      } else {
+        finalTags = result.matched_tags;
+      }
+
+      await drizzleDb
+        .update(logLlamadas)
+        .set({ tags_internos: finalTags })
+        .where(eq(logLlamadas.id, row.id));
+
+      results.push({
+        id: row.id,
+        nombre_lead: row.nombre_lead,
+        tags_prev: row.tags_internos,
+        tags_final: finalTags,
+        matched_tags: result.matched_tags,
+      });
+    }
+
+    return reply.send({
+      success: true,
+      mode,
+      total: ids.length,
+      processed: results.length,
+      results,
+    });
+  }
 }

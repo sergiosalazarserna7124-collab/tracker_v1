@@ -45,6 +45,7 @@ import { objecionesDetalleRoute } from "./routes/data/objeciones-detalle.route.j
 import { metricasWebhookRoute } from "./routes/webhooks/metricas-webhook.route.js";
 import { calificacionWebhookRoute } from "./routes/webhooks/calificacion.route.js";
 import { byokBackfillRoute } from "./routes/quick-triggers/byok-backfill.route.js";
+import { updateRuleExcluyeRoute } from "./routes/quick-triggers/update-rule-excluye.route.js";
 import { cronChatWebhookRawRetentionRoute } from "./routes/cron/chat-webhook-raw-retention.route.js";
 import { cronOutboundEnrichmentRoute } from "./routes/cron/outbound-enrichment.route.js";
 import { cronObjecionesBackfillRoute } from "./routes/cron/objeciones-respuesta-backfill.route.js";
@@ -82,6 +83,7 @@ export async function buildApp() {
   await app.register(backfillMetricasReRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatBackfillRoute, { prefix: "/api/quick-triggers" });
   await app.register(byokBackfillRoute, { prefix: "/api/quick-triggers" });
+  await app.register(updateRuleExcluyeRoute, { prefix: "/api/quick-triggers" });
   await app.register(chatWebhookRoute, { prefix: "/webhooks" });
   await app.register(vozWebhookRoute, { prefix: "/webhooks" });
   await app.register(ghlCallbackRoute);
