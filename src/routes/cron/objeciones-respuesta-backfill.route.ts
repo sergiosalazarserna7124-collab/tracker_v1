@@ -56,12 +56,21 @@ export async function cronObjecionesBackfillRoute(app: FastifyInstance) {
       }
 
       try {
+        // Auto-liberación del advisory lock si el proceso muere sin correr el finally.
+        // Cloud Run puede SIGKILL el contenedor a mitad de un backfill (p.ej. durante un
+        // deploy); la conexión pg queda colgada y el lock de SESIÓN retenido hasta que TCP
+        // keepalive detecte el peer muerto (~2h por defecto). idle_session_timeout cierra la
+        // conexión inactiva y libera el lock. Debe ser > MAX_RUNTIME_MS (210s) del servicio,
+        // porque este client queda idle todo el backfill (el trabajo corre sobre pgPool).
+        await client.query("SET idle_session_timeout = '600s'");
+
         const lockResult = await client.query<{ locked: boolean }>(
           "SELECT pg_try_advisory_lock($1) AS locked",
           [lockId],
         );
 
         if (!lockResult.rows[0]?.locked) {
+          await client.query("RESET idle_session_timeout").catch(() => {});
           client.release();
           return reply.status(409).send({
             success: true,
@@ -77,12 +86,14 @@ export async function cronObjecionesBackfillRoute(app: FastifyInstance) {
           result = { error: err instanceof Error ? err.message : "Error interno" };
         } finally {
           await client.query("SELECT pg_advisory_unlock($1)", [lockId]).catch(() => {});
+          await client.query("RESET idle_session_timeout").catch(() => {});
           client.release();
         }
 
         return reply.status(200).send({ success: true, result });
       } catch (err) {
         await client.query("SELECT pg_advisory_unlock($1)", [lockId]).catch(() => {});
+        await client.query("RESET idle_session_timeout").catch(() => {});
         client.release();
         console.error(`[objeciones-backfill] Error inesperado en ${tabla}:`, err);
         return reply.status(500).send({
