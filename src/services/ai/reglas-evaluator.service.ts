@@ -48,6 +48,7 @@ export interface ReglaEtiquetaNormalized {
   condition: string;
   acciones: AccionRegla[];
   fuentes: string[];
+  excluye: string[];
   dynamicValue?: DynamicValueConfig;
 }
 
@@ -165,7 +166,14 @@ function normalizeRegla(raw: Record<string, unknown>): ReglaEtiquetaNormalized |
     };
   }
 
-  return { id, condition, acciones, fuentes, ...(dynamicValue && { dynamicValue }) };
+  let excluye: string[] = [];
+  if (Array.isArray(raw.excluye)) {
+    excluye = (raw.excluye as unknown[])
+      .filter((v): v is string => typeof v === "string" && v.trim() !== "")
+      .map((v) => v.trim());
+  }
+
+  return { id, condition, acciones, fuentes, excluye, ...(dynamicValue && { dynamicValue }) };
 }
 
 function parseAndNormalizeReglas(raw: unknown): ReglaEtiquetaNormalized[] {
@@ -248,7 +256,22 @@ export async function evaluateReglas(
   void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, usage.totalTokens ?? 0);
 
   const matchedIds = new Set(object.matched_rule_ids);
-  const matched = reglas.filter((r) => matchedIds.has(r.id));
+  let matched = reglas.filter((r) => matchedIds.has(r.id));
+
+  const suppressed = new Set<string>();
+  for (const rule of matched) {
+    for (const tag of rule.excluye) {
+      suppressed.add(tag);
+    }
+  }
+
+  if (suppressed.size > 0) {
+    matched = matched.filter((r) => {
+      const tagAction = r.acciones.find((a) => a.tipo === "asignar_etiqueta");
+      const tagValue = tagAction?.valor?.trim() ?? "";
+      return !suppressed.has(tagValue);
+    });
+  }
 
   // Resolve dynamic values for matched rules
   const dynamicResolutions = new Map<string, string>();
