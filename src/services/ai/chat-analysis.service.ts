@@ -212,7 +212,7 @@ REGLA ANTI-FALSOS POSITIVOS: Antes de marcar algo como objeción, lee el context
 - Si NO puedes explicar claramente POR QUÉ esa frase impide la venta → NO la incluyas.
 Si no hay objeciones reales, devuelve [].
 
-RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye "respuesta_vendedor" con las palabras EXACTAS que el asesor/vendedor dijo al responder esa objeción. NO parafrasees — copia VERBATIM de la conversación. Si no respondió, usa "". Máximo 300 caracteres.
+RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye "respuesta_vendedor" con las palabras EXACTAS que el asesor/vendedor dijo al responder esa objeción. NO parafrasees — copia VERBATIM de la conversación. Busca en los siguientes 2-3 mensajes del asesor después de la objeción — a veces reconoce primero y responde después. Incluye CUALQUIER intento de respuesta: argumentos, reencuadres, preguntas para manejar la objeción, o propuestas alternativas. Solo usa "" si la conversación terminó inmediatamente o el asesor ignoró la objeción completamente. Máximo 300 caracteres.
 
 CONTEXTO: Para CADA objeción, incluye "contexto" con una breve descripción (1-2 oraciones, máx 200 chars) de qué estaban hablando cuando el lead dijo la objeción. Ejemplo: "El asesor presentó el precio mensual y el lead respondió con esta objeción."`);
 
@@ -228,7 +228,7 @@ Devuelve ÚNICAMENTE este JSON (sin markdown, sin texto adicional):
   "categoria": "id_etapa_o_null",
   "tags": ["tag1", "tag2"],
   "confianza": 0.85,
-  "objeciones": [{"objecion": "texto de la objeción", "categoria": "precio"}]
+  "objeciones": [{"objecion": "texto de la objeción", "categoria": "precio", "respuesta_vendedor": "palabras exactas del asesor aquí", "contexto": "El asesor presentó el precio y el lead respondió con esta objeción"}]
 }`);
 
   return parts.join("\n\n");

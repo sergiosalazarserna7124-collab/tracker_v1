@@ -267,9 +267,10 @@ EJEMPLOS DE OBJECIONES REALES:
 ALGORITMO: Solo extrae frases del PROSPECTO que respondan a "¿Por qué NO puedes o NO quieres comprar AHORA?". Si la respuesta no es obvia y directa, NO la incluyas.
 
 RESPUESTA DEL VENDEDOR: Para CADA objeción detectada, extrae la respuesta LITERAL del vendedor/asesor/closer a esa objeción.
-- Busca las palabras EXACTAS que el vendedor dijo INMEDIATAMENTE DESPUÉS de la objeción del prospecto.
+- Busca las palabras EXACTAS que el vendedor dijo al responder esa objeción — puede ser INMEDIATAMENTE DESPUÉS o en las siguientes 2-3 intervenciones del vendedor (a veces reconoce la objeción primero y responde después).
 - NO parafrasees ni resumas — copia el texto VERBATIM tal cual aparece en la transcripción.
-- Si el vendedor no respondió directamente a la objeción, usa "" (cadena vacía).
+- Incluye CUALQUIER intento de respuesta: argumentos, reencuadres, preguntas para manejar la objeción, propuestas alternativas, o incluso un simple reconocimiento como "entiendo, déjame explicarte...".
+- Solo usa "" (cadena vacía) si la conversación terminó inmediatamente después de la objeción sin que el vendedor dijera nada más, o si el vendedor ignoró completamente la objeción y cambió de tema sin abordarla.
 - Máximo 300 caracteres de la respuesta. Si es más larga, corta al final de la oración más cercana.
 
 CONTEXTO DE LA OBJECIÓN: Para CADA objeción, incluye un breve contexto de la situación en la conversación.

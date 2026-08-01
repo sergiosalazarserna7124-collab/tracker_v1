@@ -153,7 +153,9 @@ Si no hay objeciones reales, devuelve [].
 
 RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye la respuesta LITERAL del asesor/vendedor.
 - Copia las palabras EXACTAS tal cual aparecen en la conversación — NO parafrasees ni resumas.
-- Si el asesor no respondió a esa objeción, usa "" (cadena vacía).
+- Busca en los siguientes 2-3 mensajes del asesor después de la objeción — a veces reconoce primero y responde después.
+- Incluye CUALQUIER intento de respuesta: argumentos, reencuadres, preguntas para manejar la objeción, o propuestas alternativas.
+- Solo usa "" si la conversación terminó inmediatamente o el asesor ignoró la objeción completamente.
 - Máximo 300 caracteres.
 
 CONTEXTO: Para CADA objeción, incluye "contexto" con una breve descripción (1-2 oraciones, máx 200 chars) de qué estaban hablando cuando el lead dijo la objeción.`);
@@ -319,7 +321,7 @@ REGLA ANTI-FALSOS POSITIVOS: Lee el contexto completo antes de marcar algo como 
 - Si NO puedes explicar POR QUÉ esa frase impide la venta → NO la incluyas.
 Si no hay objeciones reales, devuelve [].
 
-RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye "respuesta_vendedor" con las palabras EXACTAS que el vendedor dijo al responder esa objeción. NO parafrasees — copia VERBATIM de la transcripción. Si no respondió, usa "". Máximo 300 chars.
+RESPUESTA DEL VENDEDOR: Para CADA objeción, incluye "respuesta_vendedor" con las palabras EXACTAS que el vendedor dijo al responder esa objeción. NO parafrasees — copia VERBATIM de la transcripción. Busca en las siguientes 2-3 intervenciones del vendedor después de la objeción. Incluye CUALQUIER intento de respuesta: argumentos, reencuadres, preguntas para manejar la objeción, o propuestas alternativas. Solo usa "" si la conversación terminó inmediatamente o el vendedor ignoró la objeción completamente. Máximo 300 chars.
 
 CONTEXTO: Para CADA objeción, incluye "contexto" con una breve descripción (1-2 oraciones, máx 200 chars) de qué estaban hablando cuando el prospecto dijo la objeción.
 

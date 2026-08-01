@@ -133,7 +133,9 @@ export async function tryInlineChatClassification(
        WHERE id_evento = $3 AND ia_categoria IS NULL`,
       [
         result.categoria ?? "analizado_sin_categoria",
-        result.objeciones.length > 0 ? JSON.stringify(result.objeciones) : null,
+        result.objeciones.length > 0
+          ? JSON.stringify({ objeciones: result.objeciones, sentimiento: "neutro", senales_compra: [] })
+          : null,
         chatRow.id_evento,
       ],
     );

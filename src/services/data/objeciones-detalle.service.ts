@@ -88,6 +88,26 @@ export async function getObjecionesDetalle(
       ${dateFilterChats}
   `);
 
+  // chats_logs: legacy flat array format [{objecion, categoria, respuesta_vendedor, contexto}]
+  queryParts.push(`
+    SELECT
+      obj->>'objecion' AS texto,
+      obj->>'categoria' AS categoria,
+      COALESCE(obj->>'respuesta_vendedor', '') AS respuesta_vendedor,
+      COALESCE(obj->>'contexto', '') AS contexto,
+      COALESCE(c.asesor_asignado, 'Sin asesor') AS asesor,
+      'chat' AS fuente,
+      c.fecha_y_hora_z AS fecha,
+      c.nombre_lead
+    FROM chats_logs c,
+         jsonb_array_elements(c.ia_objeciones) AS obj
+    WHERE c.id_cuenta = $1
+      AND c.ia_objeciones IS NOT NULL
+      AND jsonb_typeof(c.ia_objeciones) = 'array'
+      AND jsonb_array_length(c.ia_objeciones) > 0
+      ${dateFilterChats}
+  `);
+
   // resumenes_diarios_agendas: objeciones_ia is [{objecion, categoria, respuesta_vendedor, contexto}]
   queryParts.push(`
     SELECT
@@ -105,6 +125,28 @@ export async function getObjecionesDetalle(
       AND a.objeciones_ia IS NOT NULL
       AND jsonb_typeof(a.objeciones_ia) = 'array'
       AND jsonb_array_length(a.objeciones_ia) > 0
+      ${dateFilterAgendas}
+  `);
+
+  // resumenes_diarios_agendas: legacy object format {objeciones: [...]}
+  queryParts.push(`
+    SELECT
+      obj->>'objecion' AS texto,
+      obj->>'categoria' AS categoria,
+      COALESCE(obj->>'respuesta_vendedor', '') AS respuesta_vendedor,
+      COALESCE(obj->>'contexto', '') AS contexto,
+      COALESCE(a.closer, 'Sin asesor') AS asesor,
+      'videollamada' AS fuente,
+      a.fecha AS fecha,
+      a.nombre_de_lead AS nombre_lead
+    FROM resumenes_diarios_agendas a,
+         jsonb_array_elements(a.objeciones_ia->'objeciones') AS obj
+    WHERE a.id_cuenta = $1
+      AND a.objeciones_ia IS NOT NULL
+      AND jsonb_typeof(a.objeciones_ia) = 'object'
+      AND a.objeciones_ia->'objeciones' IS NOT NULL
+      AND jsonb_typeof(a.objeciones_ia->'objeciones') = 'array'
+      AND jsonb_array_length(a.objeciones_ia->'objeciones') > 0
       ${dateFilterAgendas}
   `);
 

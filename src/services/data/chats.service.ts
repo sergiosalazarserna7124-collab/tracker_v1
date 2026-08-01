@@ -96,9 +96,12 @@ export function computeChatMetrica(
           counts[tag] = (counts[tag] ?? 0) + 1;
         }
       } else if (chatCampo === "ia_objeciones") {
-        const objs = Array.isArray(v)
-          ? (v as Array<{ objecion?: string; categoria?: string }>)
-          : [];
+        const raw = v as unknown;
+        const objs: Array<{ objecion?: string; categoria?: string }> = Array.isArray(raw)
+          ? raw
+          : (raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>).objeciones))
+            ? (raw as Record<string, unknown>).objeciones as Array<{ objecion?: string; categoria?: string }>
+            : [];
         for (const obj of objs) {
           const cat = obj.categoria ?? "otra";
           counts[cat] = (counts[cat] ?? 0) + 1;

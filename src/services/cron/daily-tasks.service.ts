@@ -575,7 +575,9 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
             result.tags_internos.length > 0 ? JSON.stringify(result.tags_internos) : null,
             result.categoria ?? "analizado_sin_categoria",
             chat.id_evento,
-            result.objeciones.length > 0 ? JSON.stringify(result.objeciones) : null,
+            result.objeciones.length > 0
+              ? JSON.stringify({ objeciones: result.objeciones, sentimiento: "neutro", senales_compra: [] })
+              : null,
           ],
         );
 
