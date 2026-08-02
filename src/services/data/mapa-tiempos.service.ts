@@ -76,14 +76,14 @@ async function getSingleLeadTimeline(
       SELECT MIN(l.ts) AS t_llamada
       FROM log_llamadas l
       WHERE l.id_registro = $2
-        AND l.id_cuenta = $1
+        AND l.id_cuenta = $1::int
     ),
     first_agenda AS (
       SELECT MIN(w.received_at) AS t_agenda
       FROM webhook_events_log w
       JOIN lead ld ON true
       WHERE w.fuente = 'ghl_agenda'
-        AND w.id_cuenta = $1
+        AND w.id_cuenta = $1::int
         AND (
           (ld.ghl_contact_id IS NOT NULL AND ld.ghl_contact_id != ''
            AND w.payload_raw->>'contact_id' = ld.ghl_contact_id)
@@ -176,7 +176,7 @@ async function getAsesorStats(
     first_calls AS (
       SELECT l.id_registro, MIN(l.ts) AS t_llamada
       FROM log_llamadas l
-      WHERE l.id_cuenta = $1
+      WHERE l.id_cuenta = $1::int
       GROUP BY l.id_registro
     ),
     first_agendas AS (
@@ -186,7 +186,7 @@ async function getAsesorStats(
       FROM leads ld
       JOIN webhook_events_log w
         ON w.fuente = 'ghl_agenda'
-        AND w.id_cuenta = $1
+        AND w.id_cuenta = $1::int
         AND (
           (ld.ghl_contact_id IS NOT NULL AND ld.ghl_contact_id != ''
            AND w.payload_raw->>'contact_id' = ld.ghl_contact_id)
