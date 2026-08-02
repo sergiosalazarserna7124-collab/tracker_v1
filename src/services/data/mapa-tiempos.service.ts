@@ -6,6 +6,7 @@ export interface MapaTiemposParams {
   hasta?: string;
   asesor?: string;
   lead?: string;
+  closerEmails?: string[];
 }
 
 interface LeadTimeline {
@@ -38,7 +39,8 @@ export interface MapaTiemposResult {
 export async function getMapaTiempos(
   params: MapaTiemposParams,
 ): Promise<MapaTiemposResult> {
-  const { idCuenta, desde, hasta, asesor, lead } = params;
+  const { idCuenta, desde, hasta, asesor, lead, closerEmails } = params;
+  const activeCloserEmails = closerEmails?.length ? closerEmails : undefined;
 
   const tzRow = await db.query(
     `SELECT zona_horaria_iana FROM cuentas WHERE id_cuenta = $1`,
@@ -47,17 +49,25 @@ export async function getMapaTiempos(
   const tz = (tzRow.rows[0]?.zona_horaria_iana as string) ?? "UTC";
 
   if (lead) {
-    return getSingleLeadTimeline(idCuenta, Number(lead), tz);
+    return getSingleLeadTimeline(idCuenta, Number(lead), tz, activeCloserEmails);
   }
 
-  return getAsesorStats(idCuenta, desde, hasta, asesor, tz);
+  return getAsesorStats(idCuenta, desde, hasta, asesor, tz, activeCloserEmails);
 }
 
 async function getSingleLeadTimeline(
   idCuenta: number,
   idRegistro: number,
   tz: string,
+  closerEmails?: string[],
 ): Promise<MapaTiemposResult> {
+  const values: unknown[] = [idCuenta, idRegistro];
+  let closerFilter = "";
+  if (closerEmails) {
+    closerFilter = ` AND (r.closer_mail = ANY($3) OR r.nombre_closer = ANY($3))`;
+    values.push(closerEmails);
+  }
+
   const sql = `
     WITH lead AS (
       SELECT
@@ -71,6 +81,7 @@ async function getSingleLeadTimeline(
       WHERE r.id_cuenta = $1::text
         AND r.id_registro = $2
         AND r.excluido_metricas = false
+        ${closerFilter}
     ),
     first_call AS (
       SELECT MIN(l.ts) AS t_llamada
@@ -106,7 +117,7 @@ async function getSingleLeadTimeline(
     CROSS JOIN first_agenda fa
   `;
 
-  const result = await db.query(sql, [idCuenta, idRegistro]);
+  const result = await db.query(sql, values);
   const row = result.rows[0];
 
   if (!row) {
@@ -135,6 +146,7 @@ async function getAsesorStats(
   hasta: string | undefined,
   asesor: string | undefined,
   tz: string,
+  closerEmails?: string[],
 ): Promise<MapaTiemposResult> {
   const values: unknown[] = [idCuenta];
   let paramIdx = 2;
@@ -158,6 +170,13 @@ async function getAsesorStats(
     paramIdx++;
   }
 
+  let closerEmailsFilter = "";
+  if (closerEmails) {
+    closerEmailsFilter = ` AND (r.closer_mail = ANY($${paramIdx}) OR r.nombre_closer = ANY($${paramIdx}))`;
+    values.push(closerEmails);
+    paramIdx++;
+  }
+
   const sql = `
     WITH leads AS (
       SELECT
@@ -172,6 +191,7 @@ async function getAsesorStats(
         AND r.fecha_evento IS NOT NULL
         ${dateFilter}
         ${asesorFilter}
+        ${closerEmailsFilter}
     ),
     first_calls AS (
       SELECT l.id_registro, MIN(l.ts) AS t_llamada
@@ -227,7 +247,8 @@ async function getAsesorStats(
        AND r.excluido_metricas = false
        AND r.fecha_evento IS NOT NULL
        ${dateFilter}
-       ${asesorFilter}`,
+       ${asesorFilter}
+       ${closerEmailsFilter}`,
     values,
   );
 

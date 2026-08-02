@@ -20,6 +20,7 @@ export async function mapaTiemposRoute(app: FastifyInstance) {
             hasta: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
             asesor: { type: "string" },
             lead: { type: "string", pattern: "^\\d+$" },
+            closerEmails: { type: "array", items: { type: "string" } },
           },
         },
       },

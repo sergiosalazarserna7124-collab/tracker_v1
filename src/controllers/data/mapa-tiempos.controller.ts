@@ -7,13 +7,14 @@ export interface MapaTiemposQuerystring {
   hasta?: string;
   asesor?: string;
   lead?: string;
+  closerEmails?: string[];
 }
 
 export async function handleGetMapaTiempos(
   request: FastifyRequest<{ Querystring: MapaTiemposQuerystring }>,
   reply: FastifyReply,
 ): Promise<void> {
-  const { id_cuenta, desde, hasta, asesor, lead } = request.query;
+  const { id_cuenta, desde, hasta, asesor, lead, closerEmails } = request.query;
 
   if (!id_cuenta || isNaN(Number(id_cuenta))) {
     return reply.status(400).send({ error: "id_cuenta es requerido y debe ser un número" });
@@ -30,6 +31,7 @@ export async function handleGetMapaTiempos(
     hasta,
     asesor,
     lead,
+    closerEmails,
   });
 
   return reply.send({
