@@ -42,6 +42,7 @@ import { cronCoachDrainerRoute } from "./routes/cron/coach-drainer.route.js";
 import { etiquetasDescarteRoute } from "./routes/data/etiquetas-descarte.route.js";
 import { descartarLeadRoute } from "./routes/data/descartar-lead.route.js";
 import { objecionesDetalleRoute } from "./routes/data/objeciones-detalle.route.js";
+import { mapaTiemposRoute } from "./routes/data/mapa-tiempos.route.js";
 import { metricasWebhookRoute } from "./routes/webhooks/metricas-webhook.route.js";
 import { calificacionWebhookRoute } from "./routes/webhooks/calificacion.route.js";
 import { byokBackfillRoute } from "./routes/quick-triggers/byok-backfill.route.js";
@@ -106,6 +107,7 @@ export async function buildApp() {
   await app.register(etiquetasDescarteRoute, { prefix: "/api" });
   await app.register(descartarLeadRoute, { prefix: "/api" });
   await app.register(objecionesDetalleRoute, { prefix: "/api/data" });
+  await app.register(mapaTiemposRoute, { prefix: "/api/data" });
   await app.register(metricasWebhookRoute, { prefix: "/webhooks" });
   await app.register(calificacionWebhookRoute, { prefix: "/webhooks" });
 
