@@ -53,7 +53,7 @@ export async function reprocessPendingChatWebhooks(): Promise<ReprocessResult> {
 
     for (const row of rows) {
       try {
-        await processChatWebhook(row.payload, row.location_id);
+        await processChatWebhook(row.payload, row.location_id, { skipSaveRaw: true });
 
         await db.query(
           `UPDATE chat_webhook_raw
@@ -73,7 +73,9 @@ export async function reprocessPendingChatWebhooks(): Promise<ReprocessResult> {
            SET skip_reason = 'reprocess_error'
            WHERE id = $1`,
           [row.id],
-        ).catch(() => {});
+        ).catch((updateErr) => {
+          console.error(`[ReprocessPending] UPDATE reprocess_error falló id=${row.id}:`, updateErr);
+        });
       }
     }
 

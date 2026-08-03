@@ -251,9 +251,14 @@ async function saveRawWebhook(
   }
 }
 
+interface ProcessChatOpts {
+  skipSaveRaw?: boolean;
+}
+
 export async function processChatWebhook(
   body: ChatWebhookBody,
   locationId: string,
+  opts?: ProcessChatOpts,
 ): Promise<ServiceResult> {
   // ── Logging diagnóstico completo ─────────────────────────────────────────
   console.log("[Chat] ── Webhook recibido ──────────────────────────────────");
@@ -267,10 +272,14 @@ export async function processChatWebhook(
   console.log("[Chat] conversationId    :", body.conversationId ?? "(undefined)");
   console.log("[Chat] contactId         :", body.contactId ?? "(undefined)");
 
+  const saveRaw = opts?.skipSaveRaw
+    ? () => {}
+    : (processed: boolean, skipReason: string | null) => void saveRawWebhook(body, locationId, processed, skipReason);
+
   // ── 0. Evento UNINSTALL — marcar cuenta como desconectada ────────────────
   if (body.type === "UNINSTALL") {
     console.log(`[Chat] UNINSTALL recibido para locationId="${locationId}" — marcando cuenta como desconectada`);
-    void saveRawWebhook(body, locationId, false, "app_uninstalled");
+    saveRaw(false, "app_uninstalled");
     if (locationId) {
       await drizzleDb
         .update(cuentas)
@@ -290,7 +299,7 @@ export async function processChatWebhook(
 
   if (!contentType.includes("text/plain")) {
     console.log(`[Chat] Ignorado — contentType="${contentType}" (no es text/plain)`);
-    void saveRawWebhook(body, locationId, false, `contentType:${contentType || "vacío"}`);
+    saveRaw(false, `contentType:${contentType || "vacío"}`);
     return { success: true, data: { skipped: true, reason: "contentType" } };
   }
   // Mensajes outbound tienen status="sent", inbound="delivered"
@@ -299,7 +308,7 @@ export async function processChatWebhook(
     ((body as any).messageType ?? (body as any).message?.messageType) === "CALL";
   if (isCallEvent) {
     console.log(`[Chat] Ignorado — evento de llamada (CALL/completed)`);
-    void saveRawWebhook(body, locationId, false, `call_event`);
+    saveRaw(false, "call_event");
     return { success: true, data: { skipped: true, reason: "call_event" } };
   }
   // Aceptar: delivered (inbound), sent (outbound), y vacío/undefined si hay direction
@@ -307,12 +316,12 @@ export async function processChatWebhook(
     (!status && (body.direction === "inbound" || body.direction === "outbound"));
   if (!validStatus) {
     console.log(`[Chat] Ignorado — status="${status}" (no es delivered/sent)`);
-    void saveRawWebhook(body, locationId, false, `status:${status || "vacío"}`);
+    saveRaw(false, `status:${status || "vacío"}`);
     return { success: true, data: { skipped: true, reason: "status" } };
   }
   if (hasAttachments) {
     console.log("[Chat] Ignorado — tiene attachments");
-    void saveRawWebhook(body, locationId, false, "has_attachments");
+    saveRaw(false, "has_attachments");
     return { success: true, data: { skipped: true, reason: "attachments" } };
   }
 
@@ -320,7 +329,7 @@ export async function processChatWebhook(
   const eventType = body.type;
   if (eventType && !PROCESSABLE_EVENT_TYPES.has(eventType)) {
     console.log(`[Chat] Ignorado — tipo de evento="${eventType}" (no es mensaje entrante/saliente)`);
-    void saveRawWebhook(body, locationId, false, `eventType:${eventType}`);
+    saveRaw(false, `eventType:${eventType}`);
     return { success: true, data: { skipped: true, reason: "eventType" } };
   }
 
@@ -381,7 +390,7 @@ export async function processChatWebhook(
   // de clientes que ya no pagan. Usar skip_reason="account_cancelled" en raw.
   if (account.estado_cuenta === "cancelado") {
     console.info(`[Chat] Cuenta cancelada id=${idCuenta} (${account.nombre_cuenta ?? locationId}) — webhook descartado silenciosamente`);
-    void saveRawWebhook(body, locationId, false, "account_cancelled");
+    saveRaw(false, "account_cancelled");
     return { success: true, data: { skipped: true, reason: "account_cancelled", idCuenta } };
   }
 
@@ -594,7 +603,7 @@ export async function processChatWebhook(
   }
 
   // Guardar raw para diagnóstico (processed = true)
-  void saveRawWebhook(body, locationId, true, null);
+  saveRaw(true, null);
 
   return {
     success: true,
