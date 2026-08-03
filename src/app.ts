@@ -50,6 +50,7 @@ import { updateRuleExcluyeRoute } from "./routes/quick-triggers/update-rule-excl
 import { cronChatWebhookRawRetentionRoute } from "./routes/cron/chat-webhook-raw-retention.route.js";
 import { cronOutboundEnrichmentRoute } from "./routes/cron/outbound-enrichment.route.js";
 import { cronObjecionesBackfillRoute } from "./routes/cron/objeciones-respuesta-backfill.route.js";
+import { cronReprocessPendingChatWebhooksRoute } from "./routes/cron/reprocess-pending-chat-webhooks.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -104,6 +105,7 @@ export async function buildApp() {
   await app.register(cronChatWebhookRawRetentionRoute, { prefix: "/cron" });
   await app.register(cronOutboundEnrichmentRoute, { prefix: "/cron" });
   await app.register(cronObjecionesBackfillRoute, { prefix: "/cron" });
+  await app.register(cronReprocessPendingChatWebhooksRoute, { prefix: "/cron" });
   await app.register(etiquetasDescarteRoute, { prefix: "/api" });
   await app.register(descartarLeadRoute, { prefix: "/api" });
   await app.register(objecionesDetalleRoute, { prefix: "/api/data" });
