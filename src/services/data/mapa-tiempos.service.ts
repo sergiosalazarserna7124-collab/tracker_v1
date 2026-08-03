@@ -120,7 +120,7 @@ async function getSingleLeadTimeline(
       FROM resumenes_diarios_agendas a
       JOIN lead ld ON true
       WHERE a.id_cuenta = $1::int
-        AND a.categoria NOT IN ('PDTE', 'no_show', 'cancelada', 'CANCELADA')
+        AND LOWER(a.categoria) NOT IN ('pdte', 'no_show', 'cancelada')
         AND a.fecha_reunion IS NOT NULL
         AND (
           (ld.ghl_contact_id IS NOT NULL AND ld.ghl_contact_id != ''
@@ -256,7 +256,7 @@ async function getAsesorStats(
       FROM leads ld
       JOIN resumenes_diarios_agendas a
         ON a.id_cuenta = $1::int
-        AND a.categoria NOT IN ('PDTE', 'no_show', 'cancelada', 'CANCELADA')
+        AND LOWER(a.categoria) NOT IN ('pdte', 'no_show', 'cancelada')
         AND a.fecha_reunion IS NOT NULL
         AND (
           (ld.ghl_contact_id IS NOT NULL AND ld.ghl_contact_id != ''
@@ -339,7 +339,7 @@ async function getAsesorStats(
       FROM leads ld
       JOIN resumenes_diarios_agendas a
         ON a.id_cuenta = $1::int
-        AND a.categoria NOT IN ('PDTE', 'no_show', 'cancelada', 'CANCELADA')
+        AND LOWER(a.categoria) NOT IN ('pdte', 'no_show', 'cancelada')
         AND a.fecha_reunion IS NOT NULL
         AND (
           (ld.ghl_contact_id IS NOT NULL AND ld.ghl_contact_id != ''
