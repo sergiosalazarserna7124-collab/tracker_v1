@@ -15,23 +15,24 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
 }
 
 export interface CallSummary {
+  interes_lead: string;
   ubicacion: string;
-  objetivo: string;
   presupuesto: string;
   quien_decide: string;
+  tiempo_compra: string;
   desenlace: string;
 }
 
 const summarySchema = jsonSchema<CallSummary>({
   type: "object",
   properties: {
+    interes_lead: {
+      type: "string",
+      description: "Qué busca o le interesa al prospecto: tipo de propiedad, zona, características. Si no se menciona, responder 'No mencionado'.",
+    },
     ubicacion: {
       type: "string",
-      description: "Dónde vive o se ubica el prospecto. Si no se menciona, responder 'No mencionado'.",
-    },
-    objetivo: {
-      type: "string",
-      description: "Para qué quiere la propiedad o producto (inversión, vivienda, renta, etc.). Si no se menciona, responder 'No mencionado'.",
+      description: "Dónde vive o se ubica actualmente el prospecto. Si no se menciona, responder 'No mencionado'.",
     },
     presupuesto: {
       type: "string",
@@ -41,24 +42,29 @@ const summarySchema = jsonSchema<CallSummary>({
       type: "string",
       description: "Con quién toma la decisión de compra (solo, pareja, socio, familia, etc.). Si no se menciona, responder 'No mencionado'.",
     },
+    tiempo_compra: {
+      type: "string",
+      description: "En cuánto tiempo planea comprar o tomar la decisión (inmediato, 1 mes, 3 meses, etc.). Si no se menciona, responder 'No mencionado'.",
+    },
     desenlace: {
       type: "string",
       description: "En qué terminó la llamada: se agendó cita, pidió más info, no le interesó, va a pensarlo, etc.",
     },
   },
-  required: ["ubicacion", "objetivo", "presupuesto", "quien_decide", "desenlace"],
+  required: ["interes_lead", "ubicacion", "presupuesto", "quien_decide", "tiempo_compra", "desenlace"],
   additionalProperties: false,
 });
 
 const SYSTEM_PROMPT = `Eres un sistema de extracción de información de llamadas de ventas inmobiliarias.
 
-Analiza la transcripción y extrae estos 5 campos:
+Analiza la transcripción y extrae estos 6 campos:
 
-1. **ubicacion**: ¿Dónde vive o se ubica el prospecto? Ciudad, estado, colonia, país.
-2. **objetivo**: ¿Para qué quiere la propiedad? Inversión, vivienda propia, renta, segunda casa, etc.
+1. **interes_lead**: ¿Qué le interesa al prospecto? Qué tipo de propiedad busca, en qué zona, qué características pide.
+2. **ubicacion**: ¿Dónde vive actualmente el prospecto? Ciudad, estado, colonia, país.
 3. **presupuesto**: ¿Cuánto puede o quiere invertir? Rango, monto específico, crédito.
-4. **quien_decide**: ¿Con quién toma la decisión? Solo, con su pareja, socio, familia, etc.
-5. **desenlace**: ¿En qué terminó la llamada? Se agendó cita, pidió más información, no le interesó, quedó en pensarlo, colgó, etc.
+4. **quien_decide**: ¿Con quién toma la decisión de compra? Solo, con su pareja, socio, familia, etc.
+5. **tiempo_compra**: ¿En cuánto tiempo planea comprar o tomar la decisión? Inmediato, 1 mes, 3 meses, sin prisa, etc.
+6. **desenlace**: ¿En qué terminó la llamada? Se agendó cita, pidió más información, no le interesó, quedó en pensarlo, colgó, etc.
 
 REGLAS:
 - Sé conciso: cada campo debe ser 1-2 oraciones máximo.

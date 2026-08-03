@@ -592,23 +592,25 @@ Retorna SOLO la transcripción formateada, sin explicaciones adicionales.`;
 // ─── Resumen estructurado de llamada (AUT-1945) ─────────────────────────────
 
 export interface ResumenLlamada {
+  interes_lead: string;
   ubicacion: string;
-  objetivo: string;
   presupuesto: string;
-  decisor: string;
+  quien_decide: string;
+  tiempo_compra: string;
   desenlace: string;
 }
 
 const RESUMEN_PROMPT = `Eres un asistente que extrae información clave de transcripciones de llamadas de ventas inmobiliarias.
 
-A partir de la transcripción, extrae estos 5 campos en español. Cada campo debe ser una oración corta y directa (máximo 80 caracteres). Si la información NO se menciona en la transcripción, escribe exactamente "No mencionado".
+A partir de la transcripción, extrae estos 6 campos en español. Cada campo debe ser una oración corta y directa (máximo 80 caracteres). Si la información NO se menciona en la transcripción, escribe exactamente "No mencionado".
 
 Campos:
-1. ubicacion — ¿Dónde vive actualmente el lead? Ciudad, estado o zona.
-2. objetivo — ¿Para qué quiere la propiedad? (vivir, invertir, rentar, etc.)
+1. interes_lead — ¿Qué le interesa al lead? Tipo de propiedad, zona, características.
+2. ubicacion — ¿Dónde vive actualmente el lead? Ciudad, estado o zona.
 3. presupuesto — ¿Cuál es su presupuesto o rango de precio mencionado?
-4. decisor — ¿Con quién toma la decisión de compra? (solo, pareja, socio, familia, etc.)
-5. desenlace — ¿En qué terminó la llamada? (se agendó cita, pidió más info, no le interesó, etc.)
+4. quien_decide — ¿Con quién toma la decisión de compra? (solo, pareja, socio, familia, etc.)
+5. tiempo_compra — ¿En cuánto tiempo planea comprar? (inmediato, 1 mes, 3 meses, etc.)
+6. desenlace — ¿En qué terminó la llamada? (se agendó cita, pidió más info, no le interesó, etc.)
 
 REGLAS ESTRICTAS:
 - Solo extrae lo que EXPLÍCITAMENTE se dice en la transcripción.
@@ -618,13 +620,14 @@ REGLAS ESTRICTAS:
 const resumenSchema = jsonSchema<ResumenLlamada>({
   type: "object",
   properties: {
+    interes_lead: { type: "string", description: "Qué le interesa al lead: tipo de propiedad, zona, características" },
     ubicacion: { type: "string", description: "Dónde vive el lead actualmente" },
-    objetivo: { type: "string", description: "Para qué quiere la propiedad" },
     presupuesto: { type: "string", description: "Presupuesto o rango de precio" },
-    decisor: { type: "string", description: "Con quién toma la decisión de compra" },
+    quien_decide: { type: "string", description: "Con quién toma la decisión de compra" },
+    tiempo_compra: { type: "string", description: "En cuánto tiempo planea comprar" },
     desenlace: { type: "string", description: "En qué terminó la llamada" },
   },
-  required: ["ubicacion", "objetivo", "presupuesto", "decisor", "desenlace"],
+  required: ["interes_lead", "ubicacion", "presupuesto", "quien_decide", "tiempo_compra", "desenlace"],
   additionalProperties: false,
 });
 
