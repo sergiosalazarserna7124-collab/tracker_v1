@@ -16,7 +16,6 @@ import type {
 import { fetchWithTimeout } from "../../utils/fetch.utils.js";
 import { processFathomCall } from "../webhooks/fathom.service.js";
 import { analyzeCall } from "../ai/call-analysis.service.js";
-import { extractCitaTarea } from "../ai/cita-tarea-extraction.service.js";
 import { enrichWithGemini, resolveGeminiKey, estimateDurationFromTranscript } from "../ai/gemini-enrichment.service.js";
 import { collectFunnelStages, applyReglasMetricActions } from "../ai/reglas-actions.service.js";
 
@@ -729,7 +728,7 @@ export async function relinkRecordingToAgenda(
       ? (account.canales_activos as string[])
       : null;
 
-    const [aiResult, citaTareaResult, geminiResult, duracionSegundos] = await Promise.all([
+    const [aiResult, geminiResult, duracionSegundos] = await Promise.all([
       analyzeCall(
         formattedTranscript,
         account.prompt_ventas,
@@ -740,15 +739,6 @@ export async function relinkRecordingToAgenda(
         idCuenta,
         canalesActivos,
       ),
-      formattedTranscript.length >= 100
-        ? extractCitaTarea(
-            formattedTranscript,
-            new Date(),
-            "America/Mexico_City",
-            account.openai_api_key,
-            idCuenta,
-          ).catch(() => null)
-        : Promise.resolve(null),
       enrichWithGemini(
         formattedTranscript,
         "videollamada",
