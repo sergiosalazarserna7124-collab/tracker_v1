@@ -51,6 +51,7 @@ import { cronChatWebhookRawRetentionRoute } from "./routes/cron/chat-webhook-raw
 import { cronOutboundEnrichmentRoute } from "./routes/cron/outbound-enrichment.route.js";
 import { cronObjecionesBackfillRoute } from "./routes/cron/objeciones-respuesta-backfill.route.js";
 import { cronReprocessPendingChatWebhooksRoute } from "./routes/cron/reprocess-pending-chat-webhooks.route.js";
+import { cronChatBackfillAutoRoute } from "./routes/cron/chat-backfill-auto.route.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -106,6 +107,7 @@ export async function buildApp() {
   await app.register(cronOutboundEnrichmentRoute, { prefix: "/cron" });
   await app.register(cronObjecionesBackfillRoute, { prefix: "/cron" });
   await app.register(cronReprocessPendingChatWebhooksRoute, { prefix: "/cron" });
+  await app.register(cronChatBackfillAutoRoute, { prefix: "/cron" });
   await app.register(etiquetasDescarteRoute, { prefix: "/api" });
   await app.register(descartarLeadRoute, { prefix: "/api" });
   await app.register(objecionesDetalleRoute, { prefix: "/api/data" });
