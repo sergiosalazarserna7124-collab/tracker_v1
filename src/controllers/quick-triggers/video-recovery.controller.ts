@@ -2,10 +2,14 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type {
   VideoRecoveryExecuteBodyType,
   VideoRecoveryPreviewBodyType,
+  VideoRecoveryRelinkBodyType,
+  VideoRecoveryAgendaSearchBodyType,
 } from "../../schemas/quick-triggers/video-recovery.schema.js";
 import {
   executeVideoRecovery,
   previewVideoRecovery,
+  relinkRecordingToAgenda,
+  searchAgendasForRelink,
 } from "../../services/quick-triggers/video-recovery.service.js";
 
 export async function handleVideoRecoveryPreview(
@@ -43,6 +47,48 @@ export async function handleVideoRecoveryExecute(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed executing video recovery";
+    return reply.status(422).send({
+      success: false,
+      message,
+    });
+  }
+}
+
+export async function handleVideoRecoveryRelink(
+  request: FastifyRequest<{ Body: VideoRecoveryRelinkBodyType }>,
+  reply: FastifyReply,
+): Promise<void> {
+  try {
+    const idCuenta = request.apiKeyAuth!.idCuenta;
+    const result = await relinkRecordingToAgenda(idCuenta, request.body);
+    return reply.status(200).send({
+      success: true,
+      message: "Relink completed",
+      data: result,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed relinking recording to agenda";
+    return reply.status(422).send({
+      success: false,
+      message,
+    });
+  }
+}
+
+export async function handleVideoRecoveryAgendaSearch(
+  request: FastifyRequest<{ Body: VideoRecoveryAgendaSearchBodyType }>,
+  reply: FastifyReply,
+): Promise<void> {
+  try {
+    const idCuenta = request.apiKeyAuth!.idCuenta;
+    const result = await searchAgendasForRelink(idCuenta, request.body);
+    return reply.status(200).send({
+      success: true,
+      message: "Agenda search completed",
+      data: result,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed searching agendas";
     return reply.status(422).send({
       success: false,
       message,

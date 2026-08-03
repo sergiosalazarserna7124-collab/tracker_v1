@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import {
   agendas,
+  cuentas,
   eventosHuerfanos,
   usuariosDashboard,
 } from "../../db/schema.js";
@@ -9,9 +10,15 @@ import type {
   MeetingSnapshotType,
   VideoRecoveryExecuteBodyType,
   VideoRecoveryPreviewBodyType,
+  VideoRecoveryRelinkBodyType,
+  VideoRecoveryAgendaSearchBodyType,
 } from "../../schemas/quick-triggers/video-recovery.schema.js";
 import { fetchWithTimeout } from "../../utils/fetch.utils.js";
 import { processFathomCall } from "../webhooks/fathom.service.js";
+import { analyzeCall } from "../ai/call-analysis.service.js";
+import { extractCitaTarea } from "../ai/cita-tarea-extraction.service.js";
+import { enrichWithGemini, resolveGeminiKey, estimateDurationFromTranscript } from "../ai/gemini-enrichment.service.js";
+import { collectFunnelStages, applyReglasMetricActions } from "../ai/reglas-actions.service.js";
 
 const FATHOM_BASE_URL = "https://api.fathom.ai/external/v1";
 const PREVIEW_MAX_LIMIT = 200;
@@ -625,5 +632,288 @@ export async function executeVideoRecovery(
     skipped: results.filter((r) => r.status === "skipped").length,
     errors: results.filter((r) => r.status === "error").length,
     items: results,
+  };
+}
+
+// ─── Relink: vincular manualmente una grabación Fathom a un registro de agenda ─
+
+interface RelinkResult {
+  id_registro_agenda: number;
+  recording_id: number;
+  status: "processed" | "error";
+  estado_anterior: string | null;
+  estado_final: string | null;
+  motivo: string;
+}
+
+function formatTranscriptItems(
+  items: Array<{ speaker?: Record<string, unknown>; text: string }>,
+): string {
+  return items
+    .map((t) => {
+      const name =
+        (t.speaker as { display_name?: string } | undefined)?.display_name ?? "Unknown";
+      return `${name}: ${t.text}`;
+    })
+    .join("\n");
+}
+
+export async function relinkRecordingToAgenda(
+  idCuenta: number,
+  body: VideoRecoveryRelinkBodyType,
+): Promise<RelinkResult> {
+  const { fathomKey } = await resolveFathomKey(idCuenta, body.id_evento);
+  if (!fathomKey) {
+    throw new Error("Selected user has no active Fathom API key or does not belong to this tenant.");
+  }
+
+  const [targetAgenda] = await drizzleDb
+    .select({
+      id_registro_agenda: agendas.id_registro_agenda,
+      categoria: agendas.categoria,
+      email_lead: agendas.email_lead,
+      ghl_contact_id: agendas.ghl_contact_id,
+    })
+    .from(agendas)
+    .where(
+      and(
+        eq(agendas.id_cuenta, idCuenta),
+        eq(agendas.id_registro_agenda, body.id_registro_agenda),
+      ),
+    )
+    .limit(1);
+
+  if (!targetAgenda) {
+    throw new Error(`Agenda record ${body.id_registro_agenda} not found for account ${idCuenta}.`);
+  }
+
+  const estadoAnterior = targetAgenda.categoria;
+
+  try {
+    const transcript = await callFathomTranscript(fathomKey, body.recording_id);
+    const formattedTranscript = formatTranscriptItems(
+      transcript.map((t) => ({ speaker: t.speaker as Record<string, unknown>, text: t.text })),
+    );
+
+    if (!formattedTranscript) {
+      return {
+        id_registro_agenda: body.id_registro_agenda,
+        recording_id: body.recording_id,
+        status: "error",
+        estado_anterior: estadoAnterior,
+        estado_final: estadoAnterior,
+        motivo: "La grabación no tiene transcripción disponible en Fathom.",
+      };
+    }
+
+    const [account] = await drizzleDb
+      .select({
+        prompt_ventas: cuentas.prompt_ventas,
+        prompt_videollamadas: cuentas.prompt_videollamadas,
+        openai_api_key: cuentas.openai_api_key,
+        embudo_personalizado: cuentas.embudo_personalizado,
+        reglas_etiquetas: cuentas.reglas_etiquetas,
+        canales_activos: cuentas.canales_activos,
+        gemini_api_key: cuentas.gemini_api_key,
+        gemini_premium_status: cuentas.gemini_premium_status,
+      })
+      .from(cuentas)
+      .where(eq(cuentas.id_cuenta, idCuenta))
+      .limit(1);
+
+    if (!account) {
+      throw new Error(`Account ${idCuenta} not found.`);
+    }
+
+    const canalesActivos = Array.isArray(account.canales_activos)
+      ? (account.canales_activos as string[])
+      : null;
+
+    const [aiResult, citaTareaResult, geminiResult, duracionSegundos] = await Promise.all([
+      analyzeCall(
+        formattedTranscript,
+        account.prompt_ventas,
+        account.prompt_videollamadas,
+        account.openai_api_key,
+        account.embudo_personalizado,
+        account.reglas_etiquetas,
+        idCuenta,
+        canalesActivos,
+      ),
+      formattedTranscript.length >= 100
+        ? extractCitaTarea(
+            formattedTranscript,
+            new Date(),
+            "America/Mexico_City",
+            account.openai_api_key,
+            idCuenta,
+          ).catch(() => null)
+        : Promise.resolve(null),
+      enrichWithGemini(
+        formattedTranscript,
+        "videollamada",
+        idCuenta,
+        resolveGeminiKey(account),
+      ).catch(() => null),
+      Promise.resolve(estimateDurationFromTranscript(transcript)),
+    ]);
+
+    const classifier = aiResult.classifier;
+    const analysisText = aiResult.analysisText;
+    const objections = aiResult.objections;
+    const reglasResult = aiResult.reglasResult;
+    const tagsInternos = reglasResult.matched_tags;
+    const funnelStageFromReglas = collectFunnelStages(reglasResult.matched_rules);
+
+    if (reglasResult.matched_rules.length > 0) {
+      await applyReglasMetricActions(reglasResult.matched_rules, idCuenta, "[Relink]", {
+        eventTs: new Date(),
+        eventKey: `fathom:${body.recording_id}`,
+      });
+    }
+
+    const snapshot = body.meeting_snapshot;
+    const shareUrl = snapshot.share_url ?? snapshot.url ?? null;
+    const meetingDate = snapshot.scheduled_start_time
+      ? new Date(snapshot.scheduled_start_time)
+      : snapshot.recording_start_time
+        ? new Date(snapshot.recording_start_time)
+        : null;
+
+    const nuevaCategoria = classifier
+      ? (funnelStageFromReglas ?? classifier.categoria)
+      : null;
+    const categoriaChanged = nuevaCategoria !== null && nuevaCategoria !== estadoAnterior;
+
+    await drizzleDb
+      .update(agendas)
+      .set({
+        link_llamada: shareUrl,
+        ...(meetingDate && !Number.isNaN(meetingDate.getTime()) ? { fechaReunion: meetingDate } : {}),
+        fathom_recording_id: String(body.recording_id),
+        fathom_share_url: shareUrl,
+        fathom_processed_at: new Date(),
+        fathom_ingestion_source: "manual_relink",
+        ...(categoriaChanged && {
+          fathom_reingest_at: new Date(),
+          categoria_previa: estadoAnterior,
+        }),
+        ...(classifier && {
+          categoria: nuevaCategoria,
+          cash_collected: classifier.cash_collected,
+          facturacion: classifier.facturacion,
+        }),
+        ...(analysisText && { resumen_ia: analysisText }),
+        ...(objections && { objeciones_ia: objections }),
+        transcripcion_fathom: formattedTranscript,
+        tags_internos: tagsInternos,
+        ...(geminiResult && { gemini_enriquecimiento: geminiResult }),
+        ...(duracionSegundos != null && { duracion_segundos: duracionSegundos }),
+      })
+      .where(eq(agendas.id_registro_agenda, body.id_registro_agenda));
+
+    console.info(
+      `[Relink] Updated agenda ${body.id_registro_agenda} with Fathom recording ${body.recording_id} for id_cuenta=${idCuenta}, categoria=${nuevaCategoria ?? "N/A"}`,
+    );
+
+    const [finalRow] = await drizzleDb
+      .select({ categoria: agendas.categoria })
+      .from(agendas)
+      .where(eq(agendas.id_registro_agenda, body.id_registro_agenda))
+      .limit(1);
+
+    return {
+      id_registro_agenda: body.id_registro_agenda,
+      recording_id: body.recording_id,
+      status: "processed",
+      estado_anterior: estadoAnterior,
+      estado_final: finalRow?.categoria ?? null,
+      motivo: "Grabación vinculada y re-procesada exitosamente.",
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown relink error";
+    console.error(`[Relink] Error for agenda=${body.id_registro_agenda}, recording=${body.recording_id}:`, err);
+    return {
+      id_registro_agenda: body.id_registro_agenda,
+      recording_id: body.recording_id,
+      status: "error",
+      estado_anterior: estadoAnterior,
+      estado_final: estadoAnterior,
+      motivo: message,
+    };
+  }
+}
+
+// ─── Agenda Search: buscar registros de agenda candidatos para relink ──────────
+
+interface AgendaSearchResult {
+  id_registro_agenda: number;
+  nombre_de_lead: string | null;
+  email_lead: string | null;
+  fecha: string | null;
+  fecha_reunion: string | null;
+  categoria: string | null;
+  closer: string | null;
+  fathom_recording_id: string | null;
+}
+
+export async function searchAgendasForRelink(
+  idCuenta: number,
+  body: VideoRecoveryAgendaSearchBodyType,
+): Promise<{ items: AgendaSearchResult[] }> {
+  const limit = Math.min(body.limit ?? 30, 100);
+
+  const conditions = [eq(agendas.id_cuenta, idCuenta)];
+
+  if (body.q) {
+    const searchTerm = `%${body.q}%`;
+    conditions.push(
+      or(
+        sql`${agendas.nombre_de_lead} ILIKE ${searchTerm}`,
+        sql`${agendas.email_lead} ILIKE ${searchTerm}`,
+      )!,
+    );
+  }
+
+  if (body.fecha_from) {
+    const from = new Date(body.fecha_from);
+    if (!Number.isNaN(from.getTime())) {
+      conditions.push(sql`${agendas.fecha} >= ${from.toISOString()}`);
+    }
+  }
+
+  if (body.fecha_to) {
+    const to = new Date(body.fecha_to);
+    if (!Number.isNaN(to.getTime())) {
+      conditions.push(sql`${agendas.fecha} <= ${to.toISOString()}`);
+    }
+  }
+
+  if (body.categoria) {
+    conditions.push(eq(agendas.categoria, body.categoria));
+  }
+
+  const rows = await drizzleDb
+    .select({
+      id_registro_agenda: agendas.id_registro_agenda,
+      nombre_de_lead: agendas.nombre_de_lead,
+      email_lead: agendas.email_lead,
+      fecha: agendas.fecha,
+      fecha_reunion: agendas.fechaReunion,
+      categoria: agendas.categoria,
+      closer: agendas.closer,
+      fathom_recording_id: agendas.fathom_recording_id,
+    })
+    .from(agendas)
+    .where(and(...conditions))
+    .orderBy(desc(agendas.fecha))
+    .limit(limit);
+
+  return {
+    items: rows.map((r) => ({
+      ...r,
+      fecha: r.fecha?.toISOString() ?? null,
+      fecha_reunion: r.fecha_reunion?.toISOString() ?? null,
+    })),
   };
 }

@@ -81,3 +81,22 @@ export const VideoRecoveryExecuteBody = Type.Object({
 export type VideoRecoveryExecuteBodyType = Static<typeof VideoRecoveryExecuteBody>;
 
 export type MeetingSnapshotType = Static<typeof MeetingSnapshot>;
+
+export const VideoRecoveryRelinkBody = Type.Object({
+  id_evento: Type.String({ minLength: 1 }),
+  recording_id: Type.Number(),
+  id_registro_agenda: Type.Number(),
+  meeting_snapshot: MeetingSnapshot,
+});
+
+export type VideoRecoveryRelinkBodyType = Static<typeof VideoRecoveryRelinkBody>;
+
+export const VideoRecoveryAgendaSearchBody = Type.Object({
+  q: Type.Optional(Type.String()),
+  fecha_from: Type.Optional(Type.String()),
+  fecha_to: Type.Optional(Type.String()),
+  categoria: Type.Optional(Type.String()),
+  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+});
+
+export type VideoRecoveryAgendaSearchBodyType = Static<typeof VideoRecoveryAgendaSearchBody>;

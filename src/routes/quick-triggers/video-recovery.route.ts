@@ -3,12 +3,18 @@ import { apiKeyAuthHook } from "../../hooks/api-key-auth.hook.js";
 import {
   VideoRecoveryExecuteBody,
   VideoRecoveryPreviewBody,
+  VideoRecoveryRelinkBody,
+  VideoRecoveryAgendaSearchBody,
   type VideoRecoveryExecuteBodyType,
   type VideoRecoveryPreviewBodyType,
+  type VideoRecoveryRelinkBodyType,
+  type VideoRecoveryAgendaSearchBodyType,
 } from "../../schemas/quick-triggers/video-recovery.schema.js";
 import {
   handleVideoRecoveryExecute,
   handleVideoRecoveryPreview,
+  handleVideoRecoveryRelink,
+  handleVideoRecoveryAgendaSearch,
 } from "../../controllers/quick-triggers/video-recovery.controller.js";
 
 export async function videoRecoveryRoute(app: FastifyInstance) {
@@ -32,5 +38,27 @@ export async function videoRecoveryRoute(app: FastifyInstance) {
       },
     },
     handleVideoRecoveryExecute,
+  );
+
+  app.post<{ Body: VideoRecoveryRelinkBodyType }>(
+    "/video-recovery/relink",
+    {
+      preHandler: [apiKeyAuthHook],
+      schema: {
+        body: VideoRecoveryRelinkBody,
+      },
+    },
+    handleVideoRecoveryRelink,
+  );
+
+  app.post<{ Body: VideoRecoveryAgendaSearchBodyType }>(
+    "/video-recovery/agenda-search",
+    {
+      preHandler: [apiKeyAuthHook],
+      schema: {
+        body: VideoRecoveryAgendaSearchBody,
+      },
+    },
+    handleVideoRecoveryAgendaSearch,
   );
 }
