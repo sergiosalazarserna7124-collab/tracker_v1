@@ -26,6 +26,7 @@ import {
   searchOpportunityByContact,
   updateOpportunityStage,
   parseFunnelStageMap,
+  updateContactCustomFields,
   GHL_TAGS,
   type CuentaFullRow,
 } from "../ghl-api.service.js";
@@ -878,15 +879,19 @@ async function effectivePath(
 
     // Config de notas GHL para llamadas (el cliente puede apagarlas por cuenta)
     let notasLlamadasCfg = { ia: true, transcripcion: true };
+    // Campos personalizados de GHL donde escribir el contenido auto-generado (key/id del campo)
+    let camposLlamadasCfg: { ia?: string; transcripcion?: string } = {};
     try {
-      const cfgRows = await pgPool.query<{ configuracion_ui: { ghl_notas_llamadas?: { ia?: boolean; transcripcion?: boolean } } | null }>(
+      const cfgRows = await pgPool.query<{ configuracion_ui: { ghl_notas_llamadas?: { ia?: boolean; transcripcion?: boolean }; ghl_campos_llamadas?: { ia?: string; transcripcion?: string } } | null }>(
         `SELECT configuracion_ui FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
         [idCuenta],
       );
       const c = cfgRows.rows[0]?.configuracion_ui?.ghl_notas_llamadas;
       if (c) notasLlamadasCfg = { ia: c.ia !== false, transcripcion: c.transcripcion !== false };
+      const cf = cfgRows.rows[0]?.configuracion_ui?.ghl_campos_llamadas;
+      if (cf) camposLlamadasCfg = { ia: cf.ia?.trim() || undefined, transcripcion: cf.transcripcion?.trim() || undefined };
     } catch (e) {
-      console.warn(`[GhlCalls] No se pudo leer ghl_notas_llamadas para cuenta ${idCuenta}:`, e);
+      console.warn(`[GhlCalls] No se pudo leer config GHL para cuenta ${idCuenta}:`, e);
     }
 
     if (iadesc && notasLlamadasCfg.ia) {
@@ -906,6 +911,25 @@ async function effectivePath(
           await addContactNote(contactId, tokenGhl, `📞 Llamada GHL — Transcripción\n\n${transcript}`);
         } catch (e2) {
           console.error(`[GhlCalls/Effective] Error agregando nota de transcripción original:`, e2);
+        }
+      }
+    }
+
+    // Completar campos personalizados de GHL configurados por el cliente (best-effort)
+    if (camposLlamadasCfg.ia || camposLlamadasCfg.transcripcion) {
+      const cf: Array<{ key: string; field_value: string }> = [];
+      if (camposLlamadasCfg.ia && iadesc) {
+        cf.push({ key: camposLlamadasCfg.ia, field_value: iadesc });
+      }
+      if (camposLlamadasCfg.transcripcion && transcript) {
+        cf.push({ key: camposLlamadasCfg.transcripcion, field_value: transcript });
+      }
+      if (cf.length > 0) {
+        try {
+          await updateContactCustomFields(contactId, tokenGhl, cf);
+          console.info(`[GhlCalls/Effective] Escritos ${cf.length} custom field(s) configurados por el cliente para contact=${contactId}`);
+        } catch (err) {
+          console.error(`[GhlCalls/Effective] Error escribiendo custom fields configurados en GHL:`, err);
         }
       }
     }

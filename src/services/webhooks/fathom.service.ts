@@ -219,6 +219,8 @@ export async function processFathomCall(
   } | null = null;
   // configuracion_ui no está en el schema Drizzle del Cerebro — se lee via pgPool
   let ghlNotasConfig: GhlNotasConfig = { ia: true, transcripcion: false };
+  // Campos personalizados de GHL donde escribir el contenido auto-generado (key/id del campo)
+  let ghlCamposConfig: { ia?: string; transcripcion?: string } = {};
 
   try {
     const rows = await withRetry(
@@ -247,7 +249,7 @@ export async function processFathomCall(
 
     // Leer configuracion_ui.ghl_notas (no existe en el schema Drizzle del Cerebro)
     try {
-      const cfgRows = await pgPool.query<{ configuracion_ui: { ghl_notas?: GhlNotasConfig } | null }>(
+      const cfgRows = await pgPool.query<{ configuracion_ui: { ghl_notas?: GhlNotasConfig; ghl_campos?: { ia?: string; transcripcion?: string } } | null }>(
         `SELECT configuracion_ui FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
         [idCuenta],
       );
@@ -256,6 +258,12 @@ export async function processFathomCall(
         ghlNotasConfig = {
           ia: cfgUi.ghl_notas.ia !== false,       // default true
           transcripcion: cfgUi.ghl_notas.transcripcion === true, // default false
+        };
+      }
+      if (cfgUi?.ghl_campos) {
+        ghlCamposConfig = {
+          ia: cfgUi.ghl_campos.ia?.trim() || undefined,
+          transcripcion: cfgUi.ghl_campos.transcripcion?.trim() || undefined,
         };
       }
     } catch (cfgErr) {
@@ -817,6 +825,25 @@ export async function processFathomCall(
         );
       } catch (err) {
         console.error(`[Fathom] Error agregando nota transcripción en GHL:`, err);
+      }
+    }
+
+    // Completar campos personalizados de GHL configurados por el cliente (best-effort)
+    if (ghlCamposConfig.ia || ghlCamposConfig.transcripcion) {
+      const cf: Array<{ key: string; field_value: string }> = [];
+      if (ghlCamposConfig.ia && analysisText) {
+        cf.push({ key: ghlCamposConfig.ia, field_value: analysisText });
+      }
+      if (ghlCamposConfig.transcripcion && formattedTranscript) {
+        cf.push({ key: ghlCamposConfig.transcripcion, field_value: formattedTranscript });
+      }
+      if (cf.length > 0) {
+        try {
+          await updateContactCustomFields(contactId, account.token_ghl, cf);
+          console.info(`[Fathom] Escritos ${cf.length} custom field(s) configurados por el cliente para contact=${contactId}`);
+        } catch (err) {
+          console.error(`[Fathom] Error escribiendo custom fields configurados en GHL:`, err);
+        }
       }
     }
   }
