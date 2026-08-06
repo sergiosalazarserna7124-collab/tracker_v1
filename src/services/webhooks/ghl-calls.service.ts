@@ -13,6 +13,7 @@
 
 import { and, desc, eq, gte, inArray, isNull, not, or, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
+import { db as pgPool } from "../../config/database.js";
 import { llamadas, logLlamadas, eventosHuerfanos } from "../../db/schema.js";
 import {
   addContactNote,
@@ -875,12 +876,25 @@ async function effectivePath(
       catch (err) { console.error(`[GhlCalls/Effective] Error aplicando tags de reglas:`, err); }
     }
 
-    if (iadesc) {
+    // Config de notas GHL para llamadas (el cliente puede apagarlas por cuenta)
+    let notasLlamadasCfg = { ia: true, transcripcion: true };
+    try {
+      const cfgRows = await pgPool.query<{ configuracion_ui: { ghl_notas_llamadas?: { ia?: boolean; transcripcion?: boolean } } | null }>(
+        `SELECT configuracion_ui FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
+        [idCuenta],
+      );
+      const c = cfgRows.rows[0]?.configuracion_ui?.ghl_notas_llamadas;
+      if (c) notasLlamadasCfg = { ia: c.ia !== false, transcripcion: c.transcripcion !== false };
+    } catch (e) {
+      console.warn(`[GhlCalls] No se pudo leer ghl_notas_llamadas para cuenta ${idCuenta}:`, e);
+    }
+
+    if (iadesc && notasLlamadasCfg.ia) {
       try { await addContactNote(contactId, tokenGhl, `📞 Llamada GHL — Análisis IA\n\n${iadesc}`); }
       catch (err) { console.error(`[GhlCalls/Effective] Error agregando nota IA:`, err); }
     }
 
-    if (transcript) {
+    if (transcript && notasLlamadasCfg.transcripcion) {
       try {
         // Diarizar si la transcripción llegó como texto plano sin speaker labels
         const diarizedTranscript = await diarizarTranscripcion(transcript, openaiApiKey, idCuenta);
