@@ -1,0 +1,18 @@
+{
+  "full_name": "Sofia Recorrido",
+  "email": "sofia@lead.com",
+  "phone": "+573009990000",
+  "contact_id": "WT_CONTACT_CITA_1",
+  "locationid": "test",
+  "customData": {
+    "categoria": "pendiente",
+    "idcuenta": "1",
+    "nombre": "Sofia Recorrido",
+    "closer": "Ana Closer",
+    "email": "sofia@lead.com",
+    "origen": "facebook",
+    "hora": "2026-08-08 15:00",
+    "zonahoraria": "America/Bogota",
+    "idcliente": "WT_CONTACT_CITA_1"
+  }
+}

@@ -508,6 +508,17 @@ CREATE TABLE IF NOT EXISTS metricas_webhook (
 );
 CREATE INDEX IF NOT EXISTS idx_metricas_webhook_cuenta_fecha
   ON metricas_webhook (id_cuenta, fecha);
+CREATE INDEX IF NOT EXISTS idx_metricas_webhook_user
+  ON metricas_webhook (id_cuenta, ghl_user_id)
+  WHERE ghl_user_id IS NOT NULL;
+-- Índices únicos que exige el upsert del webhook (ver migración 044):
+--   ON CONFLICT (id_cuenta, fecha, campo, ghl_user_id)  → fila por asesor
+--   ON CONFLICT (id_cuenta, fecha, campo) WHERE ghl_user_id IS NULL → fila agregada
+CREATE UNIQUE INDEX IF NOT EXISTS metricas_webhook_unique
+  ON metricas_webhook (id_cuenta, fecha, campo, ghl_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_metricas_webhook_global
+  ON metricas_webhook (id_cuenta, fecha, campo)
+  WHERE ghl_user_id IS NULL;
 
 -- ============================================================================
 -- FIN — Tras ejecutar esto, arranca la app: las 56 migraciones quedarán

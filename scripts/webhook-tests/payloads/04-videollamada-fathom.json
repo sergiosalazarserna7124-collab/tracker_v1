@@ -1,0 +1,18 @@
+{
+  "recording_id": 987654321,
+  "share_url": "https://fathom.video/calls/987654321",
+  "title": "Videollamada Demo Premium - Maria Lead",
+  "meeting_title": "Videollamada Demo Premium - Maria Lead",
+  "recording_start_time": "2026-08-06T15:00:00Z",
+  "recording_end_time": "2026-08-06T15:35:00Z",
+  "recorded_by": { "email": "ana@closer.com", "name": "Ana Closer" },
+  "calendar_invitees": [
+    { "email": "maria@lead.com", "is_external": true, "name": "Maria Lead" },
+    { "email": "ana@closer.com", "is_external": false, "name": "Ana Closer" }
+  ],
+  "transcript": [
+    { "speaker": { "display_name": "Ana Closer" }, "text": "Hola Maria, gracias por tu tiempo hoy, te muestro el plan." },
+    { "speaker": { "display_name": "Maria Lead" }, "text": "Perfecto, me interesa mucho el plan premium." },
+    { "speaker": { "display_name": "Maria Lead" }, "text": "Procedamos con el pago, ya tengo la tarjeta lista, quiero cerrar hoy." }
+  ]
+}

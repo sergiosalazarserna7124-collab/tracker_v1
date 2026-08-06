@@ -1,0 +1,11 @@
+{
+  "fecha": "2026-08-06",
+  "userId": "REASIGN_USER_1",
+  "re_recorridos_agendados": 3,
+  "re_recorridos_realizados": 2,
+  "re_recorridos_cancelados": 1,
+  "re_apartados": 1,
+  "re_monto_apartados": 250000000,
+  "re_ventas": 1,
+  "re_monto_ventas": 500000000
+}

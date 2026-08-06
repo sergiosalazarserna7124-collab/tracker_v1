@@ -1,0 +1,15 @@
+{
+  "contact_id": "WT_CONTACT_OBJ_1",
+  "full_name": "Carlos Objeciones",
+  "phone": "+573001112233",
+  "locationid": "test",
+  "customData": {
+    "nombre": "Carlos Objeciones",
+    "numero": "+573001112233",
+    "locationid": "test",
+    "idcuenta": "1",
+    "closermail": "ana@closer.com",
+    "nombrecloser": "Ana Closer",
+    "id_customer_ghl": "WT_CONTACT_OBJ_1"
+  }
+}

@@ -61,8 +61,8 @@ export async function procesarCalificacionWebhook(
                WHEN $3 = 'calificado' THEN false
                ELSE excluido_metricas
              END
-         WHERE id_cuenta = $1::text AND ghl_contact_id = $2`,
-        [String(id_cuenta), contactId, accion],
+         WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
+        [id_cuenta, contactId, accion],
       ),
     { label: "calificacion/llamadas" },
   );

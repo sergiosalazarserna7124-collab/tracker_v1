@@ -1,0 +1,15 @@
+{
+  "contact_id": "WT_CONTACT_NOANS_1",
+  "full_name": "Pedro NoContesta",
+  "phone": "+573004445566",
+  "locationid": "test",
+  "customData": {
+    "nombre": "Pedro NoContesta",
+    "numero": "+573004445566",
+    "locationid": "test",
+    "idcuenta": "1",
+    "closermail": "ana@closer.com",
+    "nombrecloser": "Ana Closer",
+    "id_customer_ghl": "WT_CONTACT_NOANS_1"
+  }
+}
