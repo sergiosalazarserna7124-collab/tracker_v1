@@ -30,7 +30,7 @@ function extractEffectivePath(source: string): string {
 }
 
 describe("AUT-838: effectivePath must not touch agendas", () => {
-  for (const file of ["twilio.service.ts", "ghl-calls.service.ts"]) {
+  for (const file of ["ghl-calls.service.ts"]) {
     test(`${file} — effectivePath does not update agendas table`, () => {
       const body = extractEffectivePath(readService(file));
       assert.ok(body.length > 0, `Could not find effectivePath in ${file}`);

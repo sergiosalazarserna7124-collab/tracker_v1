@@ -4,7 +4,6 @@ import { errorHandlerPlugin } from "./plugins/error-handler.js";
 import { healthRoute } from "./routes/health.route.js";
 import { fathomWebhookRoute } from "./routes/webhooks/fathom.route.js";
 import { ghlWebhookRoute } from "./routes/webhooks/ghl.route.js";
-import { twilioWebhookRoute } from "./routes/webhooks/twilio.route.js";
 import { cronDailyTasksRoute } from "./routes/cron/daily-tasks.route.js";
 import { cronSincronizarAdsRoute } from "./routes/cron/sincronizar-ads.route.js";
 import { cronDetectDuplicatesClosersRoute } from "./routes/cron/detect-duplicates-closers.route.js";
@@ -65,7 +64,6 @@ export async function buildApp() {
   await app.register(healthRoute);
   await app.register(fathomWebhookRoute, { prefix: "/webhooks" });
   await app.register(ghlWebhookRoute, { prefix: "/webhooks" });
-  await app.register(twilioWebhookRoute, { prefix: "/webhooks" });
   await app.register(externalDataRoute, { prefix: "/webhooks" });
   await app.register(contactIntakeRoute, { prefix: "/webhooks" });
   await app.register(orphanRoute, { prefix: "/webhooks" });

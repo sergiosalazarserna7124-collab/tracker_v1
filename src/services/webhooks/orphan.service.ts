@@ -2,7 +2,6 @@ import { eq, and } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { eventosHuerfanos } from "../../db/schema.js";
 import { processFathomCall } from "./fathom.service.js";
-import { processTwilioWebhook } from "./twilio.service.js";
 import type { ServiceResult } from "../../types/index.js";
 
 export async function retryOrphanEvent(
@@ -50,23 +49,6 @@ export async function retryOrphanEvent(
     });
 
     return { success: true, data: { id_huerfano: idHuerfano, origen: "fathom" } };
-  }
-
-  if (orphan.origen === "twilio") {
-    const customData = (payload.customData ?? {}) as Record<string, unknown>;
-    customData.email = emailCorregido;
-    payload.customData = customData;
-
-    await drizzleDb
-      .update(eventosHuerfanos)
-      .set({ estado: "resuelto", updated_at: new Date() })
-      .where(eq(eventosHuerfanos.id_huerfano, idHuerfano));
-
-    processTwilioWebhook(payload as never).catch((err) => {
-      console.error(`[OrphanRetry] Error re-procesando Twilio huérfano ${idHuerfano}:`, err);
-    });
-
-    return { success: true, data: { id_huerfano: idHuerfano, origen: "twilio" } };
   }
 
   return { success: false, error: `Origen desconocido: ${orphan.origen}` };
