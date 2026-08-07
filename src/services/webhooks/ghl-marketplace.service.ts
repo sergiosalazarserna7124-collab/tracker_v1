@@ -112,6 +112,20 @@ function hasDescartarTag(tags?: string[]): boolean {
   return (tags ?? []).some((t) => typeof t === "string" && t.trim().toLowerCase() === DESCARTAR_TAG);
 }
 
+// Etiqueta puesta por un workflow nativo de GHL (trigger "Call Status") cuando
+// una llamada NO es contestada. Existe porque el webhook OutboundMessage del
+// marketplace solo se dispara para completed/failed — no-answer/busy/voicemail
+// nunca llegan por webhook. Acepta variantes de separador (espacio/guión).
+const TAG_NO_CONTESTADA = "no_contesta_call";
+
+function normalizeTag(t: string): string {
+  return t.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function hasNoContestadaTag(tags?: string[]): boolean {
+  return (tags ?? []).some((t) => typeof t === "string" && normalizeTag(t) === TAG_NO_CONTESTADA);
+}
+
 function fullName(b: GhlContactEvent): string | null {
   const n = (b.name ?? [b.firstName, b.lastName].filter(Boolean).join(" ")).trim();
   return n || null;
@@ -203,6 +217,11 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
   if (!account) return;
   const idCuenta = account.id_cuenta;
 
+  // Llamada no contestada reportada vía etiqueta (workflow "Call Status").
+  if (hasNoContestadaTag(body.tags)) {
+    await handleNoContestadaTag(idCuenta, locationId, body);
+  }
+
   // Dos etiquetas, semántica distinta:
   //  - no_trackearlead → oculto del dashboard + fuera de métricas.
   //  - descartar-lead  → fuera de métricas pero SIGUE VISIBLE (no se oculta).
@@ -256,6 +275,77 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
       `[Marketplace/ContactTagUpdate] Contacto=${contactId} → ${estado} ` +
       `(llamadas=${resLlamadas.rowCount}, chats=${resChats.rowCount}, agendas=${resAgendas.rowCount}${creado ? ", lead creado" : ""})`,
     );
+  }
+}
+
+// ─── Etiqueta "no-contestada" → registrar intento de llamada ──────────────────
+
+/**
+ * Registra una llamada no contestada reportada por el workflow de GHL vía la
+ * etiqueta "no-contestada", con el mismo efecto que handleCallEvent para un
+ * status no-answer: fila en log_llamadas + primera llamada + salida de
+ * "pendientes por llamar". Al final QUITA la etiqueta del contacto para que
+ * el próximo no-answer del workflow la vuelva a poner y re-dispare el evento.
+ * Quitar la etiqueta re-emite ContactTagUpdate sin ella → no hay bucle.
+ */
+async function handleNoContestadaTag(
+  idCuenta: number,
+  locationId: string,
+  body: GhlContactEvent,
+): Promise<void> {
+  const contactId = body.id;
+  if (!contactId) return;
+  const rawTs = (body as Record<string, unknown>).timestamp;
+  const ts = typeof rawTs === "string" ? new Date(rawTs) : new Date();
+
+  // Dedup: GHL puede re-emitir ContactTagUpdate con la etiqueta aún puesta
+  // (p.ej. otro tag cambió antes de que alcanzáramos a quitarla). Dos intentos
+  // reales al mismo lead en <90s es prácticamente imposible.
+  const { rows: recent } = await pgPool.query(
+    `SELECT 1 FROM log_llamadas
+     WHERE id_cuenta = $1 AND contact_id_ghl = $2 AND tipo_evento = 'no_contesto'
+       AND ts > NOW() - INTERVAL '90 seconds' LIMIT 1`,
+    [idCuenta, contactId],
+  );
+
+  if (recent.length === 0) {
+    await registerNewLead(idCuenta, body);
+    const { rows: leadRows } = await pgPool.query<{ id_registro: number }>(
+      `SELECT id_registro FROM registros_de_llamada WHERE id_cuenta = $1 AND ghl_contact_id = $2 ORDER BY id_registro DESC LIMIT 1`,
+      [idCuenta, contactId],
+    );
+    const webhookId = (body as Record<string, unknown>).webhookId;
+    await pgPool.query(
+      `INSERT INTO log_llamadas
+         (id_cuenta, id_registro, contact_id_ghl, phone, nombre_lead, tipo_evento, estado_resultado, call_sid, ts)
+       VALUES ($1, $2, $3, $4, $5, 'no_contesto', 'no-answer', $6, $7)`,
+      [
+        idCuenta,
+        leadRows[0]?.id_registro ?? null,
+        contactId,
+        body.phone ?? null,
+        fullName(body),
+        `tag:${typeof webhookId === "string" ? webhookId : ts.getTime()}`,
+        ts,
+      ],
+    );
+    await pgPool.query(
+      `UPDATE registros_de_llamada
+         SET fecha_primera_llamada = COALESCE(fecha_primera_llamada, $3),
+             estado = CASE WHEN UPPER(TRIM(estado)) = 'PDTE' THEN 'seguimiento' ELSE estado END
+       WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
+      [idCuenta, contactId, ts],
+    );
+    console.info(`[Marketplace/NoContestadaTag] contacto=${contactId} cuenta=${idCuenta} → no_contesto registrado`);
+  }
+
+  // Quitar la etiqueta SIEMPRE (aunque se haya deduplicado) para rearmar el
+  // trigger del workflow. Best-effort: si falla, el dedup de 90s protege.
+  try {
+    const token = await getAccessToken(locationId);
+    if (token) await removeContactTag(contactId, token, TAG_NO_CONTESTADA);
+  } catch (e) {
+    console.warn(`[Marketplace/NoContestadaTag] no se pudo quitar la etiqueta de ${contactId}:`, e instanceof Error ? e.message : e);
   }
 }
 

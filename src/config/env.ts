@@ -18,9 +18,10 @@ const EnvSchema = Type.Object({
   GHL_APP_CLIENT_SECRET: Type.String({ default: "" }),
   GHL_OAUTH_REDIRECT_URI: Type.String({ default: "" }),
   GEMINI_API_KEY: Type.String({ default: "" }),
-  // Minutos entre corridas del loop interno de reconciliación de llamadas GHL
-  // (las no contestadas no llegan por webhook). "0" lo desactiva.
-  GHL_CALLS_RECONCILE_MIN: Type.String({ default: "5" }),
+  // Minutos entre corridas del loop interno de reconciliación de llamadas GHL.
+  // "0" = desactivado (default): las no contestadas llegan por la etiqueta
+  // "no-contestada" (workflow Call Status); este loop queda como plan B.
+  GHL_CALLS_RECONCILE_MIN: Type.String({ default: "0" }),
 });
 
 export type Env = Static<typeof EnvSchema>;
@@ -37,7 +38,7 @@ function loadEnv(): Env {
     GHL_APP_CLIENT_SECRET: process.env.GHL_APP_CLIENT_SECRET ?? "0e3fc8c2-f76e-403d-be6f-4a2fb0642c8e",
     GHL_OAUTH_REDIRECT_URI: process.env.GHL_OAUTH_REDIRECT_URI ?? "https://cerebro-tracker-v6-saas-git-cstkjl7bpa-ue.a.run.app/oauth/callback",
     GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? "",
-    GHL_CALLS_RECONCILE_MIN: process.env.GHL_CALLS_RECONCILE_MIN ?? "5",
+    GHL_CALLS_RECONCILE_MIN: process.env.GHL_CALLS_RECONCILE_MIN ?? "0",
   };
 
   if (!Value.Check(EnvSchema, raw)) {
