@@ -2,6 +2,7 @@ import type { FastifyRequest, FastifyReply } from "fastify";
 import { verify as ed25519Verify } from "node:crypto";
 import { db } from "../../config/database.js";
 import { provisionLocationFromStoredCompany } from "../../services/oauth/ghl-oauth.service.js";
+import { handleMarketplaceEvent } from "../../services/webhooks/ghl-marketplace.service.js";
 
 interface GhlMarketplaceBody {
   type?: string;
@@ -92,6 +93,13 @@ export async function handleGhlMarketplaceShadow(
         );
       }
     }
+
+    // Fase 3: procesar el evento al pipeline real (además del shadow).
+    handleMarketplaceEvent(eventType, body).catch((e) =>
+      request.log.error(
+        `[GHL-Shadow] Error procesando evento ${eventType ?? "?"}: ${e instanceof Error ? e.message : e}`,
+      ),
+    );
   } catch (err) {
     request.log.error(
       `[GHL-Shadow] Error guardando evento: ${err instanceof Error ? err.message : err}`,
