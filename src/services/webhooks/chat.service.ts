@@ -8,6 +8,7 @@ import { withRetry } from "../../utils/retry.utils.js";
 import type { ChatWebhookBody } from "../../schemas/webhooks/chat.schema.js";
 import type { ServiceResult } from "../../types/index.js";
 import { tryInlineChatClassification } from "./inline-chat-classify.service.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -372,7 +373,10 @@ export async function processChatWebhook(
   }
 
   const idCuenta = account.id_cuenta;
-  const tokenGhl = account.token_ghl ?? "";
+  // Token para llamar a la API de GHL (traer nombre del contacto, asesor, etc.).
+  // Las cuentas del marketplace no tienen token legacy → usar el token OAuth.
+  let tokenGhl = account.token_ghl ?? "";
+  if (!tokenGhl) tokenGhl = (await getAccessToken(locationId)) ?? "";
 
   // ── 5b-pre. Auto-limpiar flag de desconexión si la app fue reinstalada ───
   // Cuando llega cualquier mensaje real después de un UNINSTALL, significa que
