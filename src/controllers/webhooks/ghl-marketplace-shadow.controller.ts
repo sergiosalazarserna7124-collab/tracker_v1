@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { verify as ed25519Verify } from "node:crypto";
 import { db } from "../../config/database.js";
+import { provisionLocationFromStoredCompany } from "../../services/oauth/ghl-oauth.service.js";
 
 interface GhlMarketplaceBody {
   type?: string;
@@ -75,6 +76,22 @@ export async function handleGhlMarketplaceShadow(
     request.log.info(
       `[GHL-Shadow] Evento registrado: type=${eventType ?? "unknown"} location=${locationId ?? "none"} sig=${signatureOk === null ? "no-header" : signatureOk}`,
     );
+
+    // Opción B: cuando se INSTALA en una location nueva, auto-provisionar su
+    // token de Location usando el token de Company ya guardado (best-effort).
+    if (eventType === "INSTALL" && locationId) {
+      const companyId =
+        (body?.companyId as string | undefined) ??
+        (body?.company_id as string | undefined) ??
+        null;
+      if (companyId) {
+        provisionLocationFromStoredCompany(companyId, locationId).catch((e) =>
+          request.log.error(
+            `[GHL-Shadow] No se pudo provisionar token para location=${locationId}: ${e instanceof Error ? e.message : e}`,
+          ),
+        );
+      }
+    }
   } catch (err) {
     request.log.error(
       `[GHL-Shadow] Error guardando evento: ${err instanceof Error ? err.message : err}`,

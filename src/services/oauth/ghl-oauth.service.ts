@@ -9,6 +9,18 @@ import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenOk, retryPendingActions } from "../ghl-token-guard.service.js";
 
 const GHL_TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
+const GHL_LOCATION_TOKEN_URL = "https://services.leadconnectorhq.com/oauth/locationToken";
+const GHL_INSTALLED_LOCATIONS_URL = "https://services.leadconnectorhq.com/oauth/installedLocations";
+
+/** El appId es el primer segmento del client_id (formato "<appId>-<keyId>"). */
+function getAppId(): string {
+  return (env.GHL_APP_CLIENT_ID.split("-")[0] ?? "").trim();
+}
+
+/** Clave sintética para guardar el token de Agencia (Company) en la misma tabla. */
+function companyKey(companyId: string): string {
+  return `company:${companyId}`;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,17 +35,189 @@ interface GhlTokenResponse {
   companyId?: string;
 }
 
+// ─── Helper: upsert de un token en ghl_oauth_tokens ──────────────────────────
+
+async function upsertToken(
+  locationIdColumn: string,
+  tokenData: GhlTokenResponse,
+  linkCuentaByLocationId: string | null,
+): Promise<number | null> {
+  const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
+
+  let idCuenta: number | null = null;
+  if (linkCuentaByLocationId) {
+    const { rows } = await withRetry(
+      () =>
+        db.query<{ id_cuenta: number }>(
+          `SELECT id_cuenta FROM cuentas WHERE locationid = $1 LIMIT 1`,
+          [linkCuentaByLocationId],
+        ),
+      { label: "ghlOauth/findCuenta" },
+    );
+    idCuenta = rows[0]?.id_cuenta ?? null;
+  }
+
+  await withRetry(
+    () =>
+      db.query(
+        `INSERT INTO ghl_oauth_tokens
+           (location_id, id_cuenta, access_token, refresh_token, token_type,
+            expires_in, scope, expires_at, last_refreshed_at, user_type, company_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10)
+         ON CONFLICT (location_id) DO UPDATE SET
+           id_cuenta         = COALESCE($2, ghl_oauth_tokens.id_cuenta),
+           access_token      = EXCLUDED.access_token,
+           refresh_token     = EXCLUDED.refresh_token,
+           token_type        = EXCLUDED.token_type,
+           expires_in        = EXCLUDED.expires_in,
+           scope             = EXCLUDED.scope,
+           expires_at        = EXCLUDED.expires_at,
+           last_refreshed_at = NOW(),
+           user_type         = EXCLUDED.user_type,
+           company_id        = EXCLUDED.company_id`,
+        [
+          locationIdColumn,
+          idCuenta,
+          tokenData.access_token,
+          tokenData.refresh_token,
+          tokenData.token_type ?? "Bearer",
+          tokenData.expires_in,
+          tokenData.scope ?? null,
+          expiresAt.toISOString(),
+          tokenData.userType ?? null,
+          tokenData.companyId ?? null,
+        ],
+      ),
+    { label: "ghlOauth/upsertTokens" },
+  );
+
+  return idCuenta;
+}
+
+// ─── Helper: minta un token de Location a partir del token de Company ─────────
+
+async function getLocationTokenFromCompany(
+  companyId: string,
+  locationId: string,
+  companyAccessToken: string,
+): Promise<GhlTokenResponse> {
+  const body = new URLSearchParams({ companyId, locationId });
+  const res = await fetch(GHL_LOCATION_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${companyAccessToken}`,
+      Version: "2021-07-28",
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: body.toString(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GHL locationToken failed (${res.status}) para location=${locationId}: ${text}`);
+  }
+  const data = (await res.json()) as GhlTokenResponse;
+  if (!data.locationId) data.locationId = locationId;
+  if (!data.companyId) data.companyId = companyId;
+  return data;
+}
+
+// ─── Helper: lista los locationIds donde está instalada la app ────────────────
+
+async function fetchInstalledLocationIds(
+  companyId: string,
+  companyAccessToken: string,
+): Promise<string[]> {
+  const appId = getAppId();
+  const url = `${GHL_INSTALLED_LOCATIONS_URL}?companyId=${encodeURIComponent(companyId)}&appId=${encodeURIComponent(appId)}&limit=500`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${companyAccessToken}`,
+      Version: "2021-07-28",
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GHL installedLocations failed (${res.status}): ${text}`);
+  }
+  const data = (await res.json()) as { locations?: Array<{ _id?: string; id?: string }> };
+  return (data.locations ?? [])
+    .map((l) => l._id ?? l.id)
+    .filter((x): x is string => typeof x === "string" && x.length > 0);
+}
+
+// ─── Provisiona (minta+guarda) el token de UNA location desde el company token ─
+
+async function provisionLocationToken(
+  companyId: string,
+  locationId: string,
+  companyAccessToken: string,
+): Promise<void> {
+  const locTokenData = await getLocationTokenFromCompany(companyId, locationId, companyAccessToken);
+  const idCuenta = await upsertToken(locationId, locTokenData, locationId);
+  console.log(
+    `[GhlOAuth] Location token guardado location=${locationId} | id_cuenta=${idCuenta ?? "no encontrada"}`,
+  );
+  if (idCuenta) {
+    await markTokenOk(idCuenta);
+    retryPendingActions(idCuenta, locTokenData.access_token).catch((err) =>
+      console.error(`[GhlOAuth] Error reintentando pendientes cuenta=${idCuenta}:`, err),
+    );
+  }
+}
+
+// ─── Provisiona TODAS las locations de una instalación de Agencia (Company) ────
+
+async function provisionCompanyInstall(companyTokenData: GhlTokenResponse): Promise<void> {
+  const companyId = companyTokenData.companyId!;
+  // 1. Guardar el token de Company (para refrescarlo y mintar locations futuras)
+  await upsertToken(companyKey(companyId), companyTokenData, null);
+  console.log(`[GhlOAuth] Company token guardado companyId=${companyId}`);
+
+  // 2. Listar las locations instaladas y mintar un token por cada una
+  let locationIds: string[] = [];
+  try {
+    locationIds = await fetchInstalledLocationIds(companyId, companyTokenData.access_token);
+  } catch (err) {
+    console.error(`[GhlOAuth] No se pudieron listar installedLocations:`, err);
+  }
+
+  console.log(`[GhlOAuth] Agencia companyId=${companyId} → ${locationIds.length} location(s) instaladas`);
+  for (const locationId of locationIds) {
+    try {
+      await provisionLocationToken(companyId, locationId, companyTokenData.access_token);
+    } catch (err) {
+      console.error(`[GhlOAuth] Error provisionando location=${locationId}:`, err);
+    }
+  }
+}
+
+// ─── Provisiona una location futura (desde el webhook INSTALL) ─────────────────
+
+/**
+ * Usa el token de Company ya guardado para mintar+guardar el token de una
+ * location que se instaló DESPUÉS (evento INSTALL del webhook de la app).
+ */
+export async function provisionLocationFromStoredCompany(
+  companyId: string,
+  locationId: string,
+): Promise<void> {
+  const companyAccessToken = await getAccessToken(companyKey(companyId));
+  if (!companyAccessToken) {
+    throw new Error(`No hay company token almacenado para companyId=${companyId}`);
+  }
+  await provisionLocationToken(companyId, locationId, companyAccessToken);
+}
+
 // ─── exchangeCodeForTokens ────────────────────────────────────────────────────
 
 /**
- * Intercambia el code de OAuth por access_token + refresh_token.
- * Guarda/actualiza en ghl_oauth_tokens. Si encuentra la cuenta por locationId,
- * linkea id_cuenta automáticamente.
- *
- * IMPORTANTE: GHL NO envía locationId en el redirect del OAuth — el redirect solo
- * trae `code`. El locationId (y companyId) vienen DENTRO de la respuesta del token
- * exchange. Por eso el locationId se resuelve aquí a partir de `tokenData`, no como
- * parámetro de entrada.
+ * Intercambia el code de OAuth por tokens y los guarda.
+ *  - Instalación a nivel Location → guarda ese token directo.
+ *  - Instalación a nivel Agencia (Company) → guarda el token de Company y
+ *    minta+guarda un token de Location por cada subcuenta instalada. Las
+ *    locations futuras se auto-conectan vía el webhook INSTALL.
  */
 export async function exchangeCodeForTokens(
   code: string,
@@ -60,76 +244,30 @@ export async function exchangeCodeForTokens(
 
   const tokenData = (await res.json()) as GhlTokenResponse;
 
-  // El locationId viene en la respuesta del token, NO en el redirect del OAuth.
-  const locationId = tokenData.locationId ?? null;
-  if (!locationId) {
-    throw new Error(
-      `La respuesta de GHL no incluyó locationId (userType=${tokenData.userType ?? "desconocido"}). ` +
-        `La app debe instalarse a nivel Sub-cuenta (Location), no Agencia.`,
+  // ── Instalación a nivel Location ────────────────────────────────────────────
+  if (tokenData.locationId) {
+    const idCuenta = await upsertToken(tokenData.locationId, tokenData, tokenData.locationId);
+    console.log(
+      `[GhlOAuth] Tokens guardados (Location) location="${tokenData.locationId}" | id_cuenta=${idCuenta ?? "no encontrada"}`,
     );
+    if (idCuenta) {
+      await markTokenOk(idCuenta);
+      retryPendingActions(idCuenta, tokenData.access_token).catch((err) =>
+        console.error(`[GhlOAuth] Error reintentando pendientes cuenta=${idCuenta}:`, err),
+      );
+    }
+    return tokenData;
   }
 
-  // Calcular expires_at
-  const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
-
-  // Buscar si existe cuenta con este locationId para linkear
-  const { rows: cuentaRows } = await withRetry(
-    () =>
-      db.query<{ id_cuenta: number }>(
-        `SELECT id_cuenta FROM cuentas WHERE locationid = $1 LIMIT 1`,
-        [locationId],
-      ),
-    { label: "ghlOauth/findCuenta" },
-  );
-  const idCuenta = cuentaRows[0]?.id_cuenta ?? null;
-
-  // Upsert en ghl_oauth_tokens
-  await withRetry(
-    () =>
-      db.query(
-        `INSERT INTO ghl_oauth_tokens
-           (location_id, id_cuenta, access_token, refresh_token, token_type,
-            expires_in, scope, expires_at, last_refreshed_at, user_type, company_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10)
-         ON CONFLICT (location_id) DO UPDATE SET
-           id_cuenta        = COALESCE($2, ghl_oauth_tokens.id_cuenta),
-           access_token     = EXCLUDED.access_token,
-           refresh_token    = EXCLUDED.refresh_token,
-           token_type       = EXCLUDED.token_type,
-           expires_in       = EXCLUDED.expires_in,
-           scope            = EXCLUDED.scope,
-           expires_at       = EXCLUDED.expires_at,
-           last_refreshed_at = NOW(),
-           user_type        = EXCLUDED.user_type,
-           company_id       = EXCLUDED.company_id`,
-        [
-          locationId,
-          idCuenta,
-          tokenData.access_token,
-          tokenData.refresh_token,
-          tokenData.token_type ?? "Bearer",
-          tokenData.expires_in,
-          tokenData.scope ?? null,
-          expiresAt.toISOString(),
-          tokenData.userType ?? null,
-          tokenData.companyId ?? null,
-        ],
-      ),
-    { label: "ghlOauth/upsertTokens" },
-  );
-
-  console.log(
-    `[GhlOAuth] Tokens guardados para locationId="${locationId}" | id_cuenta=${idCuenta ?? "no encontrada"}`,
-  );
-
-  if (idCuenta) {
-    await markTokenOk(idCuenta);
-    retryPendingActions(idCuenta, tokenData.access_token).catch((err) =>
-      console.error(`[GhlOAuth] Error reintentando pendientes cuenta=${idCuenta}:`, err),
-    );
+  // ── Instalación a nivel Agencia (Company) ───────────────────────────────────
+  if (tokenData.companyId) {
+    await provisionCompanyInstall(tokenData);
+    return tokenData;
   }
 
-  return tokenData;
+  throw new Error(
+    `La respuesta de GHL no incluyó locationId ni companyId (userType=${tokenData.userType ?? "desconocido"}).`,
+  );
 }
 
 // ─── refreshTokens ────────────────────────────────────────────────────────────
