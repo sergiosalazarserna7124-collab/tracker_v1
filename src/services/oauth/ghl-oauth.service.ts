@@ -166,15 +166,25 @@ async function provisionLocationToken(
       console.error(`[GhlOAuth] Error reintentando pendientes cuenta=${idCuenta}:`, err),
     );
 
-    // Crear el menú "Métricas" en GHL (best-effort; requiere scope custom-menu-link.write)
+    // Crear el menú "Métricas" en GHL — best-effort, UNA sola vez por location.
+    // Requiere scope custom-menu-link.write en el token de Company.
     try {
-      const { rows } = await db.query<{ subdominio: string | null }>(
-        `SELECT subdominio FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
-        [idCuenta],
+      const { rows } = await db.query<{ subdominio: string | null; menu_link_created: boolean }>(
+        `SELECT c.subdominio, t.menu_link_created
+           FROM cuentas c
+           JOIN ghl_oauth_tokens t ON t.location_id = $2
+          WHERE c.id_cuenta = $1
+          LIMIT 1`,
+        [idCuenta, locationId],
       );
       const sub = rows[0]?.subdominio;
-      if (sub) {
+      const yaCreado = rows[0]?.menu_link_created === true;
+      if (sub && !yaCreado) {
         await ensureMetricsMenuLink(locationId, sub, companyAccessToken);
+        await db.query(
+          `UPDATE ghl_oauth_tokens SET menu_link_created = true WHERE location_id = $1`,
+          [locationId],
+        );
       }
     } catch (err) {
       console.error(`[GhlOAuth] No se pudo crear el menú de métricas para location=${locationId}:`, err);

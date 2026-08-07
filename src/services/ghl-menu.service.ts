@@ -58,6 +58,9 @@ export async function ensureMetricsMenuLink(
     locations: [locationId],
     openMode: "iframe",
     userRole: "all",
+    // GHL los exige (validación 422 si faltan). El dashboard no usa cámara/micrófono.
+    allowCamera: false,
+    allowMicrophone: false,
   };
 
   const res = await fetch(GHL_CUSTOM_MENUS_URL, {
