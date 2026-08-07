@@ -231,8 +231,8 @@ function mapCallOutcome(status: string | null | undefined, callStatus: string | 
   if (s === "completed") return { tipo_evento: "efectiva_ghl", estado_resultado: "completed", finalizada: true };
   if (s === "no-answer" || s === "noanswer") return { tipo_evento: "no_contesto", estado_resultado: "no-answer", finalizada: true };
   if (s === "busy") return { tipo_evento: "no_contesto", estado_resultado: "busy", finalizada: true };
-  if (s === "failed") return { tipo_evento: "no_contesto", estado_resultado: "failed", finalizada: true };
-  if (s === "canceled" || s === "cancelled") return { tipo_evento: "no_contesto", estado_resultado: "canceled", finalizada: true };
+  if (s === "failed") return { tipo_evento: "fallida", estado_resultado: "failed", finalizada: true };
+  if (s === "canceled" || s === "cancelled") return { tipo_evento: "fallida", estado_resultado: "canceled", finalizada: true };
   // Estados realmente en vivo (llamada larga en curso) → aún no finalizó
   if (s === "in-progress" || s === "ringing" || s === "queued" || s === "initiated") {
     return { tipo_evento: "en_progreso", estado_resultado: s, finalizada: false };
