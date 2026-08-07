@@ -31,14 +31,15 @@ const TAG_EN_PROGRESO = "llamada-en-progreso";
 
 /**
  * Trae la transcripción de una llamada desde GHL (add-on de transcripción).
- * GHL la genera con un pequeño delay tras finalizar → reintenta unos segundos.
- * Devuelve el texto diarizado (por speaker) o null.
+ * GHL la genera con un pequeño delay → reintenta mientras venga vacía. Si tras
+ * los reintentos sigue vacía, se asume que no se habló nada (wordCount 0).
+ * Devuelve { formatted, wordCount }.
  */
 async function getCallTranscript(
   locationId: string,
   messageId: string,
   token: string,
-): Promise<string | null> {
+): Promise<{ formatted: string; wordCount: number }> {
   const url = `https://services.leadconnectorhq.com/conversations/locations/${locationId}/messages/${messageId}/transcription`;
   for (let intento = 0; intento < 5; intento++) {
     try {
@@ -48,16 +49,19 @@ async function getCallTranscript(
       if (res.ok) {
         const segs = (await res.json()) as Array<{ speaker?: number; transcript?: string }>;
         if (Array.isArray(segs) && segs.length > 0) {
-          return segs
+          const raw = segs.map((s) => (s.transcript ?? "").trim()).filter(Boolean).join(" ");
+          const wordCount = raw ? raw.split(/\s+/).filter(Boolean).length : 0;
+          const formatted = segs
             .map((s) => `Speaker ${s.speaker ?? "?"}: ${(s.transcript ?? "").trim()}`)
             .filter((l) => l.length > 12)
             .join("\n");
+          return { formatted, wordCount };
         }
       }
     } catch { /* reintentar */ }
     await new Promise((r) => setTimeout(r, 7000)); // esperar a que GHL genere el transcript
   }
-  return null;
+  return { formatted: "", wordCount: 0 }; // no hubo conversación (o no hay transcript)
 }
 
 const DISCARD_TAG = "no_trackearlead";
@@ -286,8 +290,9 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
     );
   }
 
-  // Si la llamada FINALIZÓ, marcar el primer contacto en el lead (sale de "pendientes por llamar").
-  if (finalizada) {
+  // El lead sale de "pendientes por llamar" solo si hubo un intento que CONECTÓ.
+  // Una llamada FALLIDA (no conectó) NO cuenta como llamada → el lead sigue pendiente.
+  if (finalizada && tipo_evento !== "fallida") {
     await pgPool.query(
       `UPDATE registros_de_llamada
          SET fecha_primera_llamada = COALESCE(fecha_primera_llamada, $3),
@@ -333,10 +338,26 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
       else await removeContactTag(contactId, token, TAG_EN_PROGRESO);
     } catch (e) { console.warn(`[Marketplace/Call] tag en-progreso:`, e instanceof Error ? e.message : e); }
 
-    // 3. Transcript + análisis IA (solo llamadas contestadas) → nota en GHL
+    // 3. Transcript → RE-EVALUAR el resultado real de una llamada "completed":
+    //    - 0 palabras (nadie habló) → NO contestada
+    //    - < 10 palabras (buzón/contestadora) → buzón, SIN análisis IA
+    //    - ≥ 10 palabras (conversación real) → efectiva + análisis IA + nota en GHL
     if (finalizada && tipo_evento.startsWith("efectiva")) {
-      const transcript = await getCallTranscript(locationId, callSid, token);
-      if (transcript) {
+      const { formatted: transcript, wordCount } = await getCallTranscript(locationId, callSid, token);
+
+      if (wordCount === 0) {
+        await pgPool.query(
+          `UPDATE log_llamadas SET tipo_evento = 'no_contesto', estado_resultado = 'sin_conversacion' WHERE id_cuenta = $1 AND call_sid = $2`,
+          [idCuenta, callSid],
+        );
+        console.info(`[Marketplace/Call] call=${callSid} 0 palabras (nadie habló) → no_contesto`);
+      } else if (wordCount < 10) {
+        await pgPool.query(
+          `UPDATE log_llamadas SET tipo_evento = 'buzon', estado_resultado = 'buzon_voz', transcripcion = $3 WHERE id_cuenta = $1 AND call_sid = $2`,
+          [idCuenta, callSid, transcript],
+        );
+        console.info(`[Marketplace/Call] call=${callSid} ${wordCount} palabras → buzón/contestadora (sin IA)`);
+      } else {
         const acc = await getAccountFullByLocationId(locationId);
         const promptVentas = acc?.prompt_ventas ?? null;
         const promptLlamadas = acc?.prompt_llamadas ?? null;
@@ -355,13 +376,9 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
             [idRegistro, transcript, analysis, objeciones ? JSON.stringify(objeciones) : null],
           );
         }
-
-        // Nota en GHL: análisis IA + transcripción
         const nota = `📞 Llamada — Análisis IA\n\n${analysis ?? "(sin análisis)"}\n\n———\n📝 Transcripción:\n${transcript}`;
         await addContactNote(contactId, token, nota).catch(() => {});
-        console.info(`[Marketplace/Call] transcript+IA guardados y nota escrita para contacto=${contactId}`);
-      } else {
-        console.info(`[Marketplace/Call] sin transcript disponible aún para call=${callSid}`);
+        console.info(`[Marketplace/Call] call=${callSid} ${wordCount} palabras → efectiva + IA + nota`);
       }
     }
   } catch (err) {
