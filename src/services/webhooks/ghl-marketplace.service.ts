@@ -16,6 +16,8 @@
  *  - Appointment*      → sincroniza citas (fecha/hora, owner y estado_cita:
  *                        confirmada/cancelada/reagendada) en agendas; Fathom
  *                        luego sobreescribe el resultado de la reunión.
+ *  - In/OutboundMessage→ mensajes CALL → pipeline de llamadas; el resto
+ *                        (Custom/SMS/WhatsApp/IG/FB…) → pipeline de chats.
  *
  * Dos etiquetas de descarte (case-insensitive), con semántica distinta:
  *  - "no_trackearlead" → NO se trackea: se oculta del dashboard
@@ -40,6 +42,8 @@ import {
 } from "../ghl-api.service.js";
 import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import { generateLlamadaAnalysisText, extractLlamadaObjections } from "../ai/call-analysis.service.js";
+import { processChatWebhook } from "./chat.service.js";
+import type { ChatWebhookBody } from "../../schemas/webhooks/chat.schema.js";
 
 const TAG_EN_PROGRESO = "llamada-en-progreso";
 
@@ -700,10 +704,21 @@ export async function handleMarketplaceEvent(
       await handleContactUpdate(b);
       break;
     case "OutboundMessage":
-    case "InboundMessage":
-      // Las llamadas telefónicas llegan como mensajes de tipo CALL.
-      await handleCallEvent(b);
+    case "InboundMessage": {
+      // Las llamadas llegan como mensajes CALL; el resto (Custom/SMS/WhatsApp/
+      // IG/FB/etc.) son mensajes de chat → van al pipeline de chats.
+      const mt = (b.messageType ?? "").toString().toUpperCase();
+      if (mt === "CALL") {
+        await handleCallEvent(b);
+      } else if (b.locationId) {
+        const raw = (body ?? {}) as Record<string, unknown>;
+        // processChatWebhook deduplica por `id` (messageId); el marketplace
+        // manda `messageId`, así que lo mapeamos a `id`.
+        const chatBody = { ...raw, id: raw.id ?? raw.messageId } as unknown as ChatWebhookBody;
+        await processChatWebhook(chatBody, b.locationId);
+      }
       break;
+    }
     case "AppointmentCreate":
     case "AppointmentUpdate":
     case "AppointmentDelete":
