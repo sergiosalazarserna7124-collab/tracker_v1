@@ -740,6 +740,64 @@ async function maybeTranscribeAudioMessage(
   }
 }
 
+// ─── Oportunidades (OpportunityCreate/Update/StatusUpdate/Delete) ─────────────
+
+interface GhlOpportunityPayload {
+  id?: string;
+  contactId?: string;
+  pipelineId?: string;
+  pipelineStageId?: string;
+  name?: string;
+  status?: string;
+  monetaryValue?: number;
+  dateAdded?: string;
+  dateUpdated?: string;
+  locationId?: string;
+}
+interface GhlOpportunityEvent extends GhlOpportunityPayload {
+  opportunity?: GhlOpportunityPayload;
+}
+
+/**
+ * Ingesta de oportunidades de GHL → tabla `oportunidades` (upsert por
+ * id_cuenta + ghl_opportunity_id). Guarda contacto, pipeline, stage, status,
+ * valor y fecha de creación, para poder contar "oportunidades creadas".
+ */
+async function handleOpportunity(eventType: string, body: GhlOpportunityEvent): Promise<void> {
+  const opp = body.opportunity ?? body; // GHL manda plano o anidado bajo `opportunity`
+  const locationId = body.locationId ?? opp.locationId;
+  const oppId = opp.id;
+  if (!locationId || !oppId) return;
+
+  const account = await getAccountByLocationId(locationId);
+  if (!account) return;
+  const idCuenta = account.id_cuenta;
+
+  const isDelete = eventType === "OpportunityDelete";
+  const status = isDelete ? "deleted" : (opp.status ?? null);
+  const monetary = typeof opp.monetaryValue === "number" ? opp.monetaryValue : null;
+  const fechaCreada = opp.dateAdded ? new Date(opp.dateAdded) : new Date();
+  const fechaActualizada = opp.dateUpdated ? new Date(opp.dateUpdated) : new Date();
+
+  await pgPool.query(
+    `INSERT INTO oportunidades
+       (id_cuenta, ghl_opportunity_id, ghl_contact_id, pipeline_id, pipeline_stage_id,
+        nombre, status, monetary_value, fecha_creada, fecha_actualizada)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ON CONFLICT (id_cuenta, ghl_opportunity_id) DO UPDATE SET
+       ghl_contact_id    = COALESCE(EXCLUDED.ghl_contact_id, oportunidades.ghl_contact_id),
+       pipeline_id       = COALESCE(EXCLUDED.pipeline_id, oportunidades.pipeline_id),
+       pipeline_stage_id = COALESCE(EXCLUDED.pipeline_stage_id, oportunidades.pipeline_stage_id),
+       nombre            = COALESCE(EXCLUDED.nombre, oportunidades.nombre),
+       status            = EXCLUDED.status,
+       monetary_value    = COALESCE(EXCLUDED.monetary_value, oportunidades.monetary_value),
+       fecha_actualizada = EXCLUDED.fecha_actualizada`,
+    [idCuenta, oppId, opp.contactId ?? null, opp.pipelineId ?? null, opp.pipelineStageId ?? null,
+     opp.name ?? null, status, monetary, fechaCreada, fechaActualizada],
+  );
+  console.info(`[Marketplace/Opportunity] ${eventType} opp=${oppId} contacto=${opp.contactId} status=${status}`);
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 export async function handleMarketplaceEvent(
@@ -779,6 +837,12 @@ export async function handleMarketplaceEvent(
     case "AppointmentUpdate":
     case "AppointmentDelete":
       await handleAppointment(eventType, (body ?? {}) as GhlAppointmentEvent);
+      break;
+    case "OpportunityCreate":
+    case "OpportunityUpdate":
+    case "OpportunityStatusUpdate":
+    case "OpportunityDelete":
+      await handleOpportunity(eventType, (body ?? {}) as GhlOpportunityEvent);
       break;
     default:
       // Otros eventos: por ahora solo shadow. Se habilitarán en fases siguientes.
