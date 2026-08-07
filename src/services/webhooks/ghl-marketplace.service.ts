@@ -13,6 +13,9 @@
  *                        el lead como excluido/incluido de métricas.
  *  - ContactUpdate     → sincroniza los datos del contacto (nombre, email,
  *                        teléfono, usuario asignado) hacia el dashboard.
+ *  - Appointment*      → sincroniza citas (fecha/hora, owner y estado_cita:
+ *                        confirmada/cancelada/reagendada) en agendas; Fathom
+ *                        luego sobreescribe el resultado de la reunión.
  *
  * Dos etiquetas de descarte (case-insensitive), con semántica distinta:
  *  - "no_trackearlead" → NO se trackea: se oculta del dashboard
@@ -518,6 +521,142 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
   }
 }
 
+// ─── Citas (AppointmentCreate / AppointmentUpdate / AppointmentDelete) ────────
+
+interface GhlAppointmentPayload {
+  id?: string;
+  contactId?: string;
+  startTime?: string;
+  endTime?: string;
+  assignedUserId?: string;
+  appointmentStatus?: string;
+  title?: string;
+  calendarId?: string;
+  dateAdded?: string;
+  dateUpdated?: string;
+}
+interface GhlAppointmentEvent {
+  locationId?: string;
+  appointment?: GhlAppointmentPayload;
+}
+
+/**
+ * Mapea el estado de agendamiento de GHL → estado_cita del dashboard.
+ * `isReagenda` = cita existente cuyo horario (startTime) cambió sin cancelarse.
+ */
+function mapAppointmentEstado(status: string | undefined, isReagenda: boolean): string {
+  const s = (status ?? "").toLowerCase().trim();
+  if (s === "cancelled" || s === "canceled") return "cancelada";
+  if (s === "noshow" || s === "no-show" || s === "no_show") return "no_show";
+  if (s === "showed") return "asistida";
+  if (isReagenda) return "reagendada";
+  if (s === "confirmed") return "confirmada";
+  return "confirmada"; // "new"/agendada → confirmada por defecto
+}
+
+/**
+ * Sincroniza una cita de GHL hacia resumenes_diarios_agendas.
+ *  - fecha_reunion = startTime (fecha + hora de la cita)
+ *  - closer        = owner (assignedUserId resuelto a email/nombre)
+ *  - estado_cita   = confirmada/cancelada/reagendada/no_show/asistida
+ *  - categoria     = se mantiene compatible con el pipeline: 'cancelada'/'no_show'
+ *                    para el dashboard, y 'PDTE' mientras la reunión no ocurre
+ *                    (así asistencia y Fathom pueden actualizarla). NUNCA pisa un
+ *                    resultado ya puesto por Fathom (fathom_recording_id != null),
+ *                    salvo cancelación.
+ * Match por ghl_appointment_id → detecta reagendas y evita duplicar.
+ */
+async function handleAppointment(eventType: string, body: GhlAppointmentEvent): Promise<void> {
+  const locationId = body.locationId;
+  const appt = body.appointment;
+  if (!locationId || !appt?.id) return;
+
+  const account = await getAccountByLocationId(locationId);
+  if (!account) return;
+  const idCuenta = account.id_cuenta;
+
+  const apptId = appt.id;
+  const contactId = appt.contactId ?? null;
+  const startTime = appt.startTime ? new Date(appt.startTime) : null;
+  const isDelete = eventType === "AppointmentDelete";
+  const isCancel = isDelete || (appt.appointmentStatus ?? "").toLowerCase().includes("cancel");
+
+  // Owner de la cita → email/nombre (best-effort).
+  let closer: string | null = null;
+  if (appt.assignedUserId) {
+    try {
+      const token = await getAccessToken(locationId);
+      if (token) {
+        const user = await getGhlUser(appt.assignedUserId, token);
+        closer = user?.email ?? user?.name ?? null;
+      }
+    } catch (e) {
+      console.warn(`[Marketplace/Appointment] no se pudo resolver owner ${appt.assignedUserId}:`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  // Buscar la cita por su id (para actualizar la correcta y detectar reagenda).
+  const { rows: existRows } = await pgPool.query<{
+    id_registro_agenda: number; fecha_reunion: Date | null; categoria: string | null; fathom_recording_id: string | null;
+  }>(
+    `SELECT id_registro_agenda, fecha_reunion, categoria, fathom_recording_id
+     FROM resumenes_diarios_agendas
+     WHERE id_cuenta = $1 AND ghl_appointment_id = $2 LIMIT 1`,
+    [idCuenta, apptId],
+  );
+  const existing = existRows[0];
+
+  const isReagenda = !!existing && !isCancel && !!startTime && !!existing.fecha_reunion &&
+    existing.fecha_reunion.getTime() !== startTime.getTime();
+  const estadoCita = isDelete ? "cancelada" : mapAppointmentEstado(appt.appointmentStatus, isReagenda);
+
+  // categoria: preservar resultado de Fathom; cancelar/no-show sí manda al dashboard.
+  const fathomYaProceso = !!existing?.fathom_recording_id;
+  let nuevaCategoria: string | null;
+  if (isCancel) nuevaCategoria = "cancelada";
+  else if (estadoCita === "no_show") nuevaCategoria = "no_show";
+  else if (estadoCita === "asistida") nuevaCategoria = "asistida";
+  else if (fathomYaProceso) nuevaCategoria = null;             // no pisar a Fathom
+  else nuevaCategoria = existing?.categoria ?? "PDTE";         // pendiente hasta la reunión
+
+  if (existing) {
+    await pgPool.query(
+      `UPDATE resumenes_diarios_agendas SET
+         estado_cita    = $3,
+         fecha_reunion  = COALESCE($4, fecha_reunion),
+         closer         = COALESCE($5, closer),
+         ghl_contact_id = COALESCE($6, ghl_contact_id),
+         categoria      = COALESCE($7, categoria)
+       WHERE id_registro_agenda = $1 AND id_cuenta = $2`,
+      [existing.id_registro_agenda, idCuenta, estadoCita, startTime, closer, contactId, nuevaCategoria],
+    );
+    console.info(`[Marketplace/Appointment] ${eventType} appt=${apptId} → estado_cita=${estadoCita} categoria=${nuevaCategoria ?? "(fathom)"}`);
+    return;
+  }
+
+  // No existe → INSERT. Nombre/email del lead desde registros_de_llamada.
+  let nombreLead: string | null = null;
+  let emailLead: string | null = null;
+  if (contactId) {
+    const { rows: leadRows } = await pgPool.query<{ nombre_lead: string | null; mail_lead: string | null }>(
+      `SELECT nombre_lead, mail_lead FROM registros_de_llamada
+       WHERE id_cuenta = $1 AND ghl_contact_id = $2 ORDER BY id_registro DESC LIMIT 1`,
+      [idCuenta, contactId],
+    );
+    nombreLead = leadRows[0]?.nombre_lead ?? appt.title ?? null;
+    emailLead = leadRows[0]?.mail_lead ?? null;
+  }
+  const fechaCreada = appt.dateAdded ? new Date(appt.dateAdded) : new Date();
+  await pgPool.query(
+    `INSERT INTO resumenes_diarios_agendas
+       (id_cuenta, ghl_contact_id, ghl_appointment_id, fecha, fecha_reunion,
+        categoria, estado_cita, closer, nombre_de_lead, email_lead, origen)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'ghl_appointment')`,
+    [idCuenta, contactId, apptId, fechaCreada, startTime, nuevaCategoria ?? "PDTE", estadoCita, closer, nombreLead, emailLead],
+  );
+  console.info(`[Marketplace/Appointment] ${eventType} appt=${apptId} contacto=${contactId} → NUEVA agenda estado_cita=${estadoCita} reunion=${startTime?.toISOString?.() ?? "-"}`);
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 export async function handleMarketplaceEvent(
@@ -539,6 +678,11 @@ export async function handleMarketplaceEvent(
     case "InboundMessage":
       // Las llamadas telefónicas llegan como mensajes de tipo CALL.
       await handleCallEvent(b);
+      break;
+    case "AppointmentCreate":
+    case "AppointmentUpdate":
+    case "AppointmentDelete":
+      await handleAppointment(eventType, (body ?? {}) as GhlAppointmentEvent);
       break;
     default:
       // Otros eventos: por ahora solo shadow. Se habilitarán en fases siguientes.
