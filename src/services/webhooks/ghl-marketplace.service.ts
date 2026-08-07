@@ -44,6 +44,7 @@ import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import { generateLlamadaAnalysisText, extractLlamadaObjections } from "../ai/call-analysis.service.js";
 import { processChatWebhook } from "./chat.service.js";
 import type { ChatWebhookBody } from "../../schemas/webhooks/chat.schema.js";
+import { transcribeAudio } from "../ai/call-classification.service.js";
 
 const TAG_EN_PROGRESO = "llamada-en-progreso";
 
@@ -686,6 +687,59 @@ async function handleAppointment(eventType: string, body: GhlAppointmentEvent): 
   console.info(`[Marketplace/Appointment] ${eventType} appt=${apptId} contacto=${contactId} → NUEVA agenda estado_cita=${estadoCita} reunion=${startTime?.toISOString?.() ?? "-"}`);
 }
 
+// ─── Audio (notas de voz) → transcripción con Whisper ────────────────────────
+
+const AUDIO_EXT = /\.(mp3|ogg|oga|m4a|wav|aac|amr|mp4|webm|opus)(\?|$)/i;
+
+function extractAttachmentUrls(attachments: unknown): string[] {
+  if (!Array.isArray(attachments)) return [];
+  const urls: string[] = [];
+  for (const a of attachments) {
+    if (typeof a === "string") urls.push(a);
+    else if (a && typeof a === "object") {
+      const o = a as Record<string, unknown>;
+      const u = o.url ?? o.fileUrl ?? o.link;
+      if (typeof u === "string") urls.push(u);
+    }
+  }
+  return urls;
+}
+
+/**
+ * Si el mensaje de chat es un AUDIO (nota de voz), descarga el archivo y lo
+ * transcribe con Whisper (OpenAI). Devuelve el body con el texto transcrito
+ * puesto como `body` (y contentType text/plain, attachments vacío) para que
+ * processChatWebhook lo procese como un mensaje de texto normal.
+ * Si no es audio, devuelve el body sin cambios.
+ */
+async function maybeTranscribeAudioMessage(
+  raw: Record<string, unknown>,
+  locationId: string,
+): Promise<Record<string, unknown>> {
+  const contentType = String(raw.contentType ?? "").toLowerCase();
+  const urls = extractAttachmentUrls(raw.attachments);
+  const audioUrl =
+    urls.find((u) => AUDIO_EXT.test(u)) ??
+    (contentType.startsWith("audio/") ? urls[0] : undefined);
+  if (!audioUrl) return raw;
+
+  try {
+    const acc = await getAccountFullByLocationId(locationId);
+    const openaiKey = acc?.openai_api_key ?? null;
+    const idCuenta = acc?.id_cuenta ?? null;
+    const res = await fetch(audioUrl);
+    if (!res.ok) throw new Error(`descarga audio HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const texto = (await transcribeAudio(buf, openaiKey, idCuenta)).trim();
+    console.info(`[Marketplace/Chat] audio transcrito (${buf.length} bytes) → "${texto.slice(0, 60)}…"`);
+    return { ...raw, body: `🎤 Audio transcrito:\n${texto || "(sin texto)"}`, contentType: "text/plain", attachments: [] };
+  } catch (e) {
+    console.warn(`[Marketplace/Chat] no se pudo transcribir audio:`, e instanceof Error ? e.message : e);
+    // Igual registrar el mensaje para no perder la conversación.
+    return { ...raw, body: "🎤 Audio (no se pudo transcribir)", contentType: "text/plain", attachments: [] };
+  }
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 export async function handleMarketplaceEvent(
@@ -714,8 +768,10 @@ export async function handleMarketplaceEvent(
         const raw = (body ?? {}) as Record<string, unknown>;
         // processChatWebhook deduplica por `id` (messageId); el marketplace
         // manda `messageId`, así que lo mapeamos a `id`.
-        const chatBody = { ...raw, id: raw.id ?? raw.messageId } as unknown as ChatWebhookBody;
-        await processChatWebhook(chatBody, b.locationId);
+        let chatRaw: Record<string, unknown> = { ...raw, id: raw.id ?? raw.messageId };
+        // Si es una nota de voz → transcribir con Whisper y usar el texto.
+        chatRaw = await maybeTranscribeAudioMessage(chatRaw, b.locationId);
+        await processChatWebhook(chatRaw as unknown as ChatWebhookBody, b.locationId);
       }
       break;
     }
