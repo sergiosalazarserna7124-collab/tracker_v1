@@ -90,7 +90,7 @@ async function getSingleLeadTimeline(
         r.ghl_contact_id,
         r.mail_lead
       FROM registros_de_llamada r
-      WHERE r.id_cuenta = $1::text
+      WHERE r.id_cuenta = $1::int
         AND r.id_registro = $2
         AND r.excluido_metricas = false
         ${closerFilter}
@@ -219,7 +219,7 @@ async function getAsesorStats(
         r.fecha_evento AS t_llegada,
         COALESCE(r.nombre_closer, r.closer_mail, 'Sin asesor') AS asesor
       FROM registros_de_llamada r
-      WHERE r.id_cuenta = $1::text
+      WHERE r.id_cuenta = $1::int
         AND r.excluido_metricas = false
         AND r.fecha_evento IS NOT NULL
         ${dateFilter}
@@ -306,7 +306,7 @@ async function getAsesorStats(
         r.ghl_contact_id,
         r.mail_lead
       FROM registros_de_llamada r
-      WHERE r.id_cuenta = $1::text
+      WHERE r.id_cuenta = $1::int
         AND r.excluido_metricas = false
         AND r.fecha_evento IS NOT NULL
         ${dateFilter}
