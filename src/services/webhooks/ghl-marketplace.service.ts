@@ -437,18 +437,18 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
   }
 
   // El lead sale de "pendientes por llamar" solo si hubo un intento que CONECTÓ.
-  // Cualquier llamada FINALIZADA (contestada, no contestada, buzón o fallida) es
-  // un intento real: marca fecha_primera_llamada (base del speed to lead) y saca
-  // el lead de "pendientes por llamar". Solo se excluyen las que siguen en curso.
-  if (finalizada) {
-    await pgPool.query(
-      `UPDATE registros_de_llamada
-         SET fecha_primera_llamada = COALESCE(fecha_primera_llamada, $3),
-             estado = CASE WHEN UPPER(TRIM(estado)) = 'PDTE' THEN 'seguimiento' ELSE estado END
-       WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
-      [idCuenta, contactId, ts],
-    );
-  }
+  // CUALQUIER evento de llamada (contestada, no contestada, buzón, fallida, o
+  // incluso "en curso") marca el PRIMER intento: setea fecha_primera_llamada
+  // (base del speed to lead) y saca el lead de "pendientes por llamar". No depende
+  // de cómo GHL clasifique el status → sin margen de error. COALESCE mantiene la
+  // primera llamada; el estado solo avanza si estaba en 'pdte'.
+  await pgPool.query(
+    `UPDATE registros_de_llamada
+       SET fecha_primera_llamada = COALESCE(fecha_primera_llamada, $3),
+           estado = CASE WHEN UPPER(TRIM(estado)) = 'PDTE' THEN 'seguimiento' ELSE estado END
+     WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
+    [idCuenta, contactId, ts],
+  );
 
   console.info(
     `[Marketplace/Call] contacto=${contactId} status=${body.status ?? body.callStatus ?? "null"} → ${tipo_evento}/${estado_resultado} dur=${duracion ?? "-"}s finalizada=${finalizada}`,
