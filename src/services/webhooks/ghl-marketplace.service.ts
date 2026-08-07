@@ -437,8 +437,10 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
   }
 
   // El lead sale de "pendientes por llamar" solo si hubo un intento que CONECTÓ.
-  // Una llamada FALLIDA (no conectó) NO cuenta como llamada → el lead sigue pendiente.
-  if (finalizada && tipo_evento !== "fallida") {
+  // Cualquier llamada FINALIZADA (contestada, no contestada, buzón o fallida) es
+  // un intento real: marca fecha_primera_llamada (base del speed to lead) y saca
+  // el lead de "pendientes por llamar". Solo se excluyen las que siguen en curso.
+  if (finalizada) {
     await pgPool.query(
       `UPDATE registros_de_llamada
          SET fecha_primera_llamada = COALESCE(fecha_primera_llamada, $3),
