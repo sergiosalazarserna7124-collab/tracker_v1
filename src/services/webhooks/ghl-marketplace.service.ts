@@ -43,6 +43,30 @@ function fullName(b: GhlContactEvent): string | null {
   return n || null;
 }
 
+/**
+ * Registra el contacto como lead nuevo en registros_de_llamada si aún no existe.
+ * Devuelve true si lo creó. Dedup por ghl_contact_id.
+ */
+async function registerNewLead(idCuenta: number, body: GhlContactEvent): Promise<boolean> {
+  const contactId = body.id;
+  if (!contactId) return false;
+
+  const { rows } = await pgPool.query(
+    `SELECT id_registro FROM registros_de_llamada WHERE id_cuenta = $1 AND ghl_contact_id = $2 LIMIT 1`,
+    [idCuenta, contactId],
+  );
+  if (rows.length > 0) return false;
+
+  const fecha = body.dateAdded ? new Date(body.dateAdded) : new Date();
+  await pgPool.query(
+    `INSERT INTO registros_de_llamada
+       (fecha_evento, id_cuenta, nombre_lead, estado, mail_lead, phone_raw_format, ghl_contact_id, excluido_metricas)
+     VALUES ($1, $2, $3, 'pdte', $4, $5, $6, false)`,
+    [fecha, idCuenta, fullName(body), body.email ?? null, body.phone ?? null, contactId],
+  );
+  return true;
+}
+
 // ─── ContactCreate → lead nuevo ───────────────────────────────────────────────
 
 async function handleContactCreate(body: GhlContactEvent): Promise<void> {
@@ -63,24 +87,10 @@ async function handleContactCreate(body: GhlContactEvent): Promise<void> {
     return;
   }
 
-  // Dedup: si ya existe un registro para este contacto, no duplicar
-  const { rows: exists } = await pgPool.query(
-    `SELECT id_registro FROM registros_de_llamada WHERE id_cuenta = $1 AND ghl_contact_id = $2 LIMIT 1`,
-    [idCuenta, contactId],
+  const created = await registerNewLead(idCuenta, body);
+  console.info(
+    `[Marketplace/ContactCreate] Contacto=${contactId} cuenta=${idCuenta} → ${created ? "lead nuevo registrado" : "ya existía (skip)"}`,
   );
-  if (exists.length > 0) {
-    console.info(`[Marketplace/ContactCreate] Contacto ${contactId} ya registrado → skip`);
-    return;
-  }
-
-  const fecha = body.dateAdded ? new Date(body.dateAdded) : new Date();
-  await pgPool.query(
-    `INSERT INTO registros_de_llamada
-       (fecha_evento, id_cuenta, nombre_lead, estado, mail_lead, phone_raw_format, ghl_contact_id, excluido_metricas)
-     VALUES ($1, $2, $3, 'pdte', $4, $5, $6, false)`,
-    [fecha, idCuenta, fullName(body), body.email ?? null, body.phone ?? null, contactId],
-  );
-  console.info(`[Marketplace/ContactCreate] Lead nuevo registrado contacto=${contactId} cuenta=${idCuenta}`);
 }
 
 // ─── ContactTagUpdate → aplicar/quitar descarte ───────────────────────────────
@@ -117,10 +127,19 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
      WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
     [idCuenta, contactId, discarded],
   );
+
+  // Reactivación total: si se QUITÓ la etiqueta y el contacto no tiene registro
+  // (p.ej. se creó ya descartado, o se limpió), crearlo ahora → "sin etiqueta = trackeado".
+  let creado = false;
+  if (!discarded) {
+    creado = await registerNewLead(idCuenta, body);
+  }
+
   const total = (resLlamadas.rowCount ?? 0) + (resChats.rowCount ?? 0) + (resAgendas.rowCount ?? 0);
-  if (total > 0) {
+  if (total > 0 || creado) {
     console.info(
-      `[Marketplace/ContactTagUpdate] Contacto=${contactId} → descartado=${discarded} (llamadas=${resLlamadas.rowCount}, chats=${resChats.rowCount}, agendas=${resAgendas.rowCount})`,
+      `[Marketplace/ContactTagUpdate] Contacto=${contactId} → descartado=${discarded} ` +
+      `(llamadas=${resLlamadas.rowCount}, chats=${resChats.rowCount}, agendas=${resAgendas.rowCount}${creado ? ", lead creado" : ""})`,
     );
   }
 }
