@@ -150,6 +150,7 @@ interface GhlCallEvent extends GhlContactEvent {
   contactId?: string;
   messageId?: string;
   messageType?: string;
+  status?: string | null;
   callStatus?: string | null;
   callDuration?: number | null;
   direction?: string;
@@ -160,24 +161,30 @@ interface GhlCallEvent extends GhlContactEvent {
 }
 
 /**
- * Mapea el callStatus de GHL/Twilio a los valores que entiende el dashboard.
- *  - contestada     → tipo_evento "efectiva_ghl" (esLlamadaContestada: startsWith "efectiva_")
+ * Mapea el estado de la llamada a los valores que entiende el dashboard.
+ * GHL manda el resultado REAL en `status` (nivel superior); `callStatus` es
+ * poco confiable (una llamada fallida puede traer callStatus="ringing").
+ *  - contestada     → "efectiva_ghl" (esLlamadaContestada: startsWith "efectiva_")
  *  - no contestada  → "no_contesto" (no-answer / busy / failed / canceled)
- *  - en progreso    → "en_progreso" (ringing / in-progress / queued / initiated)
+ *  - en progreso    → "en_progreso" (in-progress / queued / initiated)
  */
-function mapCallStatus(callStatus: string | null | undefined): {
+function mapCallOutcome(status: string | null | undefined, callStatus: string | null | undefined): {
   tipo_evento: string;
   estado_resultado: string;
   finalizada: boolean;
 } {
-  const s = (callStatus ?? "").toLowerCase().trim();
+  const s = (status ?? callStatus ?? "").toLowerCase().trim();
   if (s === "completed") return { tipo_evento: "efectiva_ghl", estado_resultado: "completed", finalizada: true };
   if (s === "no-answer" || s === "noanswer") return { tipo_evento: "no_contesto", estado_resultado: "no-answer", finalizada: true };
   if (s === "busy") return { tipo_evento: "no_contesto", estado_resultado: "busy", finalizada: true };
   if (s === "failed") return { tipo_evento: "no_contesto", estado_resultado: "failed", finalizada: true };
   if (s === "canceled" || s === "cancelled") return { tipo_evento: "no_contesto", estado_resultado: "canceled", finalizada: true };
-  // Estados en vivo (o desconocido/null) → la llamada aún no finalizó
-  return { tipo_evento: "en_progreso", estado_resultado: s || "desconocido", finalizada: false };
+  // Estados realmente en vivo (llamada larga en curso) → aún no finalizó
+  if (s === "in-progress" || s === "ringing" || s === "queued" || s === "initiated") {
+    return { tipo_evento: "en_progreso", estado_resultado: s, finalizada: false };
+  }
+  // Desconocido/vacío → no contestada (fue un intento que no conectó)
+  return { tipo_evento: "no_contesto", estado_resultado: s || "desconocido", finalizada: true };
 }
 
 async function handleCallEvent(body: GhlCallEvent): Promise<void> {
@@ -199,7 +206,7 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
   );
   const idRegistro = leadRows[0]?.id_registro ?? null;
 
-  const { tipo_evento, estado_resultado, finalizada } = mapCallStatus(body.callStatus);
+  const { tipo_evento, estado_resultado, finalizada } = mapCallOutcome(body.status, body.callStatus);
   const ts = body.dateAdded ? new Date(body.dateAdded) : (body.timestamp ? new Date(body.timestamp) : new Date());
   const phone = body.direction === "inbound" ? (body.from ?? null) : (body.to ?? null);
   const duracion = typeof body.callDuration === "number" ? body.callDuration : null;
@@ -237,7 +244,7 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
   }
 
   console.info(
-    `[Marketplace/Call] contacto=${contactId} status=${body.callStatus ?? "null"} → ${tipo_evento}/${estado_resultado} dur=${duracion ?? "-"}s finalizada=${finalizada}`,
+    `[Marketplace/Call] contacto=${contactId} status=${body.status ?? body.callStatus ?? "null"} → ${tipo_evento}/${estado_resultado} dur=${duracion ?? "-"}s finalizada=${finalizada}`,
   );
 }
 
