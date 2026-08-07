@@ -144,19 +144,116 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
   }
 }
 
+// ─── Llamadas (mensajes de tipo CALL) ────────────────────────────────────────
+
+interface GhlCallEvent extends GhlContactEvent {
+  contactId?: string;
+  messageId?: string;
+  messageType?: string;
+  callStatus?: string | null;
+  callDuration?: number | null;
+  direction?: string;
+  userId?: string | null;
+  to?: string;
+  from?: string;
+  timestamp?: string;
+}
+
+/**
+ * Mapea el callStatus de GHL/Twilio a los valores que entiende el dashboard.
+ *  - contestada     → tipo_evento "efectiva_ghl" (esLlamadaContestada: startsWith "efectiva_")
+ *  - no contestada  → "no_contesto" (no-answer / busy / failed / canceled)
+ *  - en progreso    → "en_progreso" (ringing / in-progress / queued / initiated)
+ */
+function mapCallStatus(callStatus: string | null | undefined): {
+  tipo_evento: string;
+  estado_resultado: string;
+  finalizada: boolean;
+} {
+  const s = (callStatus ?? "").toLowerCase().trim();
+  if (s === "completed") return { tipo_evento: "efectiva_ghl", estado_resultado: "completed", finalizada: true };
+  if (s === "no-answer" || s === "noanswer") return { tipo_evento: "no_contesto", estado_resultado: "no-answer", finalizada: true };
+  if (s === "busy") return { tipo_evento: "no_contesto", estado_resultado: "busy", finalizada: true };
+  if (s === "failed") return { tipo_evento: "no_contesto", estado_resultado: "failed", finalizada: true };
+  if (s === "canceled" || s === "cancelled") return { tipo_evento: "no_contesto", estado_resultado: "canceled", finalizada: true };
+  // Estados en vivo (o desconocido/null) → la llamada aún no finalizó
+  return { tipo_evento: "en_progreso", estado_resultado: s || "desconocido", finalizada: false };
+}
+
+async function handleCallEvent(body: GhlCallEvent): Promise<void> {
+  if ((body.messageType ?? "").toUpperCase() !== "CALL") return; // solo llamadas, no SMS/otros
+  const locationId = body.locationId;
+  const contactId = body.contactId ?? body.id;
+  const callSid = body.messageId;
+  if (!locationId || !contactId || !callSid) return;
+
+  const account = await getAccountByLocationId(locationId);
+  if (!account) return;
+  const idCuenta = account.id_cuenta;
+
+  // Asegurar que el lead exista (para adjuntar la llamada).
+  await registerNewLead(idCuenta, { ...body, id: contactId });
+
+  const { tipo_evento, estado_resultado, finalizada } = mapCallStatus(body.callStatus);
+  const ts = body.dateAdded ? new Date(body.dateAdded) : (body.timestamp ? new Date(body.timestamp) : new Date());
+  const phone = body.direction === "inbound" ? (body.from ?? null) : (body.to ?? null);
+  const duracion = typeof body.callDuration === "number" ? body.callDuration : null;
+
+  // Upsert por call_sid (messageId): si GHL manda ringing → completed con el mismo id,
+  // se actualiza al estado final; si es una llamada nueva, se inserta.
+  const { rows: existing } = await pgPool.query(
+    `SELECT id FROM log_llamadas WHERE id_cuenta = $1 AND call_sid = $2 LIMIT 1`,
+    [idCuenta, callSid],
+  );
+  if (existing.length > 0) {
+    await pgPool.query(
+      `UPDATE log_llamadas SET tipo_evento = $3, estado_resultado = $4, duracion_segundos = COALESCE($5, duracion_segundos), ts = $6
+       WHERE id_cuenta = $1 AND call_sid = $2`,
+      [idCuenta, callSid, tipo_evento, estado_resultado, duracion, ts],
+    );
+  } else {
+    await pgPool.query(
+      `INSERT INTO log_llamadas
+         (id_cuenta, contact_id_ghl, phone, tipo_evento, estado_resultado, call_sid, ts, duracion_segundos, id_user_ghl)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [idCuenta, contactId, phone, tipo_evento, estado_resultado, callSid, ts, duracion, body.userId ?? null],
+    );
+  }
+
+  // Si la llamada FINALIZÓ, marcar el primer contacto en el lead (sale de "pendientes por llamar").
+  if (finalizada) {
+    await pgPool.query(
+      `UPDATE registros_de_llamada
+         SET fecha_primera_llamada = COALESCE(fecha_primera_llamada, $3),
+             estado = CASE WHEN UPPER(TRIM(estado)) = 'PDTE' THEN 'seguimiento' ELSE estado END
+       WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
+      [idCuenta, contactId, ts],
+    );
+  }
+
+  console.info(
+    `[Marketplace/Call] contacto=${contactId} status=${body.callStatus ?? "null"} → ${tipo_evento}/${estado_resultado} dur=${duracion ?? "-"}s finalizada=${finalizada}`,
+  );
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 export async function handleMarketplaceEvent(
   eventType: string | null,
   body: unknown,
 ): Promise<void> {
-  const b = (body ?? {}) as GhlContactEvent;
+  const b = (body ?? {}) as GhlCallEvent;
   switch (eventType) {
     case "ContactCreate":
       await handleContactCreate(b);
       break;
     case "ContactTagUpdate":
       await handleContactTagUpdate(b);
+      break;
+    case "OutboundMessage":
+    case "InboundMessage":
+      // Las llamadas telefónicas llegan como mensajes de tipo CALL.
+      await handleCallEvent(b);
       break;
     default:
       // Otros eventos: por ahora solo shadow. Se habilitarán en fases siguientes.
