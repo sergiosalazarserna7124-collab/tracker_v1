@@ -96,22 +96,31 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
 
   const discarded = hasDiscardTag(body.tags);
   const calificacion = discarded ? "descartado" : null;
-  // Paridad con el descarte manual: setea excluido_metricas + calificacion_manual
-  // en registros_de_llamada Y chats_logs. Solo escribe en NUESTRA BD (sin bucle).
+
+  // Excluir/incluir el lead en TODOS los canales. Cada uno filtra por su bandera:
+  //  - llamadas (registros_de_llamada) → excluido_metricas
+  //  - chats (chats_logs) y videollamadas/citas (resumenes_diarios_agendas) → excluida_dashboard
+  // Reversible: al quitar la etiqueta se ponen en false/null y el lead reaparece.
+  // Solo escribe en NUESTRA BD (no llama a GHL) → sin riesgo de bucle.
   const resLlamadas = await pgPool.query(
     `UPDATE registros_de_llamada SET excluido_metricas = $3, calificacion_manual = $4
      WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
     [idCuenta, contactId, discarded, calificacion],
   );
   const resChats = await pgPool.query(
-    `UPDATE chats_logs SET excluido_metricas = $3, calificacion_manual = $4
+    `UPDATE chats_logs SET excluida_dashboard = $3, excluido_metricas = $3, calificacion_manual = $4
      WHERE id_cuenta = $1 AND id_lead = $2`,
     [idCuenta, contactId, discarded, calificacion],
   );
-  const total = (resLlamadas.rowCount ?? 0) + (resChats.rowCount ?? 0);
+  const resAgendas = await pgPool.query(
+    `UPDATE resumenes_diarios_agendas SET excluida_dashboard = $3
+     WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
+    [idCuenta, contactId, discarded],
+  );
+  const total = (resLlamadas.rowCount ?? 0) + (resChats.rowCount ?? 0) + (resAgendas.rowCount ?? 0);
   if (total > 0) {
     console.info(
-      `[Marketplace/ContactTagUpdate] Contacto=${contactId} → descartado=${discarded} (llamadas=${resLlamadas.rowCount}, chats=${resChats.rowCount})`,
+      `[Marketplace/ContactTagUpdate] Contacto=${contactId} → descartado=${discarded} (llamadas=${resLlamadas.rowCount}, chats=${resChats.rowCount}, agendas=${resAgendas.rowCount})`,
     );
   }
 }
