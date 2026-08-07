@@ -7,6 +7,7 @@ import { db } from "../../config/database.js";
 import { env } from "../../config/env.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenOk, retryPendingActions } from "../ghl-token-guard.service.js";
+import { ensureMetricsMenuLink } from "../ghl-menu.service.js";
 
 const GHL_TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
 const GHL_LOCATION_TOKEN_URL = "https://services.leadconnectorhq.com/oauth/locationToken";
@@ -164,6 +165,20 @@ async function provisionLocationToken(
     retryPendingActions(idCuenta, locTokenData.access_token).catch((err) =>
       console.error(`[GhlOAuth] Error reintentando pendientes cuenta=${idCuenta}:`, err),
     );
+
+    // Crear el menú "Métricas" en GHL (best-effort; requiere scope custom-menu-link.write)
+    try {
+      const { rows } = await db.query<{ subdominio: string | null }>(
+        `SELECT subdominio FROM cuentas WHERE id_cuenta = $1 LIMIT 1`,
+        [idCuenta],
+      );
+      const sub = rows[0]?.subdominio;
+      if (sub) {
+        await ensureMetricsMenuLink(locationId, sub, companyAccessToken);
+      }
+    } catch (err) {
+      console.error(`[GhlOAuth] No se pudo crear el menú de métricas para location=${locationId}:`, err);
+    }
   }
 }
 
