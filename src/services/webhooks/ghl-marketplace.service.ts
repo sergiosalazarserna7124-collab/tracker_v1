@@ -191,8 +191,13 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
   if (!account) return;
   const idCuenta = account.id_cuenta;
 
-  // Asegurar que el lead exista (para adjuntar la llamada).
+  // Asegurar que el lead exista y obtener su id_registro (para VINCULAR la llamada).
   await registerNewLead(idCuenta, { ...body, id: contactId });
+  const { rows: leadRows } = await pgPool.query<{ id_registro: number }>(
+    `SELECT id_registro FROM registros_de_llamada WHERE id_cuenta = $1 AND ghl_contact_id = $2 ORDER BY id_registro DESC LIMIT 1`,
+    [idCuenta, contactId],
+  );
+  const idRegistro = leadRows[0]?.id_registro ?? null;
 
   const { tipo_evento, estado_resultado, finalizada } = mapCallStatus(body.callStatus);
   const ts = body.dateAdded ? new Date(body.dateAdded) : (body.timestamp ? new Date(body.timestamp) : new Date());
@@ -214,9 +219,9 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
   } else {
     await pgPool.query(
       `INSERT INTO log_llamadas
-         (id_cuenta, contact_id_ghl, phone, tipo_evento, estado_resultado, call_sid, ts, duracion_segundos, id_user_ghl)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [idCuenta, contactId, phone, tipo_evento, estado_resultado, callSid, ts, duracion, body.userId ?? null],
+         (id_cuenta, id_registro, contact_id_ghl, phone, tipo_evento, estado_resultado, call_sid, ts, duracion_segundos, id_user_ghl)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [idCuenta, idRegistro, contactId, phone, tipo_evento, estado_resultado, callSid, ts, duracion, body.userId ?? null],
     );
   }
 
