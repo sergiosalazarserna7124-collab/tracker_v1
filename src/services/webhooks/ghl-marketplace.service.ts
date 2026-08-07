@@ -8,11 +8,21 @@
  * Canal habilitado: CONTACTOS.
  *  - ContactCreate     → registra un "lead nuevo" en registros_de_llamada
  *                        (arranca el cronómetro speed-to-lead), salvo que el
- *                        contacto tenga la etiqueta de descarte.
- *  - ContactTagUpdate  → si se le agrega/quita la etiqueta de descarte, marca
+ *                        contacto tenga la etiqueta de NO-TRACKEO.
+ *  - ContactTagUpdate  → si se le agrega/quita una etiqueta de descarte, marca
  *                        el lead como excluido/incluido de métricas.
+ *  - ContactUpdate     → sincroniza los datos del contacto (nombre, email,
+ *                        teléfono, usuario asignado) hacia el dashboard.
  *
- * Etiqueta de descarte: "no_trackearlead" (case-insensitive).
+ * Dos etiquetas de descarte (case-insensitive), con semántica distinta:
+ *  - "no_trackearlead" → NO se trackea: se oculta del dashboard
+ *                        (excluida_dashboard) y sale de métricas. Como si no
+ *                        existiera.
+ *  - "descartar-lead"  → se DESCARTA pero sigue VISIBLE: sale de las métricas
+ *                        globales (excluido_metricas) y queda marcado como
+ *                        'descartado' (calificacion_manual) para poder contarlo
+ *                        en la métrica de "leads descartados". No se oculta.
+ * Ambas son reversibles: al quitar la etiqueta el lead vuelve a métricas.
  */
 
 import { db as pgPool } from "../../config/database.js";
@@ -64,7 +74,11 @@ async function getCallTranscript(
   return { formatted: "", wordCount: 0 }; // no hubo conversación (o no hay transcript)
 }
 
+// Etiqueta de NO-TRACKEO: oculta del dashboard + fuera de métricas.
 const DISCARD_TAG = "no_trackearlead";
+// Etiqueta de DESCARTE: sigue visible, pero fuera de métricas globales y
+// marcado como 'descartado' (cuenta en la métrica de leads descartados).
+const DESCARTAR_TAG = "descartar-lead";
 
 interface GhlContactEvent {
   type?: string;
@@ -76,12 +90,17 @@ interface GhlContactEvent {
   email?: string;
   phone?: string;
   tags?: string[];
+  assignedTo?: string;
   dateAdded?: string;
   [k: string]: unknown;
 }
 
 function hasDiscardTag(tags?: string[]): boolean {
   return (tags ?? []).some((t) => typeof t === "string" && t.trim().toLowerCase() === DISCARD_TAG);
+}
+
+function hasDescartarTag(tags?: string[]): boolean {
+  return (tags ?? []).some((t) => typeof t === "string" && t.trim().toLowerCase() === DESCARTAR_TAG);
 }
 
 function fullName(b: GhlContactEvent): string | null {
@@ -139,13 +158,26 @@ async function handleContactCreate(body: GhlContactEvent): Promise<void> {
   }
   const idCuenta = account.id_cuenta;
 
-  // Etiqueta de descarte → no se trackea
+  // Etiqueta de NO-TRACKEO → ni se registra (queda oculto)
   if (hasDiscardTag(body.tags)) {
     console.info(`[Marketplace/ContactCreate] Contacto ${contactId} con etiqueta "${DISCARD_TAG}" → no se trackea`);
     return;
   }
 
   const created = await registerNewLead(idCuenta, body);
+
+  // Etiqueta de DESCARTE → sí se registra (visible), pero marcado como
+  // descartado y fuera de métricas globales desde el nacimiento del lead.
+  if (created && hasDescartarTag(body.tags)) {
+    await pgPool.query(
+      `UPDATE registros_de_llamada SET excluido_metricas = true, calificacion_manual = 'descartado'
+       WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
+      [idCuenta, contactId],
+    );
+    console.info(`[Marketplace/ContactCreate] Contacto=${contactId} cuenta=${idCuenta} → lead registrado como DESCARTADO (visible)`);
+    return;
+  }
+
   console.info(
     `[Marketplace/ContactCreate] Contacto=${contactId} cuenta=${idCuenta} → ${created ? "lead nuevo registrado" : "ya existía (skip)"}`,
   );
@@ -162,42 +194,142 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
   if (!account) return;
   const idCuenta = account.id_cuenta;
 
-  const discarded = hasDiscardTag(body.tags);
-  const calificacion = discarded ? "descartado" : null;
+  // Dos etiquetas, semántica distinta:
+  //  - no_trackearlead → oculto del dashboard + fuera de métricas.
+  //  - descartar-lead  → fuera de métricas pero SIGUE VISIBLE (no se oculta).
+  const noTrackear = hasDiscardTag(body.tags);
+  const descartar = hasDescartarTag(body.tags);
+  const excluido = noTrackear || descartar;          // fuera de métricas en ambos casos
+  const oculto = noTrackear;                          // solo no-trackeo oculta del dashboard
+  const calificacion = excluido ? "descartado" : null;
 
   // Excluir/incluir el lead en TODOS los canales. Cada uno filtra por su bandera:
-  //  - llamadas (registros_de_llamada) → excluido_metricas
-  //  - chats (chats_logs) y videollamadas/citas (resumenes_diarios_agendas) → excluida_dashboard
-  // Reversible: al quitar la etiqueta se ponen en false/null y el lead reaparece.
+  //  - llamadas (registros_de_llamada) → excluido_metricas (esta tabla no se oculta)
+  //  - chats (chats_logs) → excluido_metricas + excluida_dashboard (solo si no-trackeo)
+  //  - videollamadas/citas (resumenes_diarios_agendas) → excluida_dashboard (solo no-trackeo)
+  // Reversible: al quitar ambas etiquetas se ponen en false/null y el lead reaparece.
   // Solo escribe en NUESTRA BD (no llama a GHL) → sin riesgo de bucle.
   const resLlamadas = await pgPool.query(
     `UPDATE registros_de_llamada SET excluido_metricas = $3, calificacion_manual = $4
      WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
-    [idCuenta, contactId, discarded, calificacion],
+    [idCuenta, contactId, excluido, calificacion],
   );
   const resChats = await pgPool.query(
-    `UPDATE chats_logs SET excluida_dashboard = $3, excluido_metricas = $3, calificacion_manual = $4
+    `UPDATE chats_logs SET excluida_dashboard = $3, excluido_metricas = $4, calificacion_manual = $5
      WHERE id_cuenta = $1 AND id_lead = $2`,
-    [idCuenta, contactId, discarded, calificacion],
+    [idCuenta, contactId, oculto, excluido, calificacion],
   );
   const resAgendas = await pgPool.query(
     `UPDATE resumenes_diarios_agendas SET excluida_dashboard = $3
      WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
-    [idCuenta, contactId, discarded],
+    [idCuenta, contactId, oculto],
   );
 
-  // Reactivación total: si se QUITÓ la etiqueta y el contacto no tiene registro
-  // (p.ej. se creó ya descartado, o se limpió), crearlo ahora → "sin etiqueta = trackeado".
+  // Con descartar-lead (o sin etiquetas), el lead debe estar VISIBLE. Si no tiene
+  // registro (se creó ya descartado, o se limpió), crearlo ahora. En el caso de
+  // descarte, dejarlo marcado como descartado tras crearlo.
   let creado = false;
-  if (!discarded) {
+  if (!oculto) {
     creado = await registerNewLead(idCuenta, body);
+    if (creado && descartar) {
+      await pgPool.query(
+        `UPDATE registros_de_llamada SET excluido_metricas = true, calificacion_manual = 'descartado'
+         WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
+        [idCuenta, contactId],
+      );
+    }
   }
 
   const total = (resLlamadas.rowCount ?? 0) + (resChats.rowCount ?? 0) + (resAgendas.rowCount ?? 0);
   if (total > 0 || creado) {
+    const estado = noTrackear ? "no_trackeado(oculto)" : descartar ? "descartado(visible)" : "incluido";
     console.info(
-      `[Marketplace/ContactTagUpdate] Contacto=${contactId} → descartado=${discarded} ` +
+      `[Marketplace/ContactTagUpdate] Contacto=${contactId} → ${estado} ` +
       `(llamadas=${resLlamadas.rowCount}, chats=${resChats.rowCount}, agendas=${resAgendas.rowCount}${creado ? ", lead creado" : ""})`,
+    );
+  }
+}
+
+// ─── ContactUpdate → sincronizar datos del contacto en el dashboard ──────────
+
+/**
+ * Cuando un contacto se edita en GHL (manual o automáticamente), propaga los
+ * cambios de identidad al dashboard: nombre, email, teléfono y usuario asignado.
+ *
+ * Se actualizan las tablas de ESTADO ACTUAL que el dashboard muestra:
+ *  - registros_de_llamada (match por ghl_contact_id)
+ *  - resumenes_diarios_agendas (match por ghl_contact_id)
+ *  - chats_logs (match por id_lead)
+ * NO se toca log_llamadas: es un histórico inmutable por-llamada (el closer de
+ * cada llamada es quien la hizo, no debe reescribirse al reasignar el contacto).
+ *
+ * Se usa COALESCE para no borrar un dato existente si GHL no envía ese campo.
+ * El usuario asignado (assignedTo) se resuelve a email+nombre vía la API de GHL
+ * y solo se escribe si la resolución tiene éxito (para no perder atribución).
+ */
+async function handleContactUpdate(body: GhlContactEvent): Promise<void> {
+  const locationId = body.locationId;
+  const contactId = body.id;
+  if (!locationId || !contactId) return;
+
+  const account = await getAccountByLocationId(locationId);
+  if (!account) return;
+  const idCuenta = account.id_cuenta;
+
+  const nombre = fullName(body);
+  const email = body.email ?? null;
+  const phone = body.phone ?? null;
+
+  // Resolver el usuario asignado (assignedTo → email + nombre). Best-effort.
+  const assignedTo = typeof body.assignedTo === "string" ? body.assignedTo : null;
+  let closerMail: string | null = null;
+  let closerNombre: string | null = null;
+  if (assignedTo) {
+    try {
+      const token = await getAccessToken(locationId);
+      if (token) {
+        const user = await getGhlUser(assignedTo, token);
+        closerMail = user?.email ?? null;
+        closerNombre = user?.name ?? null;
+      }
+    } catch (e) {
+      console.warn(`[Marketplace/ContactUpdate] no se pudo resolver usuario asignado ${assignedTo}:`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  // ── Identidad (nombre/email/phone) en las 3 tablas de estado actual ──
+  const resLlamadas = await pgPool.query(
+    `UPDATE registros_de_llamada SET
+       nombre_lead      = COALESCE($3, nombre_lead),
+       mail_lead        = COALESCE($4, mail_lead),
+       phone_raw_format = COALESCE($5, phone_raw_format),
+       closer_mail      = COALESCE($6, closer_mail),
+       nombre_closer    = COALESCE($7, nombre_closer)
+     WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
+    [idCuenta, contactId, nombre, email, phone, closerMail, closerNombre],
+  );
+  const resAgendas = await pgPool.query(
+    `UPDATE resumenes_diarios_agendas SET
+       nombre_de_lead = COALESCE($3, nombre_de_lead),
+       email_lead     = COALESCE($4, email_lead),
+       closer         = COALESCE($5, closer)
+     WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
+    [idCuenta, contactId, nombre, email, closerMail ?? closerNombre],
+  );
+  const resChats = await pgPool.query(
+    `UPDATE chats_logs SET
+       nombre_lead     = COALESCE($3, nombre_lead),
+       asesor_asignado = COALESCE($4, asesor_asignado)
+     WHERE id_cuenta = $1 AND id_lead = $2`,
+    [idCuenta, contactId, nombre, closerNombre ?? closerMail],
+  );
+
+  const total = (resLlamadas.rowCount ?? 0) + (resAgendas.rowCount ?? 0) + (resChats.rowCount ?? 0);
+  if (total > 0) {
+    console.info(
+      `[Marketplace/ContactUpdate] Contacto=${contactId} sincronizado ` +
+      `(llamadas=${resLlamadas.rowCount}, agendas=${resAgendas.rowCount}, chats=${resChats.rowCount})` +
+      `${closerMail || closerNombre ? ` asignado=${closerMail ?? closerNombre}` : ""}`,
     );
   }
 }
@@ -399,6 +531,9 @@ export async function handleMarketplaceEvent(
       break;
     case "ContactTagUpdate":
       await handleContactTagUpdate(b);
+      break;
+    case "ContactUpdate":
+      await handleContactUpdate(b);
       break;
     case "OutboundMessage":
     case "InboundMessage":
