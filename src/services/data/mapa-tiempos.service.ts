@@ -102,7 +102,7 @@ async function getSingleLeadTimeline(
         AND l.id_cuenta = $1::int
     ),
     first_agenda AS (
-      SELECT MIN(w.received_at) AS t_agenda
+      SELECT MIN(w.created_at) AS t_agenda
       FROM webhook_events_log w
       JOIN lead ld ON true
       WHERE w.fuente = 'ghl_agenda'
@@ -235,7 +235,7 @@ async function getAsesorStats(
     first_agendas AS (
       SELECT
         ld.id_registro,
-        MIN(w.received_at) AS t_agenda
+        MIN(w.created_at) AS t_agenda
       FROM leads ld
       JOIN webhook_events_log w
         ON w.fuente = 'ghl_agenda'
@@ -320,7 +320,7 @@ async function getAsesorStats(
       GROUP BY l.id_registro
     ),
     first_agendas AS (
-      SELECT ld.id_registro, MIN(w.received_at) AS t_agenda
+      SELECT ld.id_registro, MIN(w.created_at) AS t_agenda
       FROM leads ld
       JOIN webhook_events_log w
         ON w.fuente = 'ghl_agenda'
