@@ -306,12 +306,17 @@ async function handleContactUpdate(body: GhlContactEvent): Promise<void> {
     }
   }
 
-  // ── Identidad (nombre/email/phone) en las 3 tablas de estado actual ──
+  // ── Identidad (nombre/email/phone) + fecha_asignacion en registros ──
+  // fecha_asignacion se (re)setea a NOW() cuando el asesor asignado CAMBIA
+  // (nuevo closer distinto al actual) → base del "speed to lead asesor".
   const resLlamadas = await pgPool.query(
     `UPDATE registros_de_llamada SET
        nombre_lead      = COALESCE($3, nombre_lead),
        mail_lead        = COALESCE($4, mail_lead),
        phone_raw_format = COALESCE($5, phone_raw_format),
+       fecha_asignacion = CASE
+         WHEN $6::text IS NOT NULL AND closer_mail IS DISTINCT FROM $6::text THEN NOW()
+         ELSE fecha_asignacion END,
        closer_mail      = COALESCE($6, closer_mail),
        nombre_closer    = COALESCE($7, nombre_closer)
      WHERE id_cuenta = $1 AND ghl_contact_id = $2`,

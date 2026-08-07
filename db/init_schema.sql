@@ -143,7 +143,8 @@ CREATE TABLE IF NOT EXISTS registros_de_llamada (
   ia_objeciones                  JSONB,
   excluido_metricas              BOOLEAN NOT NULL DEFAULT false,
   calificacion_manual            TEXT,
-  resumen_llamada                JSONB
+  resumen_llamada                JSONB,
+  fecha_asignacion               TIMESTAMPTZ
 );
 
 -- ============================================================================

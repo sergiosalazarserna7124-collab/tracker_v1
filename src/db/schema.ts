@@ -94,6 +94,7 @@ export const llamadas = pgTable("registros_de_llamada", {
   excluido_metricas: boolean("excluido_metricas").notNull().default(false),
   calificacion_manual: text("calificacion_manual"),
   resumen_llamada: jsonb("resumen_llamada"),
+  fecha_asignacion: timestamp("fecha_asignacion", { withTimezone: true }),
 });
 
 /**
