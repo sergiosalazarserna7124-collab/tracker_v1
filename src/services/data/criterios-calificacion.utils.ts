@@ -260,7 +260,7 @@ export function esCalificado(
   calificacionManual?: string | null,
 ): boolean {
   if (calificacionManual === "calificado") return true;
-  if (calificacionManual === "descartado") return false;
+  if (calificacionManual === "descartado" || calificacionManual === "no_trackeado") return false;
   if (canal && !canalCalifica(criterios, canal)) return false;
   if (iaCategoria === null) return false;
   const efectivos = resolverCriterios(criterios ?? CRITERIOS_DEFAULT, canal);

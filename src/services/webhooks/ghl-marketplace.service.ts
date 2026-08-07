@@ -229,7 +229,12 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
   const descartar = hasDescartarTag(body.tags);
   const excluido = noTrackear || descartar;          // fuera de métricas en ambos casos
   const oculto = noTrackear;                          // solo no-trackeo oculta del dashboard
-  const calificacion = excluido ? "descartado" : null;
+  // Calificación DISTINTA por etiqueta — un no-trackeado NO es un descartado:
+  //  - 'descartado'   → era un lead real que no compró: cuenta como lead y suma
+  //                     en la métrica "Leads descartados".
+  //  - 'no_trackeado' → nunca fue un lead (amigo del cliente, consulta random):
+  //                     desaparece de TODAS las métricas, incluida la de descartados.
+  const calificacion = noTrackear ? "no_trackeado" : descartar ? "descartado" : null;
 
   // Excluir/incluir el lead en TODOS los canales. Cada uno filtra por su bandera:
   //  - llamadas (registros_de_llamada) → excluido_metricas (esta tabla no se oculta)
