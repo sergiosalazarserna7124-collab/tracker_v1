@@ -214,7 +214,7 @@ async function enviarAlerta60m(lead: LeadPendiente): Promise<boolean> {
   const nota =
     `⚠️ ALERTA SPEED-TO-LEAD: ${nombreLead} lleva ${tiempoStr} sin ser contactado.\n` +
     `Asesor asignado: ${asesor}\n` +
-    `Por favor contactar de inmediato. — AutoKPI`;
+    `Por favor contactar de inmediato. — LeadMaster`;
 
   try {
     await addContactNote(lead.ghl_contact_id, lead.token_ghl, nota);
@@ -279,7 +279,7 @@ async function enviarAlerta4h(lead: LeadPendiente): Promise<boolean> {
     `🚨 ESCALACIÓN SPEED-TO-LEAD — REQUIERE ATENCIÓN DE MANAGER\n` +
     `${nombreLead} lleva ${tiempoStr} sin ser contactado.\n` +
     `Asesor asignado: ${asesor}\n` +
-    `Este lead requiere atención inmediata del responsable de equipo. — AutoKPI`;
+    `Este lead requiere atención inmediata del responsable de equipo. — LeadMaster`;
 
   try {
     await addContactNote(lead.ghl_contact_id, lead.token_ghl, nota);

@@ -235,7 +235,7 @@ async function enviarAlerta60m(chat: ChatPendiente): Promise<boolean> {
   const nota =
     `⚠️ ALERTA STL CHAT: ${nombreLead} lleva ${tiempoStr} sin respuesta en chat.\n` +
     `Asesor asignado: ${asesor}\n` +
-    `Por favor responder de inmediato. — AutoKPI`;
+    `Por favor responder de inmediato. — LeadMaster`;
 
   try {
     await addContactNote(chat.id_lead, chat.token_ghl, nota);
@@ -303,7 +303,7 @@ async function enviarAlerta4h(chat: ChatPendiente): Promise<boolean> {
     `🚨 ESCALACIÓN STL CHAT — REQUIERE ATENCIÓN DE MANAGER\n` +
     `${nombreLead} lleva ${tiempoStr} sin respuesta en chat.\n` +
     `Asesor asignado: ${asesor}\n` +
-    `Este chat requiere atención inmediata del responsable de equipo. — AutoKPI`;
+    `Este chat requiere atención inmediata del responsable de equipo. — LeadMaster`;
 
   try {
     await addContactNote(chat.id_lead, chat.token_ghl, nota);

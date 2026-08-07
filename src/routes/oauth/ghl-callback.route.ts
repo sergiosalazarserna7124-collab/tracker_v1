@@ -4,12 +4,12 @@ import { exchangeCodeForTokens } from "../../services/oauth/ghl-oauth.service.js
 
 const HTML_SUCCESS = `<!DOCTYPE html>
 <html lang="es">
-<head><meta charset="UTF-8"><title>AutoKPI Conectado</title>
+<head><meta charset="UTF-8"><title>LeadMaster Conectado</title>
 <style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f0f9f0;}
 .card{background:#fff;border-radius:12px;padding:2rem 3rem;box-shadow:0 4px 20px rgba(0,0,0,.08);text-align:center;}
 h1{font-size:2rem;color:#22c55e;margin-bottom:.5rem;}p{color:#555;font-size:1rem;}</style>
 </head>
-<body><div class="card"><h1>✅ AutoKPI conectado correctamente</h1><p>Ya puedes cerrar esta ventana.</p></div></body>
+<body><div class="card"><h1>✅ LeadMaster conectado correctamente</h1><p>Ya puedes cerrar esta ventana.</p></div></body>
 </html>`;
 
 function buildHtmlError(message: string): string {

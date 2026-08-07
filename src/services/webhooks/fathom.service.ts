@@ -562,7 +562,7 @@ export async function processFathomCall(
         console.info(`[Fathom] [GHL native workflow] task creation skipped for cuenta ${idCuenta}`);
       } else {
         try {
-          const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
+          const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (LeadMaster)";
           const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
           let dueDate = citaTareaResult.tarea.fecha_vencimiento;
           if (!dueDate) {

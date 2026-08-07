@@ -418,7 +418,7 @@ async function processVozInternal(
             estado: estadoFinal,
             mail_lead: mailLead,
             phone_raw_format: phone,
-            nombre_closer: "Agente de voz - Auto KPI",
+            nombre_closer: "Agente de voz - LeadMaster",
             closer_mail: "voz@autokpi.net",
             trancription: transcript || null,
             iadescripcion,
@@ -533,7 +533,7 @@ async function processVozInternal(
               estado: estadoFinal,
               mail_lead: mailLead,
               phone_raw_format: phone,
-              nombre_closer: "Agente de voz - Auto KPI",
+              nombre_closer: "Agente de voz - LeadMaster",
               closer_mail: "voz@autokpi.net",
               trancription: transcript || null,
               callsid: callId,
@@ -569,7 +569,7 @@ async function processVozInternal(
               phone_raw_format: phone,
               creativo_origen: null,
               closer_mail: "voz@autokpi.net",
-              nombre_closer: "Agente de voz - Auto KPI",
+              nombre_closer: "Agente de voz - LeadMaster",
               fecha_y_hora_de_seguimiento: fechaSeguimiento,
               speed_to_lead: null,
               intentos_contacto: 1,
@@ -609,7 +609,7 @@ async function processVozInternal(
           transcripcion: transcript || null,
           ia_descripcion: iadescripcion,
           closer_mail: "voz@autokpi.net",
-          nombre_closer: "Agente de voz - Auto KPI",
+          nombre_closer: "Agente de voz - LeadMaster",
           creativo_origen: null,
           speed_to_lead: null,
           tags_internos: tagsInternos,
@@ -796,7 +796,7 @@ async function processVozInternal(
             console.info(`${label} [GHL native workflow] task creation skipped for cuenta ${cuenta.id_cuenta}`);
           } else if (!alreadyTagged) {
             try {
-              const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (Auto KPI)";
+              const tareaTitle = citaTareaResult.tarea.titulo ?? "Tarea de seguimiento (LeadMaster)";
               const tareaBody = citaTareaResult.tarea.descripcion ?? undefined;
               let dueDate = citaTareaResult.tarea.fecha_vencimiento;
               if (!dueDate) {
@@ -830,7 +830,7 @@ async function processVozInternal(
 
       // Nota en GHL con resumen + reagendamiento + transcript (best-effort)
       try {
-        const noteLines: string[] = [`📞 Agente de voz - Auto KPI — estado: ${estadoFinal}`];
+        const noteLines: string[] = [`📞 Agente de voz - LeadMaster — estado: ${estadoFinal}`];
         if (reclassify.reclassified) {
           noteLines.push(`🔄 Reclasificado por IA: ${reclassify.estadoOriginal} → ${estadoFinal} (${reclassify.motivo})`);
         }
