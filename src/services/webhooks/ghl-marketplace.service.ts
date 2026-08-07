@@ -95,15 +95,23 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
   const idCuenta = account.id_cuenta;
 
   const discarded = hasDiscardTag(body.tags);
-  // Solo lee y actualiza NUESTRA BD (no escribe a GHL) → sin riesgo de bucle.
-  const res = await pgPool.query(
-    `UPDATE registros_de_llamada SET excluido_metricas = $3
+  const calificacion = discarded ? "descartado" : null;
+  // Paridad con el descarte manual: setea excluido_metricas + calificacion_manual
+  // en registros_de_llamada Y chats_logs. Solo escribe en NUESTRA BD (sin bucle).
+  const resLlamadas = await pgPool.query(
+    `UPDATE registros_de_llamada SET excluido_metricas = $3, calificacion_manual = $4
      WHERE id_cuenta = $1 AND ghl_contact_id = $2`,
-    [idCuenta, contactId, discarded],
+    [idCuenta, contactId, discarded, calificacion],
   );
-  if ((res.rowCount ?? 0) > 0) {
+  const resChats = await pgPool.query(
+    `UPDATE chats_logs SET excluido_metricas = $3, calificacion_manual = $4
+     WHERE id_cuenta = $1 AND id_lead = $2`,
+    [idCuenta, contactId, discarded, calificacion],
+  );
+  const total = (resLlamadas.rowCount ?? 0) + (resChats.rowCount ?? 0);
+  if (total > 0) {
     console.info(
-      `[Marketplace/ContactTagUpdate] Contacto=${contactId} → excluido_metricas=${discarded} (${res.rowCount} fila/s)`,
+      `[Marketplace/ContactTagUpdate] Contacto=${contactId} → descartado=${discarded} (llamadas=${resLlamadas.rowCount}, chats=${resChats.rowCount})`,
     );
   }
 }
