@@ -457,6 +457,37 @@ export async function updateContactCustomFields(
   }
 }
 
+/**
+ * Actualiza el email de un contacto en GHL (PUT /contacts/{id}).
+ * Se usa para crear un email sintético (telefono@gmail.com) cuando el contacto
+ * no tiene uno, de modo que Fathom pueda anclar la reunión al contacto por email.
+ */
+export async function updateContactEmail(
+  contactId: string,
+  bearerToken: string,
+  email: string,
+): Promise<void> {
+  const response = await fetchWithTimeout(
+    `https://services.leadconnectorhq.com/contacts/${contactId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+      body: JSON.stringify({ email }),
+    },
+    GHL_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    if (response.status === 401) throwTokenInvalid(`GHL_TOKEN_INVALID: update contact email API 401`);
+    throw new Error(`GHL update contact email API responded ${response.status}: ${text}`);
+  }
+}
+
 // ─── POST a GHL API: agregar tag al contacto ─────────────────────────────────
 
 export async function addContactTag(

@@ -36,6 +36,7 @@ import {
   safeAddContactTag,
   removeContactTag,
   addContactNote,
+  updateContactEmail,
 } from "../ghl-api.service.js";
 import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import { generateLlamadaAnalysisText, extractLlamadaObjections } from "../ai/call-analysis.service.js";
@@ -581,17 +582,50 @@ async function handleAppointment(eventType: string, body: GhlAppointmentEvent): 
   const isDelete = eventType === "AppointmentDelete";
   const isCancel = isDelete || (appt.appointmentStatus ?? "").toLowerCase().includes("cancel");
 
+  // Token una sola vez (para resolver owner + escribir email sintético).
+  let token: string | null = null;
+  try { token = await getAccessToken(locationId); } catch { /* best-effort */ }
+
   // Owner de la cita → email/nombre (best-effort).
   let closer: string | null = null;
-  if (appt.assignedUserId) {
+  if (appt.assignedUserId && token) {
     try {
-      const token = await getAccessToken(locationId);
-      if (token) {
-        const user = await getGhlUser(appt.assignedUserId, token);
-        closer = user?.email ?? user?.name ?? null;
-      }
+      const user = await getGhlUser(appt.assignedUserId, token);
+      closer = user?.email ?? user?.name ?? null;
     } catch (e) {
       console.warn(`[Marketplace/Appointment] no se pudo resolver owner ${appt.assignedUserId}:`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  // Datos del lead (nombre/email/teléfono) desde registros_de_llamada.
+  let nombreLead: string | null = null;
+  let emailLead: string | null = null;
+  let phoneLead: string | null = null;
+  if (contactId) {
+    const { rows: leadRows } = await pgPool.query<{ nombre_lead: string | null; mail_lead: string | null; phone_raw_format: string | null }>(
+      `SELECT nombre_lead, mail_lead, phone_raw_format FROM registros_de_llamada
+       WHERE id_cuenta = $1 AND ghl_contact_id = $2 ORDER BY id_registro DESC LIMIT 1`,
+      [idCuenta, contactId],
+    );
+    nombreLead = leadRows[0]?.nombre_lead ?? appt.title ?? null;
+    emailLead = leadRows[0]?.mail_lead ?? null;
+    phoneLead = leadRows[0]?.phone_raw_format ?? null;
+  }
+
+  // Si el contacto NO tiene email pero sí teléfono → crear {digitos}@gmail.com y
+  // escribirlo en GHL, para que Fathom pueda anclar la reunión al contacto por email.
+  if (!emailLead?.trim() && phoneLead?.trim() && contactId) {
+    const digits = phoneLead.replace(/\D/g, "");
+    if (digits) {
+      emailLead = `${digits}@gmail.com`;
+      if (token) {
+        try {
+          await updateContactEmail(contactId, token, emailLead);
+          console.info(`[Marketplace/Appointment] contacto ${contactId} sin email → creado ${emailLead} en GHL (anchor Fathom)`);
+        } catch (e) {
+          console.warn(`[Marketplace/Appointment] no se pudo escribir email en GHL:`, e instanceof Error ? e.message : e);
+        }
+      }
     }
   }
 
@@ -626,26 +660,17 @@ async function handleAppointment(eventType: string, body: GhlAppointmentEvent): 
          fecha_reunion  = COALESCE($4, fecha_reunion),
          closer         = COALESCE($5, closer),
          ghl_contact_id = COALESCE($6, ghl_contact_id),
-         categoria      = COALESCE($7, categoria)
+         categoria      = COALESCE($7, categoria),
+         email_lead     = COALESCE(NULLIF(email_lead, ''), $8),
+         nombre_de_lead = COALESCE(nombre_de_lead, $9)
        WHERE id_registro_agenda = $1 AND id_cuenta = $2`,
-      [existing.id_registro_agenda, idCuenta, estadoCita, startTime, closer, contactId, nuevaCategoria],
+      [existing.id_registro_agenda, idCuenta, estadoCita, startTime, closer, contactId, nuevaCategoria, emailLead, nombreLead],
     );
     console.info(`[Marketplace/Appointment] ${eventType} appt=${apptId} → estado_cita=${estadoCita} categoria=${nuevaCategoria ?? "(fathom)"}`);
     return;
   }
 
-  // No existe → INSERT. Nombre/email del lead desde registros_de_llamada.
-  let nombreLead: string | null = null;
-  let emailLead: string | null = null;
-  if (contactId) {
-    const { rows: leadRows } = await pgPool.query<{ nombre_lead: string | null; mail_lead: string | null }>(
-      `SELECT nombre_lead, mail_lead FROM registros_de_llamada
-       WHERE id_cuenta = $1 AND ghl_contact_id = $2 ORDER BY id_registro DESC LIMIT 1`,
-      [idCuenta, contactId],
-    );
-    nombreLead = leadRows[0]?.nombre_lead ?? appt.title ?? null;
-    emailLead = leadRows[0]?.mail_lead ?? null;
-  }
+  // No existe → INSERT.
   const fechaCreada = appt.dateAdded ? new Date(appt.dateAdded) : new Date();
   await pgPool.query(
     `INSERT INTO resumenes_diarios_agendas
