@@ -16,7 +16,49 @@
  */
 
 import { db as pgPool } from "../../config/database.js";
-import { getAccountByLocationId } from "../ghl-api.service.js";
+import {
+  getAccountByLocationId,
+  getAccountFullByLocationId,
+  getGhlUser,
+  safeAddContactTag,
+  removeContactTag,
+  addContactNote,
+} from "../ghl-api.service.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
+import { generateLlamadaAnalysisText, extractLlamadaObjections } from "../ai/call-analysis.service.js";
+
+const TAG_EN_PROGRESO = "llamada-en-progreso";
+
+/**
+ * Trae la transcripción de una llamada desde GHL (add-on de transcripción).
+ * GHL la genera con un pequeño delay tras finalizar → reintenta unos segundos.
+ * Devuelve el texto diarizado (por speaker) o null.
+ */
+async function getCallTranscript(
+  locationId: string,
+  messageId: string,
+  token: string,
+): Promise<string | null> {
+  const url = `https://services.leadconnectorhq.com/conversations/locations/${locationId}/messages/${messageId}/transcription`;
+  for (let intento = 0; intento < 5; intento++) {
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}`, Version: "2021-04-15", Accept: "application/json" },
+      });
+      if (res.ok) {
+        const segs = (await res.json()) as Array<{ speaker?: number; transcript?: string }>;
+        if (Array.isArray(segs) && segs.length > 0) {
+          return segs
+            .map((s) => `Speaker ${s.speaker ?? "?"}: ${(s.transcript ?? "").trim()}`)
+            .filter((l) => l.length > 12)
+            .join("\n");
+        }
+      }
+    } catch { /* reintentar */ }
+    await new Promise((r) => setTimeout(r, 7000)); // esperar a que GHL genere el transcript
+  }
+  return null;
+}
 
 const DISCARD_TAG = "no_trackearlead";
 
@@ -246,6 +288,73 @@ async function handleCallEvent(body: GhlCallEvent): Promise<void> {
   console.info(
     `[Marketplace/Call] contacto=${contactId} status=${body.status ?? body.callStatus ?? "null"} → ${tipo_evento}/${estado_resultado} dur=${duracion ?? "-"}s finalizada=${finalizada}`,
   );
+
+  // ── Enriquecimiento (best-effort, no bloquea): asesor + tag en progreso + transcript/IA ──
+  try {
+    const token = await getAccessToken(locationId);
+    if (!token) return;
+
+    // 1. Atribuir la llamada al ASESOR (resolver el userId de GHL → email/nombre)
+    if (body.userId) {
+      try {
+        const user = await getGhlUser(body.userId, token);
+        const email = user?.email ?? null;
+        const nombre = user?.name ?? null;
+        if (email || nombre) {
+          await pgPool.query(
+            `UPDATE log_llamadas SET closer_mail = $3, nombre_closer = $4 WHERE id_cuenta = $1 AND call_sid = $2`,
+            [idCuenta, callSid, email, nombre],
+          );
+          if (idRegistro) {
+            await pgPool.query(
+              `UPDATE registros_de_llamada SET closer_mail = COALESCE(closer_mail, $2), nombre_closer = COALESCE(nombre_closer, $3) WHERE id_registro = $1`,
+              [idRegistro, email, nombre],
+            );
+          }
+        }
+      } catch (e) { console.warn(`[Marketplace/Call] no se pudo resolver asesor:`, e instanceof Error ? e.message : e); }
+    }
+
+    // 2. Etiqueta provisional "llamada-en-progreso": se pone si está en curso, se quita al finalizar
+    try {
+      if (!finalizada) await safeAddContactTag(contactId, token, TAG_EN_PROGRESO, locationId);
+      else await removeContactTag(contactId, token, TAG_EN_PROGRESO);
+    } catch (e) { console.warn(`[Marketplace/Call] tag en-progreso:`, e instanceof Error ? e.message : e); }
+
+    // 3. Transcript + análisis IA (solo llamadas contestadas) → nota en GHL
+    if (finalizada && tipo_evento.startsWith("efectiva")) {
+      const transcript = await getCallTranscript(locationId, callSid, token);
+      if (transcript) {
+        const acc = await getAccountFullByLocationId(locationId);
+        const promptVentas = acc?.prompt_ventas ?? null;
+        const promptLlamadas = acc?.prompt_llamadas ?? null;
+        const openaiKey = acc?.openai_api_key ?? null;
+
+        const analysis = await generateLlamadaAnalysisText(transcript, promptVentas, promptLlamadas, openaiKey, idCuenta).catch(() => null);
+        const objeciones = await extractLlamadaObjections(transcript, promptVentas, openaiKey, idCuenta).catch(() => null);
+
+        await pgPool.query(
+          `UPDATE log_llamadas SET transcripcion = $3, ia_descripcion = COALESCE($4, ia_descripcion) WHERE id_cuenta = $1 AND call_sid = $2`,
+          [idCuenta, callSid, transcript, analysis],
+        );
+        if (idRegistro) {
+          await pgPool.query(
+            `UPDATE registros_de_llamada SET trancription = $2, iadescripcion = COALESCE($3, iadescripcion), ia_objeciones = COALESCE($4::jsonb, ia_objeciones) WHERE id_registro = $1`,
+            [idRegistro, transcript, analysis, objeciones ? JSON.stringify(objeciones) : null],
+          );
+        }
+
+        // Nota en GHL: análisis IA + transcripción
+        const nota = `📞 Llamada — Análisis IA\n\n${analysis ?? "(sin análisis)"}\n\n———\n📝 Transcripción:\n${transcript}`;
+        await addContactNote(contactId, token, nota).catch(() => {});
+        console.info(`[Marketplace/Call] transcript+IA guardados y nota escrita para contacto=${contactId}`);
+      } else {
+        console.info(`[Marketplace/Call] sin transcript disponible aún para call=${callSid}`);
+      }
+    }
+  } catch (err) {
+    console.error(`[Marketplace/Call] enriquecimiento error:`, err instanceof Error ? err.message : err);
+  }
 }
 
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
