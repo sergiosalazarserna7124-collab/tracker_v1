@@ -100,12 +100,24 @@ async function registerNewLead(idCuenta: number, body: GhlContactEvent): Promise
   if (rows.length > 0) return false;
 
   const fecha = body.dateAdded ? new Date(body.dateAdded) : new Date();
-  await pgPool.query(
+  const { rows: ins } = await pgPool.query<{ id_registro: number }>(
     `INSERT INTO registros_de_llamada
        (fecha_evento, id_cuenta, nombre_lead, estado, mail_lead, phone_raw_format, ghl_contact_id, excluido_metricas)
-     VALUES ($1, $2, $3, 'pdte', $4, $5, $6, false)`,
+     VALUES ($1, $2, $3, 'pdte', $4, $5, $6, false)
+     RETURNING id_registro`,
     [fecha, idCuenta, fullName(body), body.email ?? null, body.phone ?? null, contactId],
   );
+  const idRegistro = ins[0]?.id_registro;
+
+  // Evento "contacto_creado" en log_llamadas → cuenta como "Lead generado" en el panel.
+  if (idRegistro) {
+    await pgPool.query(
+      `INSERT INTO log_llamadas
+         (id_cuenta, id_registro, contact_id_ghl, mail_lead, phone, nombre_lead, tipo_evento, ts)
+       VALUES ($1, $2, $3, $4, $5, $6, 'contacto_creado', $7)`,
+      [idCuenta, idRegistro, contactId, body.email ?? null, body.phone ?? null, fullName(body), fecha],
+    );
+  }
   return true;
 }
 
