@@ -421,7 +421,8 @@ interface GhlOpportunitySearchItem {
   monetaryValue?: number;
   createdAt?: string;
   updatedAt?: string;
-  customFields?: Array<{ id?: string; fieldValue?: unknown; field_value?: unknown }>;
+  // El search devuelve fieldValueNumber/fieldValueString; el GET devuelve fieldValue.
+  customFields?: Array<{ id?: string; fieldValue?: unknown; field_value?: unknown; fieldValueNumber?: unknown; fieldValueString?: unknown }>;
 }
 
 /**
@@ -475,7 +476,7 @@ async function handleEtiquetasFinancieras(
   if (apartado) {
     const fieldId = await getMontoApartadoFieldId(locationId, token);
     const cf = fieldId ? (opp.customFields ?? []).find((f) => f.id === fieldId) : undefined;
-    const raw = cf?.fieldValue ?? cf?.field_value;
+    const raw = cf?.fieldValue ?? cf?.field_value ?? cf?.fieldValueNumber ?? cf?.fieldValueString;
     const num = raw != null ? parseFloat(String(raw).replace(/[^0-9.\-]/g, "")) : NaN;
     montoApartado = Number.isFinite(num) ? num : null;
     if (montoApartado == null) {
