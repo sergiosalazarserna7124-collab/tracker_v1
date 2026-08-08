@@ -39,7 +39,7 @@ function loadEnv(): Env {
     OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
     // App del Marketplace oficial (appId 6a74c60076292fcda6ad92a1). El client_id
     // no es secreto; el SECRET debe venir del env (Cloud Run), nunca hardcodeado.
-    GHL_APP_CLIENT_ID: process.env.GHL_APP_CLIENT_ID ?? "6a74c60076292fcda6ad92a1-msifqdm3",
+    GHL_APP_CLIENT_ID: process.env.GHL_APP_CLIENT_ID ?? "6a74c60076292fcda6ad92a1-msklreih",
     GHL_APP_CLIENT_SECRET: process.env.GHL_APP_CLIENT_SECRET ?? "",
     GHL_OAUTH_REDIRECT_URI: process.env.GHL_OAUTH_REDIRECT_URI ?? "https://cerebro-tracker-v6-saas-git-cstkjl7bpa-ue.a.run.app/oauth/callback",
     GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? "",
