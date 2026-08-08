@@ -78,13 +78,13 @@ export interface GhlUser {
 
 // Esquema de etiquetas del sistema (sufijo _lm). Decisión de producto 2026-08:
 //  - Citas: SOLO se etiqueta el no-show. Nada de pendiente/cancelada/reagendada/perdida.
-//  - Videollamadas: efectiva siempre que hubo transcripción; cerrada SOLO si la IA
-//    detectó venta con pago (cash collected o facturación > 0). Sin ofertada/noofertada.
+//  - Videollamadas: cita_efectiva_lm siempre que hubo transcripción; cita_cerrada_lm
+//    SOLO si la IA detectó venta con pago (cash/facturación > 0). Sin ofertada/noofertada.
 //  - Llamadas: clasificación IA + contestada. SIN etiqueta de "no contestada".
 export const GHL_TAGS = {
   noshow: "no_show_lm",
-  cerrada: "cerrada_lm",
-  videollamada_efectiva: "videollamada_efectiva_lm",
+  cerrada: "cita_cerrada_lm",
+  videollamada_efectiva: "cita_efectiva_lm",
   interesado_llamada: "interesadollamada_lm",
   programado_llamada: "programadollamada_lm",
   no_interesado_llamada: "no_interesadollamada_lm",

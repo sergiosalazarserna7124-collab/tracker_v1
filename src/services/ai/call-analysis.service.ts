@@ -378,6 +378,44 @@ export async function extractLlamadaObjections(
 
 // ─── Análisis de texto para llamadas telefónicas (Twilio/GHL) ────────────────
 
+// ─── Resumen simple para la nota de GHL ──────────────────────────────────────
+// La nota del contacto NO lleva el análisis completo: solo un resumen corto.
+
+const RESUMEN_SIMPLE_PROMPT = `Eres un asistente de ventas. Lee la transcripción de esta videollamada y escribe un RESUMEN SIMPLE en español, máximo 8 líneas, con exactamente esta estructura:
+
+Temas tratados:
+- (2 a 4 viñetas muy cortas)
+
+Puntos importantes:
+- (1 a 3 viñetas muy cortas)
+
+Resultado final: (una sola frase)
+
+Sin encabezados extra, sin markdown adicional, sin análisis profundo. Solo eso.`;
+
+export async function generateResumenSimple(
+  transcript: string,
+  openaiApiKey?: string | null,
+  idCuenta?: number,
+): Promise<string | null> {
+  if (!transcript.trim()) return null;
+  try {
+    const result = await generateText({
+      model: resolveModel(openaiApiKey),
+      system: RESUMEN_SIMPLE_PROMPT,
+      prompt: transcript.slice(0, 100_000),
+      temperature: 0.2,
+    });
+    if (idCuenta) {
+      void trackApiUsage(idCuenta, TIPO_CONSUMO.GPT4O_MINI, result.usage.totalTokens ?? 0);
+    }
+    return result.text?.trim() || null;
+  } catch (err) {
+    console.error("[generateResumenSimple] Error:", err);
+    return null;
+  }
+}
+
 const DEFAULT_LLAMADA_ANALYSIS_PROMPT = `Eres un Analista Senior de Ventas. Analiza la transcripción de esta llamada telefónica y genera un diagnóstico detallado en formato Markdown que incluya:
 
 1. **Resumen ejecutivo**: Qué ocurrió en la llamada en 2-3 oraciones.

@@ -18,7 +18,7 @@ import {
   parseFunnelStageMap,
   GHL_TAGS,
 } from "../ghl-api.service.js";
-import { analyzeCall } from "../ai/call-analysis.service.js";
+import { analyzeCall, generateResumenSimple } from "../ai/call-analysis.service.js";
 import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
 import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
@@ -789,30 +789,33 @@ export async function processFathomCall(
   if (contactId && account.token_ghl) {
     // Nota de análisis IA
     if (ghlNotasConfig.ia !== false) {
-      const aiSummary = [
-        classifier ? `Categoría: ${classifier.categoria}` : null,
-        classifier?.cash_collected && classifier.cash_collected !== "0"
-          ? `Cash collected: ${classifier.cash_collected}`
-          : null,
-        classifier?.facturacion && classifier.facturacion !== "0"
-          ? `Facturación: ${classifier.facturacion}`
-          : null,
-        analysisText ? `\n${analysisText}` : null,
-        tagsInternos.length > 0 ? `\nEtiquetas: ${tagsInternos.join(", ")}` : null,
+      // La nota es un RESUMEN SIMPLE (temas, puntos importantes, resultado
+      // final) + link a la grabación. El análisis completo vive en el dashboard.
+      let resumenSimple: string | null = null;
+      if (formattedTranscript) {
+        resumenSimple = await generateResumenSimple(
+          formattedTranscript,
+          account.openai_api_key,
+          idCuenta ?? undefined,
+        );
+      }
+
+      const notaBody = [
+        resumenSimple,
         shareUrl ? `\n🔗 Grabación: ${shareUrl}` : null,
       ]
         .filter(Boolean)
         .join("\n");
 
-      if (aiSummary) {
+      if (notaBody) {
         try {
           await addContactNote(
             contactId,
             account.token_ghl,
-            `🎥 Videollamada — Análisis IA\n\n${aiSummary}`,
+            `🎥 Videollamada — Resumen\n\n${notaBody}`,
           );
         } catch (err) {
-          console.error(`[Fathom] Error agregando nota IA en GHL:`, err);
+          console.error(`[Fathom] Error agregando nota de resumen en GHL:`, err);
         }
       }
     }
