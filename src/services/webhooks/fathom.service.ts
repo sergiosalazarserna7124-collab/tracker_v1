@@ -28,6 +28,7 @@ import { applyReglasMetricActions, collectFunnelStages, applyReglasPipelineMove 
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { enrichWithGemini, resolveGeminiKey, estimateDurationFromTranscript } from "../ai/gemini-enrichment.service.js";
 import { runContactStageCoach } from "../ai/stage-coach-evaluation.service.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { FathomEventBody } from "../../schemas/webhooks/fathom.schema.js";
 
@@ -300,9 +301,13 @@ export async function processFathomCall(
     return;
   }
 
-  if (!account.token_ghl || !account.locationid) {
+  // App-only: preferir el token OAuth (auto-refresh); token_ghl legacy (PIT)
+  // queda solo como último recurso. Se usa en TODO el flujo GHL de este webhook.
+  const ghlToken = (await getAccessToken(account.locationid ?? "")) || account["token_ghl"] || "";
+
+  if (!ghlToken || !account.locationid) {
     console.warn(
-      `[Fathom] Account ${idCuenta} missing token_ghl or locationid. Some steps will be skipped.`,
+      `[Fathom] Account ${idCuenta} missing GHL token or locationid. Some steps will be skipped.`,
     );
   }
 
@@ -315,13 +320,13 @@ export async function processFathomCall(
   let closerEmailFromGhl: string | null = null;
 
   // Si hay múltiples invitados externos, iterar hasta encontrar uno con registro en BD
-  if (externalInvitees.length > 0 && account.token_ghl && account.locationid) {
+  if (externalInvitees.length > 0 && ghlToken && account.locationid) {
     for (const invitee of externalInvitees) {
       try {
         const contact = await searchContactByEmail(
           account.locationid,
           invitee.email,
-          account.token_ghl,
+          ghlToken,
         );
 
         if (contact) {
@@ -339,11 +344,11 @@ export async function processFathomCall(
           try {
             const apptInfo = await getContactAppointmentInfo(
               contact.id,
-              account.token_ghl,
+              ghlToken,
               new Date(),
             );
             if (apptInfo?.assignedUserId) {
-              const apptOwner = await getGhlUser(apptInfo.assignedUserId, account.token_ghl);
+              const apptOwner = await getGhlUser(apptInfo.assignedUserId, ghlToken);
               if (apptOwner?.email) {
                 closerEmailFromGhl = apptOwner.email;
                 console.info(`[Fathom] Closer resuelto desde dueño de CITA: ${closerEmailFromGhl} (contactId=${contact.id})`);
@@ -356,7 +361,7 @@ export async function processFathomCall(
           // Fallback al dueño del contacto si no se obtuvo el de la cita
           if (!closerEmailFromGhl && contact.assignedTo) {
             try {
-              const ghlUser = await getGhlUser(contact.assignedTo, account.token_ghl);
+              const ghlUser = await getGhlUser(contact.assignedTo, ghlToken);
               closerEmailFromGhl = ghlUser?.email ?? null;
               if (closerEmailFromGhl) {
                 console.info(`[Fathom] Closer resuelto desde dueño de CONTACTO (fallback): ${closerEmailFromGhl}`);
@@ -411,10 +416,10 @@ export async function processFathomCall(
   let reglasEtiquetasEfectivas: unknown = account.reglas_etiquetas;
   let leadCatCoach: ReturnType<typeof matchCategoriaLead> | null = null;
   let contactTagsCoach: string[] | null = null;
-  if (contactId && account.token_ghl &&
+  if (contactId && ghlToken &&
       (categoriasUsanEtiquetas(account.categorias_leads) || categoriasUsanEtiquetas(account.categorias_citas))) {
     try {
-      const contactInfo = await getContactById(contactId, account.token_ghl);
+      const contactInfo = await getContactById(contactId, ghlToken);
       contactTagsCoach = contactInfo?.tags ?? null;
       const leadCat = matchCategoriaLead(contactInfo?.tags, account.categorias_leads);
       if (leadCat) {
@@ -512,9 +517,9 @@ export async function processFathomCall(
   const locationId = account.locationid;
 
   // 5a. Tag de cierre: SOLO cerrada_lm y solo si hubo venta con pago detectado
-  if (contactId && account.token_ghl && classifier && esCierreConPago(classifier)) {
+  if (contactId && ghlToken && classifier && esCierreConPago(classifier)) {
     try {
-      await safeAddContactTag(contactId, account.token_ghl, GHL_TAGS.cerrada, locationId);
+      await safeAddContactTag(contactId, ghlToken, GHL_TAGS.cerrada, locationId);
     } catch (err) {
       console.error(
         `[Fathom] GHL tag error for contact ${contactId}:`,
@@ -524,9 +529,9 @@ export async function processFathomCall(
   }
 
   // 5a-bis. Tag de videollamada efectiva (hubo transcripción procesada)
-  if (contactId && account.token_ghl && formattedTranscript) {
+  if (contactId && ghlToken && formattedTranscript) {
     try {
-      await safeAddContactTag(contactId, account.token_ghl, GHL_TAGS.videollamada_efectiva, locationId);
+      await safeAddContactTag(contactId, ghlToken, GHL_TAGS.videollamada_efectiva, locationId);
     } catch (err) {
       console.error(
         `[Fathom] GHL videollamada_efectiva tag error for contact ${contactId}:`,
@@ -536,9 +541,9 @@ export async function processFathomCall(
   }
 
   // 5a-ter. Aplicar tags de reglas_etiquetas en GHL
-  if (contactId && account.token_ghl && tagsInternos.length > 0) {
+  if (contactId && ghlToken && tagsInternos.length > 0) {
     try {
-      await safeAddContactTags(contactId, account.token_ghl, tagsInternos, locationId);
+      await safeAddContactTags(contactId, ghlToken, tagsInternos, locationId);
     } catch (err) {
       console.error(
         `[Fathom] GHL reglas tags error for contact ${contactId}:`,
@@ -549,11 +554,11 @@ export async function processFathomCall(
 
   // 5a-ter-bis. Coach de ventas de la etapa: evalúa TODAS las interacciones del
   // contacto (chats + llamadas + citas) en conjunto y aplica tags + nota.
-  if (contactId && account.token_ghl && leadCatCoach?.coach && (leadCatCoach.coach.secciones?.length ?? 0) > 0 && formattedTranscript) {
+  if (contactId && ghlToken && leadCatCoach?.coach && (leadCatCoach.coach.secciones?.length ?? 0) > 0 && formattedTranscript) {
     await runContactStageCoach({
       idCuenta,
       contactId,
-      bearerToken: account.token_ghl,
+      bearerToken: ghlToken,
       locationId,
       coach: leadCatCoach.coach,
       etapaNombre: leadCatCoach.nombre,
@@ -565,19 +570,19 @@ export async function processFathomCall(
   }
 
   // 5a-ter-ter. Acción actualizar_pipeline de reglas: mover opportunity al pipeline/etapa de GHL
-  if (contactId && account.token_ghl && account.locationid) {
-    await applyReglasPipelineMove(reglasResult.matched_rules, { contactId, locationId: account.locationid, bearerToken: account.token_ghl }, "[Fathom]");
+  if (contactId && ghlToken && account.locationid) {
+    await applyReglasPipelineMove(reglasResult.matched_rules, { contactId, locationId: account.locationid, bearerToken: ghlToken }, "[Fathom]");
   }
 
   // 5a-quater. Actualizar pipeline GHL si la regla tiene funnelStage configurado
-  if (funnelStageFromReglas && contactId && account.token_ghl && account.locationid) {
+  if (funnelStageFromReglas && contactId && ghlToken && account.locationid) {
     const stageMap = parseFunnelStageMap(account.embudo_personalizado);
     const stageId = stageMap[funnelStageFromReglas];
     if (stageId) {
       try {
-        const oppId = await searchOpportunityByContact(contactId, account.locationid, account.token_ghl);
+        const oppId = await searchOpportunityByContact(contactId, account.locationid, ghlToken);
         if (oppId) {
-          await updateOpportunityStage(oppId, stageId, account.token_ghl);
+          await updateOpportunityStage(oppId, stageId, ghlToken);
           console.info(
             `[Fathom] Opportunity ${oppId} movida a stage "${funnelStageFromReglas}" (stageId=${stageId}) para contact=${contactId}`,
           );
@@ -591,7 +596,7 @@ export async function processFathomCall(
   }
 
   // 5a-quinquies. Cita/tarea: custom fields + tarea GHL real + tag
-  if (citaTareaResult && contactId && account.token_ghl) {
+  if (citaTareaResult && contactId && ghlToken) {
     const cfToWrite: Array<{ key: string; field_value: string }> = [];
 
     if (citaTareaResult.cita.detectada && citaTareaResult.cita.fecha_hora) {
@@ -611,7 +616,7 @@ export async function processFathomCall(
 
     if (cfToWrite.length > 0) {
       try {
-        await updateContactCustomFields(contactId, account.token_ghl, cfToWrite);
+        await updateContactCustomFields(contactId, ghlToken, cfToWrite);
         console.info(`[Fathom] CitaTarea: wrote ${cfToWrite.length} custom fields to GHL`);
       } catch (err) {
         console.error(`[Fathom] CitaTarea: error writing custom fields (best-effort):`, err);
@@ -620,7 +625,7 @@ export async function processFathomCall(
 
     if (citaTareaResult.tarea.detectada) {
       try {
-        await safeAddContactTag(contactId, account.token_ghl, "tarea_registradaai", locationId);
+        await safeAddContactTag(contactId, ghlToken, "tarea_registradaai", locationId);
         console.info(`[Fathom] CitaTarea: applied tag tarea_registradaai`);
       } catch (err) {
         console.error(`[Fathom] CitaTarea: error applying tarea_registradaai tag (best-effort):`, err);
@@ -640,13 +645,13 @@ export async function processFathomCall(
 
           let assignedTo: string | undefined;
           try {
-            const apptInfo = await getContactAppointmentInfo(contactId, account.token_ghl, new Date());
+            const apptInfo = await getContactAppointmentInfo(contactId, ghlToken, new Date());
             if (apptInfo?.assignedUserId) {
               assignedTo = apptInfo.assignedUserId;
             }
           } catch { /* best-effort */ }
 
-          const taskResult = await createContactTask(contactId, account.token_ghl, {
+          const taskResult = await createContactTask(contactId, ghlToken, {
             title: tareaTitle,
             body: tareaBody,
             dueDate,
@@ -755,10 +760,10 @@ export async function processFathomCall(
         nuevaCategoria !== null &&
         nuevaCategoria !== "no_show" &&
         contactId &&
-        account.token_ghl
+        ghlToken
       ) {
         try {
-          await removeContactTag(contactId, account.token_ghl, GHL_TAGS.noshow);
+          await removeContactTag(contactId, ghlToken, GHL_TAGS.noshow);
           console.info(
             `[Fathom] Removed GHL tag "${GHL_TAGS.noshow}" from contact ${contactId} — re-ingestion changed categoria from no_show → ${nuevaCategoria}`,
           );
@@ -853,7 +858,7 @@ export async function processFathomCall(
   // ── Fase 6: Notas GHL (controladas por configuracion_ui.ghl_notas) ────────
   // Por defecto: nota IA = true, transcripción = false.
   // El cliente puede cambiarlos desde Sistema → Evaluación de videollamadas.
-  if (contactId && account.token_ghl) {
+  if (contactId && ghlToken) {
     // Nota de análisis IA
     if (ghlNotasConfig.ia !== false) {
       // La nota es un RESUMEN SIMPLE (temas, puntos importantes, resultado
@@ -879,7 +884,7 @@ export async function processFathomCall(
         try {
           await addContactNote(
             contactId,
-            account.token_ghl,
+            ghlToken,
             `🎥 Videollamada — Resumen\n\n${notaBody}`,
           );
         } catch (err) {
@@ -892,12 +897,12 @@ export async function processFathomCall(
     // "transcrip_fathom" del contacto (se crea solo si no existe).
     if (formattedTranscript) {
       try {
-        const fieldKey = await ensureCustomField(locationId ?? "", account.token_ghl, {
+        const fieldKey = await ensureCustomField(locationId ?? "", ghlToken, {
           key: "contact.transcrip_fathom",
           name: "transcrip_fathom",
           dataType: "LARGE_TEXT",
         });
-        await updateContactCustomFields(contactId, account.token_ghl, [
+        await updateContactCustomFields(contactId, ghlToken, [
           // GHL limita el tamaño del campo — truncar con margen
           { key: fieldKey, field_value: formattedTranscript.slice(0, 60_000) },
         ]);
@@ -918,7 +923,7 @@ export async function processFathomCall(
       }
       if (cf.length > 0) {
         try {
-          await updateContactCustomFields(contactId, account.token_ghl, cf);
+          await updateContactCustomFields(contactId, ghlToken, cf);
           console.info(`[Fathom] Escritos ${cf.length} custom field(s) configurados por el cliente para contact=${contactId}`);
         } catch (err) {
           console.error(`[Fathom] Error escribiendo custom fields configurados en GHL:`, err);

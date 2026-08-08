@@ -374,9 +374,10 @@ export async function processChatWebhook(
 
   const idCuenta = account.id_cuenta;
   // Token para llamar a la API de GHL (traer nombre del contacto, asesor, etc.).
-  // Las cuentas del marketplace no tienen token legacy → usar el token OAuth.
-  let tokenGhl = account.token_ghl ?? "";
-  if (!tokenGhl) tokenGhl = (await getAccessToken(locationId)) ?? "";
+  // App-only: se prefiere el token OAuth (se auto-refresca); token_ghl legacy
+  // (PIT) queda solo como último recurso.
+  let tokenGhl = (await getAccessToken(locationId)) ?? "";
+  if (!tokenGhl) tokenGhl = account.token_ghl ?? "";
 
   // ── 5b-pre. Auto-limpiar flag de desconexión si la app fue reinstalada ───
   // Cuando llega cualquier mensaje real después de un UNINSTALL, significa que

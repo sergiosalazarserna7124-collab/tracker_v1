@@ -46,6 +46,7 @@ import { generateLlamadaAnalysisText, diarizarTranscripcion, extractLlamadaObjec
 import type { ObjecionItem } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { runContactStageCoach } from "../ai/stage-coach-evaluation.service.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria, applyReglasPipelineMove } from "../ai/reglas-actions.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
@@ -167,7 +168,7 @@ async function resolveAccount(
           console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
           return { idCuenta: null, tokenGhl: null, isCancelled: true };
         }
-        return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl, isCancelled: false };
+        return { idCuenta: account.id_cuenta, tokenGhl: (await getAccessToken(account.locationid ?? "")) || account.token_ghl, isCancelled: false };
       }
       console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
     } catch (err) {
@@ -184,7 +185,7 @@ async function resolveAccount(
           console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
           return { idCuenta: null, tokenGhl: null, isCancelled: true };
         }
-        return { idCuenta: account.id_cuenta, tokenGhl: account.token_ghl, isCancelled: false };
+        return { idCuenta: account.id_cuenta, tokenGhl: (await getAccessToken(account.locationid ?? "")) || account.token_ghl, isCancelled: false };
       }
       console.warn(`[${label}] No se encontró cuenta para id_cuenta=${idCuentaFallback}`);
     } catch (err) {
@@ -233,10 +234,12 @@ async function resolveAccountFull(
     isCancelled: false,
   };
 
-  function mapAccount(account: CuentaFullRow) {
+  async function mapAccount(account: CuentaFullRow) {
+    // App-only: preferir token OAuth (auto-refresh); token_ghl legacy fallback.
+    const tokenGhl = (await getAccessToken(account.locationid ?? "")) || account.token_ghl;
     return {
       idCuenta: account.id_cuenta,
-      tokenGhl: account.token_ghl,
+      tokenGhl,
       openaiApiKey: account.openai_api_key,
       embudoPersonalizado: account.embudo_personalizado,
       promptVentas: account.prompt_ventas,
@@ -258,7 +261,7 @@ async function resolveAccountFull(
           console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
           return { ...empty, isCancelled: true };
         }
-        return mapAccount(account);
+        return await mapAccount(account);
       }
       console.warn(`[${label}] No se encontró cuenta para locationId="${locationId}"`);
     } catch (err) {
@@ -275,7 +278,7 @@ async function resolveAccountFull(
           console.info(`[${label}] Cuenta cancelada (id=${account.id_cuenta}) — webhook descartado silenciosamente`);
           return { ...empty, isCancelled: true };
         }
-        return mapAccount(account);
+        return await mapAccount(account);
       }
       console.warn(`[${label}] No se encontró cuenta para id_cuenta=${idCuentaFallback}`);
     } catch (err) {
