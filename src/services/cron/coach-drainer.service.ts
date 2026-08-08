@@ -11,6 +11,7 @@ import {
   createContactTask,
 } from "../ghl-api.service.js";
 import { savePendingTag } from "../ghl-token-guard.service.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import type { SeccionGuion, CanalCoach } from "../data/coach-guion.service.js";
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -135,6 +136,8 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
   }
 
   for (const cuenta of cuentasList) {
+    // App-only: token OAuth (auto-refresh) primero; token_ghl legacy fallback.
+    const tokenGhlOAuth = (await getAccessToken(cuenta.locationid ?? "")) || cuenta.token_ghl;
     if (Date.now() - startTime > MAX_RUNTIME_MS) {
       console.warn("[coachDrainer] Circuit breaker activado");
       break;
@@ -265,10 +268,10 @@ export async function runCoachDrainer(): Promise<CoachDrainerResult> {
           ? (guion.tags_cumplido as unknown as string[] | null) ?? []
           : (guion.tags_no_cumplido as unknown as string[] | null) ?? [COACH_TAG];
 
-        if (tagsToApply.length > 0 && candidate.contact_id_ghl && cuenta.token_ghl && cuenta.locationid) {
+        if (tagsToApply.length > 0 && candidate.contact_id_ghl && tokenGhlOAuth && cuenta.locationid) {
           const ghlResult = await applyCoachTagsAndTask(
             candidate.contact_id_ghl,
-            cuenta.token_ghl,
+            tokenGhlOAuth,
             cuenta.locationid,
             cuenta.id_cuenta,
             tagsToApply,
