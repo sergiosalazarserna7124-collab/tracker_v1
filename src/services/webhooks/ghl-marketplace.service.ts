@@ -126,12 +126,15 @@ function hasNoContestadaTag(tags?: string[]): boolean {
   return (tags ?? []).some((t) => typeof t === "string" && normalizeTag(t) === TAG_NO_CONTESTADA);
 }
 
-// Etiquetas FINANCIERAS (las pone el equipo en el contacto):
-//  - "apartado" → el lead apartó: cuenta 1 apartado y suma el campo custom de
-//    la oportunidad "Monto de apartado".
-//  - "compro"   → venta: cuenta 1 venta y suma el value (monetaryValue) de la
-//    oportunidad. Acepta acentos/mayúsculas ("Compró" → compro).
+// Etiquetas FINANCIERAS (las pone el equipo en el contacto). Definición Sergio
+// (2026-08-08): una venta/apartado SOLO cuenta si además el valor está completo.
+//  - "apartado" → el lead apartó: cuenta como apartado SOLO si el campo custom
+//    de la oportunidad "Monto de apartado" está completo (> 0).
+//  - "vendida"  → venta: cuenta como venta SOLO si el value (monetaryValue /
+//    valor de oportunidad) está completo (> 0). Se acepta "compro" como alias
+//    por compatibilidad. Acepta acentos/mayúsculas.
 const TAG_APARTADO = "apartado";
+const TAG_VENDIDA = "vendida";
 const TAG_COMPRO = "compro";
 
 function sinAcentos(s: string): string {
@@ -245,7 +248,7 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
       locationId,
       contactId,
       tieneEtiqueta(body.tags, TAG_APARTADO),
-      tieneEtiqueta(body.tags, TAG_COMPRO),
+      tieneEtiqueta(body.tags, TAG_VENDIDA) || tieneEtiqueta(body.tags, TAG_COMPRO),
     );
   } catch (e) {
     console.warn(`[Marketplace/Finanzas] error procesando etiquetas de ${contactId}:`, e instanceof Error ? e.message : e);
@@ -486,6 +489,14 @@ async function handleEtiquetasFinancieras(
   const monetary = typeof opp.monetaryValue === "number" ? opp.monetaryValue : null;
   const montoVenta = compro ? monetary : null;
 
+  // Definición Sergio: la venta/apartado SOLO cuenta si el valor está completo.
+  //  - venta válida    = etiqueta vendida/compro + valor de oportunidad (monetaryValue) > 0.
+  //  - apartado válido = etiqueta apartado + "Monto de apartado" > 0.
+  const ventaValida = compro && monetary != null && monetary > 0;
+  const apartadoValido = apartado && montoApartado != null && montoApartado > 0;
+  if (compro && !ventaValida) console.info(`[Marketplace/Finanzas] contacto=${contactId} con etiqueta de venta pero SIN valor de oportunidad → no cuenta como venta`);
+  if (apartado && !apartadoValido) console.info(`[Marketplace/Finanzas] contacto=${contactId} con etiqueta apartado pero SIN "Monto de apartado" → no cuenta como apartado`);
+
   await pgPool.query(
     `INSERT INTO oportunidades
        (id_cuenta, ghl_opportunity_id, ghl_contact_id, nombre, status, monetary_value, fecha_creada, fecha_actualizada,
@@ -502,11 +513,11 @@ async function handleEtiquetasFinancieras(
        monetary_value    = COALESCE(EXCLUDED.monetary_value, oportunidades.monetary_value),
        fecha_actualizada = NOW()`,
     [idCuenta, opp.id, contactId, opp.name ?? null, opp.status ?? null, monetary,
-     opp.createdAt ? new Date(opp.createdAt) : new Date(), apartado, montoApartado, compro, montoVenta],
+     opp.createdAt ? new Date(opp.createdAt) : new Date(), apartadoValido, montoApartado, ventaValida, montoVenta],
   );
   console.info(
-    `[Marketplace/Finanzas] contacto=${contactId} opp=${opp.id} → apartado=${apartado}` +
-    `${apartado ? ` ($${montoApartado ?? 0})` : ""} venta=${compro}${compro ? ` ($${montoVenta ?? 0})` : ""}`,
+    `[Marketplace/Finanzas] contacto=${contactId} opp=${opp.id} → apartado=${apartadoValido}` +
+    `${apartadoValido ? ` ($${montoApartado ?? 0})` : ""} venta=${ventaValida}${ventaValida ? ` ($${montoVenta ?? 0})` : ""}`,
   );
 }
 
