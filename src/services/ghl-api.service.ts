@@ -3,6 +3,25 @@ import { drizzleDb } from "../config/drizzle.js";
 import { cuentas } from "../db/schema.js";
 import { fetchWithTimeout } from "../utils/fetch.utils.js";
 import { withRetry } from "../utils/retry.utils.js";
+import { getAccessToken } from "./oauth/ghl-oauth.service.js";
+
+/**
+ * App-only: si la cuenta tiene token OAuth de la app (auto-refrescado), se usa
+ * ese como `token_ghl` para TODO el flujo. Si no hay OAuth (cuentas legacy), se
+ * conserva el token_ghl existente. Fail-open ante errores de refresh.
+ */
+async function hydrateOAuthToken<T extends { locationid?: string | null; token_ghl?: string | null }>(
+  row: T | undefined,
+): Promise<T | null> {
+  if (!row) return null;
+  try {
+    if (row.locationid) {
+      const oauth = await getAccessToken(row.locationid);
+      if (oauth) return { ...row, token_ghl: oauth };
+    }
+  } catch { /* conservar token_ghl existente */ }
+  return row;
+}
 
 const GHL_TIMEOUT_MS = 15_000;
 
@@ -119,7 +138,7 @@ export async function getAccountByLocationId(locationId: string): Promise<Cuenta
     { label: "getAccountByLocationId" },
   );
 
-  return rows[0] ?? null;
+  return hydrateOAuthToken(rows[0]);
 }
 
 // ─── Consulta a BD: buscar cuenta por id_cuenta ──────────────────────────────
@@ -141,7 +160,7 @@ export async function getAccountById(idCuenta: number): Promise<CuentaRow | null
     { label: "getAccountById" },
   );
 
-  return rows[0] ?? null;
+  return hydrateOAuthToken(rows[0]);
 }
 
 // ─── Consulta a BD: buscar cuenta completa por id_cuenta ─────────────────────
@@ -178,7 +197,7 @@ export async function getAccountFullById(idCuenta: number): Promise<CuentaFullRo
     { label: "getAccountFullById" },
   );
 
-  return rows[0] ?? null;
+  return hydrateOAuthToken(rows[0]);
 }
 
 // ─── Consulta a BD: buscar cuenta con datos de Twilio incluidos ──────────────
@@ -215,7 +234,7 @@ export async function getAccountFullByLocationId(locationId: string): Promise<Cu
     { label: "getAccountFullByLocationId" },
   );
 
-  return rows[0] ?? null;
+  return hydrateOAuthToken(rows[0]);
 }
 
 // ─── GHL API: buscar contacto por email en una ubicación ─────────────────────

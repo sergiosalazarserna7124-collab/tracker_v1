@@ -11,7 +11,9 @@ import { db } from "../config/database.js";
 import { drizzleDb } from "../config/drizzle.js";
 import { cuentas, ghlPendingActions } from "../db/schema.js";
 import { eq, isNull } from "drizzle-orm";
-import { addContactNote, addContactTag, addContactTags } from "./ghl-api.service.js";
+// NOTA: ghl-api.service se importa de forma DINÁMICA dentro de retryPendingActions
+// para romper el ciclo ghl-api → ghl-oauth → ghl-token-guard → ghl-api, y así
+// permitir que ghl-api hidrate el token OAuth en sus loaders.
 
 // ─── Marcar token como inválido en BD ───────────────────────────────────────
 
@@ -103,6 +105,9 @@ export async function retryPendingActions(
     .orderBy(ghlPendingActions.created_at);
 
   const pending = pendientes.filter(p => p.resolved_at === null);
+
+  // Import dinámico para evitar el ciclo de módulos con ghl-api.
+  const { addContactNote, addContactTag, addContactTags } = await import("./ghl-api.service.js");
 
   console.info(`[GHL TokenGuard] Reintentando ${pending.length} acciones pendientes para cuenta=${idCuenta}`);
   

@@ -5,6 +5,7 @@ import { withRetry } from "../../utils/retry.utils.js";
 import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
 import { evaluateReglas, type DynamicValueContext } from "../ai/reglas-evaluator.service.js";
 import { parseCriteriosCalificacion } from "../data/criterios-calificacion.utils.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 
 // Classify on the very first lead message to prevent night-drift (AUT-1706)
 const MIN_LEAD_MESSAGES = 1;
@@ -116,6 +117,11 @@ export async function tryInlineChatClassification(
 
     const canalesActivos = Array.isArray(config.canales_activos) ? config.canales_activos as string[] : null;
 
+    // App-only: token OAuth (auto-refresh) primero; el del contexto (ya OAuth
+    // desde chat.service) manda; token_ghl legacy solo como último recurso.
+    const locId = ghlContext?.locationId ?? config.locationid ?? null;
+    const tokenGhlResuelto = ghlContext?.tokenGhl || (locId ? await getAccessToken(locId) : null) || config.token_ghl;
+
     // Prompt por ETIQUETA del contacto (categorías de chats): si el contacto
     // tiene la etiqueta de una categoría, su chat se analiza con ese prompt.
     let promptChatPorEtiqueta: string | null = null;
@@ -123,7 +129,7 @@ export async function tryInlineChatClassification(
     let leadCatCoach: ReturnType<typeof matchCategoriaLead> | null = null;
     let contactTagsCoach: string[] | null = null;
     const contactIdParaCategoria = ghlContext?.contactId ?? chatRow.id_lead;
-    const tokenParaCategoria = ghlContext?.tokenGhl ?? config.token_ghl;
+    const tokenParaCategoria = tokenGhlResuelto;
     if (contactIdParaCategoria && tokenParaCategoria &&
         (categoriasUsanEtiquetas(config.categorias_leads) || categoriasUsanEtiquetas(config.categorias_chats))) {
       try {
@@ -182,8 +188,8 @@ export async function tryInlineChatClassification(
 
     // 5. Run reglas GHL-write actions for chats (AUT-1781)
     const contactId = ghlContext?.contactId ?? chatRow.id_lead;
-    const bearerToken = ghlContext?.tokenGhl ?? config.token_ghl;
-    const locationId = ghlContext?.locationId ?? config.locationid;
+    const bearerToken = tokenGhlResuelto;
+    const locationId = locId;
 
     // Usa las reglas EFECTIVAS (per-etapa si el contacto está en una etapa; si
     // no, las globales). Acciones con efecto en GHL: escribir campo, campo IA y
