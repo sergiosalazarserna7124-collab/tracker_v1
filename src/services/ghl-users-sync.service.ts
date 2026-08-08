@@ -187,18 +187,18 @@ export async function syncUsersForLocation(
     }
   }
 
-  // Usuarios creados por el sync que ya no están en la location → desactivar.
-  // Los creados a mano (origen='manual') nunca se tocan.
+  // La cuenta es un ESPEJO de GHL: cualquier usuario que no exista en la
+  // location (incluidos los creados a mano en el pasado) se desactiva y deja
+  // de aparecer y de poder entrar. Reversible: si aparece en GHL, el próximo
+  // sync lo reactiva.
   const idsActivos = ghlUsers.filter((u) => !u.deleted).map((u) => u.id);
   const { rowCount } = await withRetry(
     () =>
       db.query(
         `UPDATE usuarios_dashboard SET activo = FALSE, ghl_synced_at = NOW()
           WHERE id_cuenta = $1
-            AND origen = 'ghl'
             AND activo = TRUE
-            AND ghl_user_id IS NOT NULL
-            AND NOT (ghl_user_id = ANY($2::text[]))`,
+            AND (ghl_user_id IS NULL OR NOT (ghl_user_id = ANY($2::text[])))`,
         [idCuenta, idsActivos],
       ),
     { label: "ghlUsersSync/deactivate" },
