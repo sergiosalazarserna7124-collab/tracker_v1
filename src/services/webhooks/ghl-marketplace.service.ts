@@ -126,6 +126,22 @@ function hasNoContestadaTag(tags?: string[]): boolean {
   return (tags ?? []).some((t) => typeof t === "string" && normalizeTag(t) === TAG_NO_CONTESTADA);
 }
 
+// Etiquetas FINANCIERAS (las pone el equipo en el contacto):
+//  - "apartado" → el lead apartó: cuenta 1 apartado y suma el campo custom de
+//    la oportunidad "Monto de apartado".
+//  - "compro"   → venta: cuenta 1 venta y suma el value (monetaryValue) de la
+//    oportunidad. Acepta acentos/mayúsculas ("Compró" → compro).
+const TAG_APARTADO = "apartado";
+const TAG_COMPRO = "compro";
+
+function sinAcentos(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+function tieneEtiqueta(tags: string[] | undefined, objetivo: string): boolean {
+  return (tags ?? []).some((t) => typeof t === "string" && sinAcentos(normalizeTag(t)) === objetivo);
+}
+
 function fullName(b: GhlContactEvent): string | null {
   const n = (b.name ?? [b.firstName, b.lastName].filter(Boolean).join(" ")).trim();
   return n || null;
@@ -220,6 +236,19 @@ async function handleContactTagUpdate(body: GhlContactEvent): Promise<void> {
   // Llamada no contestada reportada vía etiqueta (workflow "Call Status").
   if (hasNoContestadaTag(body.tags)) {
     await handleNoContestadaTag(idCuenta, locationId, body);
+  }
+
+  // Etiquetas financieras: apartado / compro → marcar la oportunidad del contacto.
+  try {
+    await handleEtiquetasFinancieras(
+      idCuenta,
+      locationId,
+      contactId,
+      tieneEtiqueta(body.tags, TAG_APARTADO),
+      tieneEtiqueta(body.tags, TAG_COMPRO),
+    );
+  } catch (e) {
+    console.warn(`[Marketplace/Finanzas] error procesando etiquetas de ${contactId}:`, e instanceof Error ? e.message : e);
   }
 
   // Dos etiquetas, semántica distinta:
@@ -352,6 +381,132 @@ async function handleNoContestadaTag(
   } catch (e) {
     console.warn(`[Marketplace/NoContestadaTag] no se pudo quitar la etiqueta de ${contactId}:`, e instanceof Error ? e.message : e);
   }
+}
+
+// ─── Etiquetas financieras: apartado / compro → oportunidad del contacto ─────
+
+const CUSTOM_FIELD_MONTO_APARTADO = "monto de apartado";
+// Cache por location del id del campo custom (se resuelve una vez por proceso).
+const cfMontoApartadoCache = new Map<string, string | null>();
+
+async function getMontoApartadoFieldId(locationId: string, token: string): Promise<string | null> {
+  const cached = cfMontoApartadoCache.get(locationId);
+  if (cached !== undefined) return cached;
+  let id: string | null = null;
+  try {
+    const res = await fetch(
+      `https://services.leadconnectorhq.com/locations/${locationId}/customFields?model=opportunity`,
+      { headers: { Authorization: `Bearer ${token}`, Version: "2021-07-28", Accept: "application/json" } },
+    );
+    if (res.ok) {
+      const data = (await res.json()) as { customFields?: Array<{ id?: string; name?: string }> };
+      const match = (data.customFields ?? []).find(
+        (f) => sinAcentos((f.name ?? "").trim().toLowerCase()) === CUSTOM_FIELD_MONTO_APARTADO,
+      );
+      id = match?.id ?? null;
+    }
+  } catch (e) {
+    console.warn(`[Marketplace/Finanzas] no se pudo resolver campo custom en ${locationId}:`, e instanceof Error ? e.message : e);
+    return null; // no cachear el fallo
+  }
+  cfMontoApartadoCache.set(locationId, id);
+  if (!id) console.warn(`[Marketplace/Finanzas] location ${locationId} no tiene el campo custom "Monto de apartado" en oportunidades`);
+  return id;
+}
+
+interface GhlOpportunitySearchItem {
+  id?: string;
+  name?: string;
+  status?: string;
+  monetaryValue?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  customFields?: Array<{ id?: string; fieldValue?: unknown; field_value?: unknown }>;
+}
+
+/**
+ * Marca apartado/venta en la oportunidad del contacto según las etiquetas.
+ *  - apartado: monto desde el campo custom "Monto de apartado" de la oportunidad.
+ *  - compro:   monto desde el value (monetaryValue) de la oportunidad.
+ * fecha_apartado/fecha_venta se setean la PRIMERA vez (no se pisan en re-eventos)
+ * y se limpian si la etiqueta se quita (corrección reversible).
+ */
+async function handleEtiquetasFinancieras(
+  idCuenta: number,
+  locationId: string,
+  contactId: string,
+  apartado: boolean,
+  compro: boolean,
+): Promise<void> {
+  if (!apartado && !compro) {
+    // Reversión: el contacto ya no tiene las etiquetas → limpiar flags si los tenía.
+    const res = await pgPool.query(
+      `UPDATE oportunidades SET apartado = false, fecha_apartado = NULL, venta = false, fecha_venta = NULL
+       WHERE id_cuenta = $1 AND ghl_contact_id = $2 AND (apartado OR venta)`,
+      [idCuenta, contactId],
+    );
+    if (res.rowCount) console.info(`[Marketplace/Finanzas] contacto=${contactId} sin etiquetas → apartado/venta revertidos (${res.rowCount})`);
+    return;
+  }
+
+  const token = await getAccessToken(locationId);
+  if (!token) return;
+
+  // Oportunidad más reciente (no borrada) del contacto
+  const res = await fetch(
+    `https://services.leadconnectorhq.com/opportunities/search?location_id=${encodeURIComponent(locationId)}&contact_id=${encodeURIComponent(contactId)}`,
+    { headers: { Authorization: `Bearer ${token}`, Version: "2021-07-28", Accept: "application/json" } },
+  );
+  if (!res.ok) {
+    console.warn(`[Marketplace/Finanzas] búsqueda de oportunidades HTTP ${res.status} contacto=${contactId}`);
+    return;
+  }
+  const data = (await res.json()) as { opportunities?: GhlOpportunitySearchItem[] };
+  const opp = (data.opportunities ?? [])
+    .filter((o) => o.id && (o.status ?? "") !== "deleted")
+    .sort((a, b) => new Date(b.updatedAt ?? b.createdAt ?? 0).getTime() - new Date(a.updatedAt ?? a.createdAt ?? 0).getTime())[0];
+  if (!opp?.id) {
+    console.warn(`[Marketplace/Finanzas] contacto=${contactId} con etiqueta ${apartado ? "apartado" : "compro"} pero SIN oportunidad en GHL — no se puede contar`);
+    return;
+  }
+
+  // Monto apartado: campo custom "Monto de apartado" de la oportunidad
+  let montoApartado: number | null = null;
+  if (apartado) {
+    const fieldId = await getMontoApartadoFieldId(locationId, token);
+    const cf = fieldId ? (opp.customFields ?? []).find((f) => f.id === fieldId) : undefined;
+    const raw = cf?.fieldValue ?? cf?.field_value;
+    const num = raw != null ? parseFloat(String(raw).replace(/[^0-9.\-]/g, "")) : NaN;
+    montoApartado = Number.isFinite(num) ? num : null;
+    if (montoApartado == null) {
+      console.warn(`[Marketplace/Finanzas] oportunidad ${opp.id} sin valor en "Monto de apartado" — apartado cuenta con monto 0`);
+    }
+  }
+  const monetary = typeof opp.monetaryValue === "number" ? opp.monetaryValue : null;
+  const montoVenta = compro ? monetary : null;
+
+  await pgPool.query(
+    `INSERT INTO oportunidades
+       (id_cuenta, ghl_opportunity_id, ghl_contact_id, nombre, status, monetary_value, fecha_creada, fecha_actualizada,
+        apartado, monto_apartado, fecha_apartado, venta, monto_venta, fecha_venta)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(),
+             $8, $9, CASE WHEN $8::boolean THEN NOW() END, $10, $11, CASE WHEN $10::boolean THEN NOW() END)
+     ON CONFLICT (id_cuenta, ghl_opportunity_id) DO UPDATE SET
+       apartado          = EXCLUDED.apartado,
+       monto_apartado    = COALESCE(EXCLUDED.monto_apartado, oportunidades.monto_apartado),
+       fecha_apartado    = CASE WHEN EXCLUDED.apartado THEN COALESCE(oportunidades.fecha_apartado, NOW()) ELSE NULL END,
+       venta             = EXCLUDED.venta,
+       monto_venta       = COALESCE(EXCLUDED.monto_venta, oportunidades.monto_venta),
+       fecha_venta       = CASE WHEN EXCLUDED.venta THEN COALESCE(oportunidades.fecha_venta, NOW()) ELSE NULL END,
+       monetary_value    = COALESCE(EXCLUDED.monetary_value, oportunidades.monetary_value),
+       fecha_actualizada = NOW()`,
+    [idCuenta, opp.id, contactId, opp.name ?? null, opp.status ?? null, monetary,
+     opp.createdAt ? new Date(opp.createdAt) : new Date(), apartado, montoApartado, compro, montoVenta],
+  );
+  console.info(
+    `[Marketplace/Finanzas] contacto=${contactId} opp=${opp.id} → apartado=${apartado}` +
+    `${apartado ? ` ($${montoApartado ?? 0})` : ""} venta=${compro}${compro ? ` ($${montoVenta ?? 0})` : ""}`,
+  );
 }
 
 // ─── ContactUpdate → sincronizar datos del contacto en el dashboard ──────────
