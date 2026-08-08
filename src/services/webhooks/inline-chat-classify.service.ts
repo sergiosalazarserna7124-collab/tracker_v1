@@ -226,7 +226,7 @@ export async function tryInlineChatClassification(
 
     // 6. Coach de ventas de la etapa: evalúa TODAS las interacciones del
     // contacto (chats + llamadas + citas) en conjunto y aplica tags + nota.
-    if (contactId && bearerToken && leadCatCoach?.coach?.criterios?.trim()) {
+    if (contactId && bearerToken && leadCatCoach?.coach && (leadCatCoach.coach.secciones?.length ?? 0) > 0) {
       await runContactStageCoach({
         idCuenta,
         contactId,

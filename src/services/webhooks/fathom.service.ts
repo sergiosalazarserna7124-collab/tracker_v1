@@ -549,7 +549,7 @@ export async function processFathomCall(
 
   // 5a-ter-bis. Coach de ventas de la etapa: evalúa TODAS las interacciones del
   // contacto (chats + llamadas + citas) en conjunto y aplica tags + nota.
-  if (contactId && account.token_ghl && leadCatCoach?.coach?.criterios?.trim() && formattedTranscript) {
+  if (contactId && account.token_ghl && leadCatCoach?.coach && (leadCatCoach.coach.secciones?.length ?? 0) > 0 && formattedTranscript) {
     await runContactStageCoach({
       idCuenta,
       contactId,

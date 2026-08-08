@@ -1,12 +1,9 @@
 import { and, desc, eq } from "drizzle-orm";
-import { generateObject, jsonSchema } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
-import type { LanguageModel } from "ai";
 import { drizzleDb } from "../../config/drizzle.js";
 import { db as pgPool } from "../../config/database.js";
 import { logLlamadas } from "../../db/schema.js";
-import { env } from "../../config/env.js";
-import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
+import { evaluateCallAgainstGuion } from "./coach-evaluation.service.js";
+import type { SeccionGuion } from "../data/coach-guion.service.js";
 import {
   addContactNote,
   removeContactTag,
@@ -19,25 +16,16 @@ import {
 //
 // A diferencia del coach por guion/canal (coach-evaluation.service), este
 // evaluador toma en conjunto TODAS las interacciones del contacto —chats,
-// llamadas y citas/videollamadas, unidas por el contact ID— y decide si la
-// etapa se dio por CUMPLIDA (pasó) o NO según los criterios definidos por el
-// coach y el umbral. Aplica tags de resultado y deja una nota accionable.
+// llamadas y citas/videollamadas, unidas por el contact ID— y evalúa el guión
+// de la etapa (secciones must-have/deseable) sobre ese contexto combinado.
+// Decide CUMPLIDA (pasó) / NO según el umbral y las must-have, aplica tags de
+// resultado y deja una nota accionable.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_UMBRAL = 70;
 const DEFAULT_TAG_NO_CUMPLIDO = "etapa_incumplida_autoia";
 const MIN_TEXTO_UTIL = 40; // chars mínimos de contexto para que valga la pena evaluar
 const MAX_TRANSCRIPT_CHARS = 24_000; // recorte defensivo para el prompt
-
-// ─── Modelo IA ───────────────────────────────────────────────────────────────
-
-const defaultProvider = createOpenAI({ apiKey: env.OPENAI_API_KEY });
-const defaultModel = defaultProvider("gpt-4o-mini");
-
-function resolveModel(openaiApiKey?: string | null): LanguageModel {
-  if (openaiApiKey) return createOpenAI({ apiKey: openaiApiKey })("gpt-4o-mini");
-  return defaultModel;
-}
 
 // ─── Recolección de interacciones del contacto ───────────────────────────────
 
@@ -143,61 +131,21 @@ export function buildContextTranscript(interacciones: Interaccion[]): string {
   return texto;
 }
 
-// ─── Evaluación IA ───────────────────────────────────────────────────────────
+// ─── Evaluación IA (por secciones, sobre el contexto combinado) ──────────────
 
 export interface StageCoachResult {
   paso: boolean;
   score: number;
+  secciones_faltantes_must_have: string[]; // nombres de secciones must-have no cubiertas
   evidencia: string;
   nota_accionable: string;
 }
 
-const evalSchema = jsonSchema<StageCoachResult>({
-  type: "object",
-  properties: {
-    paso: {
-      type: "boolean",
-      description: "true si, tomando en conjunto TODAS las interacciones, la etapa se dio por cumplida según los criterios",
-    },
-    score: {
-      type: "number",
-      minimum: 0,
-      maximum: 100,
-      description: "Porcentaje de cumplimiento de los criterios de la etapa (0-100)",
-    },
-    evidencia: {
-      type: "string",
-      description: "Evidencia breve del contexto que justifica el resultado (máx. 2 oraciones)",
-    },
-    nota_accionable: {
-      type: "string",
-      description: "1-2 recomendaciones concretas para el asesor sobre qué falta o qué reforzar (máx. 2 oraciones)",
-    },
-  },
-  required: ["paso", "score", "evidencia", "nota_accionable"],
-  additionalProperties: false,
-});
-
-function buildSystemPrompt(coach: CoachEtapaLead, etapaNombre: string, umbral: number): string {
-  return `Eres un coach de ventas. Evalúas el AVANCE de un lead en una etapa concreta de su proceso comercial.
-
-## ETAPA
-"${etapaNombre}"
-
-## QUÉ DEBE PASAR EN ESTA ETAPA (criterios de cumplimiento)
-${coach.criterios}
-
-## CONTEXTO QUE RECIBES
-Recibes, unidas por el mismo contacto y en orden cronológico, TODAS sus interacciones: chats, llamadas y citas/videollamadas. Debes evaluarlas EN CONJUNTO, no una por una: un criterio puede cumplirse en un chat y otro en una llamada posterior.
-
-## INSTRUCCIONES
-1. Determina si, sumando todo lo ocurrido, la etapa se dio por CUMPLIDA (paso=true) o no.
-2. Asigna un score 0-100 de cumplimiento de los criterios.
-3. El umbral de aprobación es ${umbral}%. Sé consistente: si paso=true el score debe ser ≥ ${umbral}, si paso=false debe ser < ${umbral}.
-4. La evidencia y la nota deben ser breves (máx. 2 oraciones cada una) y en español.
-5. No inventes: básate solo en el contexto entregado.`;
-}
-
+/**
+ * Evalúa el guión de la etapa (secciones must-have/deseable) contra el contexto
+ * combinado de TODAS las interacciones del contacto. Reutiliza el evaluador de
+ * coach ya probado. `paso` = score ≥ umbral y sin must-have faltantes.
+ */
 export async function evaluateStageCoach(
   transcript: string,
   coach: CoachEtapaLead,
@@ -206,22 +154,39 @@ export async function evaluateStageCoach(
   idCuenta?: number | null,
 ): Promise<StageCoachResult> {
   const umbral = coach.umbral ?? DEFAULT_UMBRAL;
-  const model = resolveModel(openaiApiKey);
+  const secciones = (coach.secciones ?? []).filter((s) => s?.nombre?.trim() || s?.criterio?.trim());
 
-  const { object, usage } = await generateObject({
-    model,
-    schema: evalSchema,
-    system: buildSystemPrompt(coach, etapaNombre, umbral),
-    prompt: `Evalúa el siguiente contexto de interacciones del contacto:\n\n${transcript}`,
-    temperature: 0,
-  });
+  if (secciones.length === 0) {
+    // Sin guión configurado: no se puede evaluar. Se considera no-cumplido neutro.
+    return { paso: false, score: 0, secciones_faltantes_must_have: [], evidencia: "Sin guión configurado para la etapa.", nota_accionable: "Configura al menos una sección en el coach de esta etapa." };
+  }
 
-  void trackApiUsage(idCuenta ?? null, TIPO_CONSUMO.GPT4O_MINI, usage.totalTokens ?? 0);
+  const contexto = `Etapa evaluada: "${etapaNombre}".\nA continuación, TODAS las interacciones del contacto (chats, llamadas y citas) unidas por el mismo contact ID, en orden cronológico. Evalúalas EN CONJUNTO: una sección puede cumplirse en un chat y otra en una llamada posterior.\n\n${transcript}`;
 
-  const score = Math.max(0, Math.min(100, Math.round(object.score)));
-  // Fuente de verdad del "pasó": el umbral. Respetamos el score del modelo.
-  const paso = score >= umbral;
-  return { paso, score, evidencia: object.evidencia, nota_accionable: object.nota_accionable };
+  const res = await evaluateCallAgainstGuion(
+    contexto,
+    secciones as SeccionGuion[],
+    umbral,
+    openaiApiKey,
+    idCuenta,
+    "llamada",
+    { nota_cumplido: coach.nota_cumplido ?? null, nota_no_cumplido: coach.nota_no_cumplido ?? null },
+  );
+
+  const faltantesNombres = res.secciones_faltantes_must_have
+    .map((id) => secciones.find((s) => s.id === id)?.nombre ?? id);
+
+  const evidencia = faltantesNombres.length > 0
+    ? `Faltó cubrir: ${faltantesNombres.join(", ")}.`
+    : "Todas las secciones obligatorias del guión se cubrieron.";
+
+  return {
+    paso: res.cumple_umbral,
+    score: res.score_total,
+    secciones_faltantes_must_have: faltantesNombres,
+    evidencia,
+    nota_accionable: res.nota_accionable,
+  };
 }
 
 // ─── Decisión de tags + nota (pura, sin side-effects) ────────────────────────
@@ -294,7 +259,8 @@ export async function runContactStageCoach(params: RunContactStageCoachParams): 
   } = params;
   const prefix = params.logPrefix ?? "[StageCoach]";
 
-  if (!coach?.criterios?.trim()) return;
+  const tieneGuion = (coach?.secciones ?? []).some((s) => s?.nombre?.trim() || s?.criterio?.trim());
+  if (!tieneGuion) return;
 
   try {
     const interacciones = await gatherContactInteractions(idCuenta, contactId);

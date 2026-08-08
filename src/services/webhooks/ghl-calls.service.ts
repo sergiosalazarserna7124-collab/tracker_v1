@@ -1413,7 +1413,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
 
   // Coach de ventas de la etapa: evalúa TODAS las interacciones del contacto
   // (chats + llamadas + citas) en conjunto y aplica tags + nota.
-  if (fields.contactId && tokenGhl && idCuenta != null && leadCatCoach?.coach?.criterios?.trim() && transcript.trim()) {
+  if (fields.contactId && tokenGhl && idCuenta != null && leadCatCoach?.coach && (leadCatCoach.coach.secciones?.length ?? 0) > 0 && transcript.trim()) {
     await runContactStageCoach({
       idCuenta,
       contactId: fields.contactId,

@@ -39,16 +39,15 @@ const sep = (t: string) => console.log(`\n${"─".repeat(72)}\n${t}\n${"─".rep
 
 // ── 1. Primera categoría/etapa de la cuenta demo (con coach + reglas) ─────────
 const COACH_LEAD_NUEVO: CoachEtapaLead = {
-  criterios: [
-    "El objetivo de esta etapa es CALIFICAR y AGENDAR. Se considera CUMPLIDA solo si,",
-    "sumando TODAS las interacciones del contacto, ocurrió todo lo siguiente:",
-    "1. El asesor se presentó (nombre + empresa) y saludó al lead.",
-    "2. Se hizo al menos una pregunta de descubrimiento para entender la necesidad/dolor.",
-    "3. Se propuso un siguiente paso concreto con fecha y hora (zoom, llamada o cita).",
-    "4. El lead aceptó o quedó comprometido con ese siguiente paso.",
-    "Si falta el punto 3 o el 4, la etapa NO se cumple aunque el resto esté bien.",
-  ].join("\n"),
+  secciones: [
+    { id: "apertura", nombre: "Presentación", criterio: "El asesor se presentó con nombre y empresa y saludó al lead.", tipo: "must_have" },
+    { id: "descubrimiento", nombre: "Descubrimiento", criterio: "Se hizo al menos una pregunta para entender la necesidad o dolor del lead.", tipo: "must_have" },
+    { id: "agenda", nombre: "Siguiente paso agendado", criterio: "Se propuso un siguiente paso concreto con fecha y hora (zoom, llamada o cita).", tipo: "must_have" },
+    { id: "compromiso", nombre: "Compromiso del lead", criterio: "El lead aceptó o quedó comprometido con ese siguiente paso.", tipo: "must_have" },
+  ],
   umbral: 75,
+  nota_cumplido: "Felicita brevemente al asesor y recuérdale confirmar la cita.",
+  nota_no_cumplido: "Indica exactamente qué sección faltó y cómo cerrarla la próxima vez.",
   tags_cumplido: ["etapa_lead_nuevo_ok"],
   tags_no_cumplido: ["etapa_lead_nuevo_pendiente"],
 };
@@ -164,6 +163,7 @@ async function main() {
     result = {
       paso: true,
       score: 88,
+      secciones_faltantes_must_have: [],
       evidencia: "El asesor se presentó (Camilo/LeadMaster), indagó la meta (20 pacientes/mes) y agendó un Zoom el viernes 3pm que la lead aceptó.",
       nota_accionable: "Confirmar la cita con recordatorio 24h antes y preparar un caso de éxito de otra clínica dental para el Zoom.",
     };
@@ -194,6 +194,7 @@ async function main() {
   const resultFail: StageCoachResult = {
     paso: false,
     score: 40,
+    secciones_faltantes_must_have: ["Siguiente paso agendado", "Compromiso del lead"],
     evidencia: "Hubo presentación y descubrimiento, pero no se propuso ni se acordó un siguiente paso con fecha.",
     nota_accionable: "Cerrar cada interacción proponiendo un día y hora concretos y confirmando el compromiso del lead.",
   };

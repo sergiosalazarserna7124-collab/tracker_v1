@@ -779,9 +779,18 @@ export function matchCategoriaPorEtiqueta(
 // Cada etapa define cómo se evalúa TODA interacción (chat/llamada/cita) del
 // contacto, cómo se resume, y qué reglas de etiquetas aplican SOLO en esa etapa.
 
+export interface SeccionGuionEtapa {
+  id: string;
+  nombre: string;
+  criterio: string;
+  tipo: "must_have" | "deseable";
+}
+
 export interface CoachEtapaLead {
-  criterios: string;
+  secciones: SeccionGuionEtapa[];
   umbral?: number;
+  nota_cumplido?: string;
+  nota_no_cumplido?: string;
   tags_cumplido?: string[];
   tags_no_cumplido?: string[];
 }
@@ -792,7 +801,9 @@ export interface CategoriaLead {
   etiqueta: string;
   prompt?: string;
   prompt_resumen?: string;
-  reglas_etiquetas?: Array<{ id: string; tag: string; condition: string }>;
+  // Reglas de etapa: modelo completo (condición + acciones + fuentes). Se pasa
+  // tal cual a evaluateReglas, que normaliza también el formato legacy simple.
+  reglas_etiquetas?: unknown[];
   coach?: CoachEtapaLead;
 }
 
