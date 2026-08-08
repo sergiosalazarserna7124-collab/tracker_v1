@@ -2,6 +2,7 @@ import { db as pgPool } from "../../config/database.js";
 import { safeAddContactTag, removeContactTag } from "../ghl-api.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenInvalid, savePendingTag } from "../ghl-token-guard.service.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 
 const MAX_TAGS_PER_RUN = 200;
 const MAX_RECONCILE_PER_RUN = 500;
@@ -39,6 +40,7 @@ interface ChatTaggedPending {
   nombre_lead: string | null;
   id_lead: string | null;
   token_ghl: string | null;
+  locationid: string | null;
 }
 
 /**
@@ -65,7 +67,7 @@ export async function reconcileSinResponderRemovals(): Promise<ChatSinResponderR
   const pendientes = await withRetry(
     () =>
       pgPool.query<ChatTaggedPending>(
-        `SELECT cl.id_evento, cl.id_cuenta, cl.nombre_lead, cl.id_lead, c.token_ghl
+        `SELECT cl.id_evento, cl.id_cuenta, cl.nombre_lead, cl.id_lead, c.token_ghl, c.locationid
            FROM chats_logs cl
            JOIN cuentas c ON c.id_cuenta = cl.id_cuenta
           WHERE cl.chat_sin_responder_tagged_at IS NOT NULL
@@ -98,12 +100,13 @@ export async function reconcileSinResponderRemovals(): Promise<ChatSinResponderR
   console.info(`[sin-responder-tags] Reconciliación: ${pendientes.rows.length} tags a remover`);
 
   for (const chat of pendientes.rows) {
-    if (!chat.id_lead || !chat.token_ghl) {
+    const ghlToken = (await getAccessToken(chat.locationid ?? "")) || chat.token_ghl;
+    if (!chat.id_lead || !ghlToken) {
       result.sin_token_ghl++;
       continue;
     }
     try {
-      await removeContactTag(chat.id_lead, chat.token_ghl, TAG_NAME);
+      await removeContactTag(chat.id_lead, ghlToken, TAG_NAME);
       await pgPool.query(
         `UPDATE chats_logs
             SET chat_sin_responder_removed_at = NOW(),
@@ -208,7 +211,8 @@ export async function runChatSinResponderTags(): Promise<ChatSinResponderTagsRes
       result.sin_ghl_contact++;
       continue;
     }
-    if (!chat.token_ghl) {
+    const ghlToken = (await getAccessToken(chat.locationid ?? "")) || chat.token_ghl;
+    if (!ghlToken) {
       result.sin_token_ghl++;
       continue;
     }
@@ -227,7 +231,7 @@ export async function runChatSinResponderTags(): Promise<ChatSinResponderTagsRes
     }
 
     try {
-      await safeAddContactTag(chat.id_lead, chat.token_ghl, TAG_NAME, chat.locationid);
+      await safeAddContactTag(chat.id_lead, ghlToken, TAG_NAME, chat.locationid);
       result.tagged++;
       console.info(
         `[sin-responder-tags] Tagged evento=${chat.id_evento} cuenta=${chat.id_cuenta} lead="${chat.nombre_lead}" (${Math.round(chat.minutos_sin_respuesta)}m)`,
