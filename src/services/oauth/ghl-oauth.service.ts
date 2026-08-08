@@ -8,6 +8,7 @@ import { env } from "../../config/env.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { markTokenOk, retryPendingActions } from "../ghl-token-guard.service.js";
 import { ensureMetricsMenuLink } from "../ghl-menu.service.js";
+import { syncUsersForLocation } from "../ghl-users-sync.service.js";
 
 const GHL_TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
 const GHL_LOCATION_TOKEN_URL = "https://services.leadconnectorhq.com/oauth/locationToken";
@@ -166,6 +167,11 @@ async function provisionLocationToken(
       console.error(`[GhlOAuth] Error reintentando pendientes cuenta=${idCuenta}:`, err),
     );
 
+    // Auto-crear los usuarios de la location en usuarios_dashboard — best-effort.
+    syncUsersForLocation(idCuenta, locationId).catch((err) =>
+      console.error(`[GhlOAuth] Error sincronizando usuarios location=${locationId}:`, err),
+    );
+
     // Crear el menú "Métricas" en GHL — best-effort, UNA sola vez por location.
     // Requiere scope custom-menu-link.write en el token de Company.
     try {
@@ -279,6 +285,12 @@ export async function exchangeCodeForTokens(
       await markTokenOk(idCuenta);
       retryPendingActions(idCuenta, tokenData.access_token).catch((err) =>
         console.error(`[GhlOAuth] Error reintentando pendientes cuenta=${idCuenta}:`, err),
+      );
+      syncUsersForLocation(idCuenta, tokenData.locationId).catch((err) =>
+        console.error(
+          `[GhlOAuth] Error sincronizando usuarios location=${tokenData.locationId}:`,
+          err,
+        ),
       );
     }
     return tokenData;
