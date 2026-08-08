@@ -1,5 +1,6 @@
 import { db as pgPool } from "../../config/database.js";
 import { getContactById, matchCategoriaPorEtiqueta, matchCategoriaLead, categoriasUsanEtiquetas } from "../ghl-api.service.js";
+import { runContactStageCoach } from "../ai/stage-coach-evaluation.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
 import { evaluateReglas, type DynamicValueContext } from "../ai/reglas-evaluator.service.js";
@@ -119,14 +120,18 @@ export async function tryInlineChatClassification(
     // tiene la etiqueta de una categoría, su chat se analiza con ese prompt.
     let promptChatPorEtiqueta: string | null = null;
     let reglasEfectivas: unknown = reglasEtiquetas;
+    let leadCatCoach: ReturnType<typeof matchCategoriaLead> | null = null;
+    let contactTagsCoach: string[] | null = null;
     const contactIdParaCategoria = ghlContext?.contactId ?? chatRow.id_lead;
     const tokenParaCategoria = ghlContext?.tokenGhl ?? config.token_ghl;
     if (contactIdParaCategoria && tokenParaCategoria &&
         (categoriasUsanEtiquetas(config.categorias_leads) || categoriasUsanEtiquetas(config.categorias_chats))) {
       try {
         const ct = await getContactById(contactIdParaCategoria, tokenParaCategoria);
+        contactTagsCoach = ct?.tags ?? null;
         const leadCat = matchCategoriaLead(ct?.tags, config.categorias_leads);
         if (leadCat) {
+          leadCatCoach = leadCat;
           if (leadCat.prompt?.trim()) promptChatPorEtiqueta = leadCat.prompt.trim();
           if (Array.isArray(leadCat.reglas_etiquetas) && leadCat.reglas_etiquetas.length > 0) {
             reglasEfectivas = leadCat.reglas_etiquetas;
@@ -217,6 +222,23 @@ export async function tryInlineChatClassification(
           console.error(`[inlineClassify] Error running GHL-write reglas for chat=${chatRow.id_evento}:`, err);
         }
       }
+    }
+
+    // 6. Coach de ventas de la etapa: evalúa TODAS las interacciones del
+    // contacto (chats + llamadas + citas) en conjunto y aplica tags + nota.
+    if (contactId && bearerToken && leadCatCoach?.coach?.criterios?.trim()) {
+      await runContactStageCoach({
+        idCuenta,
+        contactId,
+        bearerToken,
+        locationId: locationId ?? null,
+        coach: leadCatCoach.coach,
+        etapaNombre: leadCatCoach.nombre,
+        contactTags: contactTagsCoach,
+        openaiApiKey: config.openai_api_key,
+        currentInteraction: { canal: "chat", texto: formatChatAsTranscript(messages) },
+        logPrefix: "[InlineChat/Coach]",
+      });
     }
   } catch (err) {
     console.error(`[inlineClassify] Error para conversationId="${conversationId}" cuenta=${idCuenta}:`, err);

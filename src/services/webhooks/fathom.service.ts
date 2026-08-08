@@ -27,6 +27,7 @@ import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-ext
 import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { enrichWithGemini, resolveGeminiKey, estimateDurationFromTranscript } from "../ai/gemini-enrichment.service.js";
+import { runContactStageCoach } from "../ai/stage-coach-evaluation.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import type { FathomEventBody } from "../../schemas/webhooks/fathom.schema.js";
 
@@ -408,12 +409,16 @@ export async function processFathomCall(
   let categoriaCitaPrompt: string | null = null;
   let promptResumenEtapa: string | null = null;
   let reglasEtiquetasEfectivas: unknown = account.reglas_etiquetas;
+  let leadCatCoach: ReturnType<typeof matchCategoriaLead> | null = null;
+  let contactTagsCoach: string[] | null = null;
   if (contactId && account.token_ghl &&
       (categoriasUsanEtiquetas(account.categorias_leads) || categoriasUsanEtiquetas(account.categorias_citas))) {
     try {
       const contactInfo = await getContactById(contactId, account.token_ghl);
+      contactTagsCoach = contactInfo?.tags ?? null;
       const leadCat = matchCategoriaLead(contactInfo?.tags, account.categorias_leads);
       if (leadCat) {
+        leadCatCoach = leadCat;
         if (leadCat.prompt?.trim()) categoriaCitaPrompt = leadCat.prompt.trim();
         if (leadCat.prompt_resumen?.trim()) promptResumenEtapa = leadCat.prompt_resumen.trim();
         if (Array.isArray(leadCat.reglas_etiquetas) && leadCat.reglas_etiquetas.length > 0) {
@@ -540,6 +545,23 @@ export async function processFathomCall(
         err,
       );
     }
+  }
+
+  // 5a-ter-bis. Coach de ventas de la etapa: evalúa TODAS las interacciones del
+  // contacto (chats + llamadas + citas) en conjunto y aplica tags + nota.
+  if (contactId && account.token_ghl && leadCatCoach?.coach?.criterios?.trim() && formattedTranscript) {
+    await runContactStageCoach({
+      idCuenta,
+      contactId,
+      bearerToken: account.token_ghl,
+      locationId,
+      coach: leadCatCoach.coach,
+      etapaNombre: leadCatCoach.nombre,
+      contactTags: contactTagsCoach,
+      openaiApiKey: account.openai_api_key,
+      currentInteraction: { canal: "cita", texto: formattedTranscript },
+      logPrefix: "[Fathom/Coach]",
+    });
   }
 
   // 5a-quater. Actualizar pipeline GHL si la regla tiene funnelStage configurado

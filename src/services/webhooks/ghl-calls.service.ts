@@ -45,6 +45,7 @@ import {
 import { generateLlamadaAnalysisText, diarizarTranscripcion, extractLlamadaObjections } from "../ai/call-analysis.service.js";
 import type { ObjecionItem } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
+import { runContactStageCoach } from "../ai/stage-coach-evaluation.service.js";
 import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.service.js";
 import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
@@ -1315,11 +1316,15 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
   let categoriaPorEtiqueta: string | null = null;
   let promptLlamadasEfectivo = promptLlamadas;
   let reglasEtiquetasEfectivas = reglasEtiquetas;
+  let leadCatCoach: ReturnType<typeof matchCategoriaLead> | null = null;
+  let contactTagsCoach: string[] | null = null;
   if (fields.contactId && tokenGhl && (categoriasUsanEtiquetas(categoriasLeads) || categoriasUsanEtiquetas(categoriasLlamadas))) {
     try {
       const contact = await getContactById(fields.contactId, tokenGhl);
+      contactTagsCoach = contact?.tags ?? null;
       const leadCat = matchCategoriaLead(contact?.tags, categoriasLeads);
       if (leadCat) {
+        leadCatCoach = leadCat;
         if (leadCat.prompt?.trim()) promptLlamadasEfectivo = leadCat.prompt.trim();
         if (Array.isArray(leadCat.reglas_etiquetas) && leadCat.reglas_etiquetas.length > 0) {
           reglasEtiquetasEfectivas = leadCat.reglas_etiquetas;
@@ -1391,7 +1396,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     );
   }
 
-  return effectivePath(
+  const effectiveResult = await effectivePath(
     fields,
     idCuenta,
     tokenGhl,
@@ -1405,4 +1410,23 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     ghlReglasResult,
     ghlOpportunityFieldsConfig,
   );
+
+  // Coach de ventas de la etapa: evalúa TODAS las interacciones del contacto
+  // (chats + llamadas + citas) en conjunto y aplica tags + nota.
+  if (fields.contactId && tokenGhl && idCuenta != null && leadCatCoach?.coach?.criterios?.trim() && transcript.trim()) {
+    await runContactStageCoach({
+      idCuenta,
+      contactId: fields.contactId,
+      bearerToken: tokenGhl,
+      locationId: fields.locationId,
+      coach: leadCatCoach.coach,
+      etapaNombre: leadCatCoach.nombre,
+      contactTags: contactTagsCoach,
+      openaiApiKey,
+      currentInteraction: { canal: "llamada", texto: transcript },
+      logPrefix: "[GhlCalls/Coach]",
+    });
+  }
+
+  return effectiveResult;
 }

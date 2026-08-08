@@ -779,6 +779,13 @@ export function matchCategoriaPorEtiqueta(
 // Cada etapa define cómo se evalúa TODA interacción (chat/llamada/cita) del
 // contacto, cómo se resume, y qué reglas de etiquetas aplican SOLO en esa etapa.
 
+export interface CoachEtapaLead {
+  criterios: string;
+  umbral?: number;
+  tags_cumplido?: string[];
+  tags_no_cumplido?: string[];
+}
+
 export interface CategoriaLead {
   id: string;
   nombre: string;
@@ -786,6 +793,7 @@ export interface CategoriaLead {
   prompt?: string;
   prompt_resumen?: string;
   reglas_etiquetas?: Array<{ id: string; tag: string; condition: string }>;
+  coach?: CoachEtapaLead;
 }
 
 export function matchCategoriaLead(
