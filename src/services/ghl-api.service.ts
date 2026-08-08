@@ -1016,6 +1016,36 @@ export async function updateOpportunityStage(
   }
 }
 
+// ─── GHL API: mover opportunity a un pipeline + etapa (posible cambio de pipeline) ─
+
+export async function updateOpportunityPipelineStage(
+  opportunityId: string,
+  pipelineId: string,
+  stageId: string,
+  bearerToken: string,
+): Promise<void> {
+  const response = await fetchWithTimeout(
+    `https://services.leadconnectorhq.com/opportunities/${opportunityId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: buildBearerAuth(bearerToken),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+      // GHL v2: para mover entre pipelines se envían ambos ids.
+      body: JSON.stringify({ pipelineId, pipelineStageId: stageId }),
+    },
+    GHL_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`GHL opportunity pipeline update responded ${response.status}: ${text}`);
+  }
+}
+
 // ─── GHL API: actualizar custom fields de un opportunity ────────────────────
 
 export async function updateOpportunityCustomFields(

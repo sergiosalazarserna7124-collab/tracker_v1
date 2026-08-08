@@ -3,7 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { env } from "../../config/env.js";
 import { trackApiUsage, TIPO_CONSUMO } from "./track-api-usage.service.js";
-import { getContactById, updateContactCustomFields, ensureCustomField } from "../ghl-api.service.js";
+import { getContactById, updateContactCustomFields, ensureCustomField, searchOpportunityByContact, updateOpportunityPipelineStage } from "../ghl-api.service.js";
 import {
   resolveCustomFieldValue,
   type DynamicValueRange,
@@ -25,7 +25,7 @@ function resolveModel(openaiApiKey?: string | null): LanguageModel {
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
 export interface AccionRegla {
-  tipo: "cambiar_estado" | "asignar_etiqueta" | "etapa_cambiada" | "incrementar_metrica" | "asignar_categoria" | "escribir_campo_ghl" | "escribir_campo_ghl_ia";
+  tipo: "cambiar_estado" | "asignar_etiqueta" | "etapa_cambiada" | "incrementar_metrica" | "asignar_categoria" | "escribir_campo_ghl" | "escribir_campo_ghl_ia" | "actualizar_pipeline";
   valor?: string;
   fieldId?: string;
   prompt?: string;
@@ -33,6 +33,10 @@ export interface AccionRegla {
   metrica_id?: string;
   metrica_incremento?: number;
   categoria_id?: string;
+  pipeline_id?: string;
+  pipeline_nombre?: string;
+  stage_id?: string;
+  stage_nombre?: string;
 }
 
 export type { DynamicValueRange, DynamicValueConfig } from "./dynamic-value.utils.js";
@@ -312,6 +316,26 @@ export async function evaluateReglas(
   }
 
   if (dynamicCtx?.contactId && dynamicCtx.bearerToken) {
+    // ── actualizar_pipeline: mover el opportunity del contacto a un pipeline/etapa ──
+    if (dynamicCtx.locationId) {
+      const pipelineMove = matched
+        .flatMap((r) => r.acciones)
+        .find((a) => a.tipo === "actualizar_pipeline" && a.pipeline_id && a.stage_id);
+      if (pipelineMove?.pipeline_id && pipelineMove.stage_id) {
+        try {
+          const oppId = await searchOpportunityByContact(dynamicCtx.contactId, dynamicCtx.locationId, dynamicCtx.bearerToken);
+          if (oppId) {
+            await updateOpportunityPipelineStage(oppId, pipelineMove.pipeline_id, pipelineMove.stage_id, dynamicCtx.bearerToken);
+            console.info(`[ReglaEval] Opportunity ${oppId} movido a pipeline "${pipelineMove.pipeline_nombre ?? pipelineMove.pipeline_id}" / etapa "${pipelineMove.stage_nombre ?? pipelineMove.stage_id}" para contact=${dynamicCtx.contactId}`);
+          } else {
+            console.info(`[ReglaEval] Sin opportunity para contact=${dynamicCtx.contactId}; se omite actualizar_pipeline`);
+          }
+        } catch (err) {
+          console.error("[ReglaEval] Error moviendo pipeline del opportunity:", err instanceof Error ? err.message : err);
+        }
+      }
+    }
+
     const ghlWrites: Array<{ key: string; field_value: string }> = [];
     for (const rule of matched) {
       for (const accion of rule.acciones) {

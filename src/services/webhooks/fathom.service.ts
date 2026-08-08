@@ -24,7 +24,7 @@ import {
 } from "../ghl-api.service.js";
 import { analyzeCall, generateResumenSimple } from "../ai/call-analysis.service.js";
 import { extractCitaTarea, type CitaTareaExtraction } from "../ai/cita-tarea-extraction.service.js";
-import { applyReglasMetricActions, collectFunnelStages } from "../ai/reglas-actions.service.js";
+import { applyReglasMetricActions, collectFunnelStages, applyReglasPipelineMove } from "../ai/reglas-actions.service.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { enrichWithGemini, resolveGeminiKey, estimateDurationFromTranscript } from "../ai/gemini-enrichment.service.js";
 import { runContactStageCoach } from "../ai/stage-coach-evaluation.service.js";
@@ -562,6 +562,11 @@ export async function processFathomCall(
       currentInteraction: { canal: "cita", texto: formattedTranscript },
       logPrefix: "[Fathom/Coach]",
     });
+  }
+
+  // 5a-ter-ter. Acción actualizar_pipeline de reglas: mover opportunity al pipeline/etapa de GHL
+  if (contactId && account.token_ghl && account.locationid) {
+    await applyReglasPipelineMove(reglasResult.matched_rules, { contactId, locationId: account.locationid, bearerToken: account.token_ghl }, "[Fathom]");
   }
 
   // 5a-quater. Actualizar pipeline GHL si la regla tiene funnelStage configurado

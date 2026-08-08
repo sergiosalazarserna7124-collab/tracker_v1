@@ -47,7 +47,7 @@ import type { ObjecionItem } from "../ai/call-analysis.service.js";
 import { evaluateReglas } from "../ai/reglas-evaluator.service.js";
 import { runContactStageCoach } from "../ai/stage-coach-evaluation.service.js";
 import type { ReglasEvalResult, MatchedRule } from "../ai/reglas-evaluator.service.js";
-import { applyReglasMetricActions, collectFunnelStages, collectCategoria } from "../ai/reglas-actions.service.js";
+import { applyReglasMetricActions, collectFunnelStages, collectCategoria, applyReglasPipelineMove } from "../ai/reglas-actions.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { applyMergeRules } from "../ai/closer-dedup.service.js";
 import { parseConfigLlamadas, countWords, filterEmbudoForCalls } from "../data/config-llamadas.utils.js";
@@ -923,6 +923,11 @@ async function effectivePath(
         }
       }
     }
+  }
+
+  // ── Acción actualizar_pipeline de reglas: mover opportunity al pipeline/etapa GHL ──
+  if (contactId && tokenGhl && fields.locationId) {
+    await applyReglasPipelineMove(reglasResult.matched_rules, { contactId, locationId: fields.locationId, bearerToken: tokenGhl }, "[GhlCalls/Effective]");
   }
 
   // ── Actualizar pipeline GHL si la regla tiene funnelStage configurado ────────

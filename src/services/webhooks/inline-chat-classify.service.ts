@@ -185,16 +185,21 @@ export async function tryInlineChatClassification(
     const bearerToken = ghlContext?.tokenGhl ?? config.token_ghl;
     const locationId = ghlContext?.locationId ?? config.locationid;
 
-    if (contactId && bearerToken && reglasEtiquetas.length > 0) {
-      const hasGhlWriteReglas = reglasEtiquetas.some((r) => {
-        const matchesChat = !r.fuentes || r.fuentes.length === 0 ||
-          r.fuentes.some((f: string) => ["chat", "chats", "todas"].includes(f));
+    // Usa las reglas EFECTIVAS (per-etapa si el contacto está en una etapa; si
+    // no, las globales). Acciones con efecto en GHL: escribir campo, campo IA y
+    // actualizar pipeline → requieren un pase de evaluateReglas con dynamicCtx.
+    const reglasParaGhl = Array.isArray(reglasEfectivas) ? reglasEfectivas as Array<Record<string, unknown>> : reglasEtiquetas;
+    if (contactId && bearerToken && reglasParaGhl.length > 0) {
+      const hasGhlWriteReglas = reglasParaGhl.some((r) => {
+        const fuentes = (r as { fuentes?: string[] }).fuentes;
+        const matchesChat = !fuentes || fuentes.length === 0 ||
+          fuentes.some((f: string) => ["chat", "chats", "todas"].includes(f));
         if (!matchesChat) return false;
         const acciones = Array.isArray((r as Record<string, unknown>).acciones)
           ? (r as Record<string, unknown>).acciones as Array<{ tipo: string }>
           : [{ tipo: (r as Record<string, unknown>).accion ?? "asignar_etiqueta" }];
         return acciones.some((a) =>
-          a.tipo === "escribir_campo_ghl" || a.tipo === "escribir_campo_ghl_ia",
+          a.tipo === "escribir_campo_ghl" || a.tipo === "escribir_campo_ghl_ia" || a.tipo === "actualizar_pipeline",
         );
       });
 
@@ -208,7 +213,7 @@ export async function tryInlineChatClassification(
           };
           await evaluateReglas(
             transcript,
-            reglasEtiquetas,
+            reglasParaGhl,
             "chat",
             config.prompt_ventas ?? null,
             config.openai_api_key,

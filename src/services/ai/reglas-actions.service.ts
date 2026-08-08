@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { cuentas } from "../../db/schema.js";
+import { searchOpportunityByContact, updateOpportunityPipelineStage } from "../ghl-api.service.js";
 import type { MatchedRule } from "./reglas-evaluator.service.js";
 
 interface MetricConfig {
@@ -124,6 +125,39 @@ export function collectFunnelStages(matchedRules: MatchedRule[]): string | null 
     }
   }
   return null;
+}
+
+/** Primera acción actualizar_pipeline válida entre las reglas matcheadas. */
+export function collectPipelineMove(matchedRules: MatchedRule[]): { pipeline_id: string; stage_id: string; pipeline_nombre?: string; stage_nombre?: string } | null {
+  for (const rule of matchedRules) {
+    for (const accion of rule.acciones) {
+      if (accion.tipo === "actualizar_pipeline" && accion.pipeline_id && accion.stage_id) {
+        return { pipeline_id: accion.pipeline_id, stage_id: accion.stage_id, pipeline_nombre: accion.pipeline_nombre, stage_nombre: accion.stage_nombre };
+      }
+    }
+  }
+  return null;
+}
+
+/** Mueve el opportunity del contacto al pipeline/etapa de una regla matcheada. Best-effort. */
+export async function applyReglasPipelineMove(
+  matchedRules: MatchedRule[],
+  ctx: { contactId: string; locationId: string; bearerToken: string },
+  label: string,
+): Promise<void> {
+  const move = collectPipelineMove(matchedRules);
+  if (!move) return;
+  try {
+    const oppId = await searchOpportunityByContact(ctx.contactId, ctx.locationId, ctx.bearerToken);
+    if (!oppId) {
+      console.info(`${label} Sin opportunity para contact=${ctx.contactId}; se omite actualizar_pipeline`);
+      return;
+    }
+    await updateOpportunityPipelineStage(oppId, move.pipeline_id, move.stage_id, ctx.bearerToken);
+    console.info(`${label} Opportunity ${oppId} movido a pipeline "${move.pipeline_nombre ?? move.pipeline_id}" / etapa "${move.stage_nombre ?? move.stage_id}" para contact=${ctx.contactId}`);
+  } catch (err) {
+    console.error(`${label} Error moviendo pipeline del opportunity:`, err instanceof Error ? err.message : err);
+  }
 }
 
 export function collectCategoria(matchedRules: MatchedRule[]): string | null {
