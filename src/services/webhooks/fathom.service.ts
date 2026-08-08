@@ -17,6 +17,7 @@ import {
   ensureCustomField,
   getContactById,
   matchCategoriaPorEtiqueta,
+  matchCategoriaLead,
   categoriasUsanEtiquetas,
   parseFunnelStageMap,
   GHL_TAGS,
@@ -218,6 +219,7 @@ export async function processFathomCall(
     embudo_personalizado: unknown;
     reglas_etiquetas: unknown;
     categorias_citas: unknown;
+    categorias_leads: unknown;
     canales_activos: unknown;
     ghl_native_task_workflow: boolean;
     gemini_api_key: string | null;
@@ -241,6 +243,7 @@ export async function processFathomCall(
             embudo_personalizado: cuentas.embudo_personalizado,
             reglas_etiquetas: cuentas.reglas_etiquetas,
             categorias_citas: cuentas.categorias_citas,
+            categorias_leads: cuentas.categorias_leads,
             canales_activos: cuentas.canales_activos,
             ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
             gemini_api_key: cuentas.gemini_api_key,
@@ -398,20 +401,35 @@ export async function processFathomCall(
 
   // ── Fase 4: Motor IA en paralelo ─────────────────────────────────────────
 
-  // Categoría de cita por ETIQUETA del contacto: si el contacto tiene la
-  // etiqueta de una categoría (ej. "lead nuevo", "lead agendado"), la cita se
-  // evalúa con el prompt de esa categoría en vez del prompt general.
+  // Etapa del LEAD por etiqueta (categorias_leads): manda sobre todo — su
+  // prompt evalúa la cita, su prompt_resumen arma la nota y sus reglas de
+  // etiquetas aplican SOLO en esa etapa. Las categorías de citas legacy
+  // siguen como segundo nivel.
   let categoriaCitaPrompt: string | null = null;
-  if (contactId && account.token_ghl && categoriasUsanEtiquetas(account.categorias_citas)) {
+  let promptResumenEtapa: string | null = null;
+  let reglasEtiquetasEfectivas: unknown = account.reglas_etiquetas;
+  if (contactId && account.token_ghl &&
+      (categoriasUsanEtiquetas(account.categorias_leads) || categoriasUsanEtiquetas(account.categorias_citas))) {
     try {
       const contactInfo = await getContactById(contactId, account.token_ghl);
-      const matchCita = matchCategoriaPorEtiqueta(contactInfo?.tags, account.categorias_citas);
-      if (matchCita?.prompt?.trim()) {
-        categoriaCitaPrompt = matchCita.prompt.trim();
-        console.info(`[Fathom] Categoría de cita por etiqueta "${matchCita.etiqueta}" → ${matchCita.nombre}`);
+      const leadCat = matchCategoriaLead(contactInfo?.tags, account.categorias_leads);
+      if (leadCat) {
+        if (leadCat.prompt?.trim()) categoriaCitaPrompt = leadCat.prompt.trim();
+        if (leadCat.prompt_resumen?.trim()) promptResumenEtapa = leadCat.prompt_resumen.trim();
+        if (Array.isArray(leadCat.reglas_etiquetas) && leadCat.reglas_etiquetas.length > 0) {
+          reglasEtiquetasEfectivas = leadCat.reglas_etiquetas;
+        }
+        console.info(`[Fathom] Etapa del lead por etiqueta "${leadCat.etiqueta}" → ${leadCat.nombre}`);
+      }
+      if (!categoriaCitaPrompt) {
+        const matchCita = matchCategoriaPorEtiqueta(contactInfo?.tags, account.categorias_citas);
+        if (matchCita?.prompt?.trim()) {
+          categoriaCitaPrompt = matchCita.prompt.trim();
+          console.info(`[Fathom] Categoría de cita por etiqueta "${matchCita.etiqueta}" → ${matchCita.nombre}`);
+        }
       }
     } catch (err) {
-      console.warn(`[Fathom] No se pudieron leer tags del contacto para categoría de cita:`, err);
+      console.warn(`[Fathom] No se pudieron leer tags del contacto para categoría:`, err);
     }
   }
 
@@ -425,7 +443,7 @@ export async function processFathomCall(
         categoriaCitaPrompt ?? account.prompt_videollamadas,
         account.openai_api_key,
         account.embudo_personalizado,
-        account.reglas_etiquetas,
+        reglasEtiquetasEfectivas,
         idCuenta,
         Array.isArray(account.canales_activos) ? account.canales_activos as string[] : null,
       );
@@ -819,6 +837,7 @@ export async function processFathomCall(
           formattedTranscript,
           account.openai_api_key,
           idCuenta ?? undefined,
+          promptResumenEtapa,
         );
       }
 

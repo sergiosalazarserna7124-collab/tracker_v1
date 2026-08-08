@@ -52,6 +52,7 @@ export interface CuentaFullRow extends CuentaRow {
   reglas_etiquetas: unknown;
   config_llamadas: unknown;
   categorias_llamadas: unknown;
+  categorias_leads: unknown;
   ghl_opportunity_fields_config: unknown;
   ghl_native_task_workflow: boolean;
   coach_habilitado: boolean;
@@ -164,6 +165,7 @@ export async function getAccountFullById(idCuenta: number): Promise<CuentaFullRo
           reglas_etiquetas: cuentas.reglas_etiquetas,
           config_llamadas: cuentas.config_llamadas,
           categorias_llamadas: cuentas.categorias_llamadas,
+          categorias_leads: cuentas.categorias_leads,
           ghl_opportunity_fields_config: cuentas.ghl_opportunity_fields_config,
           ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
           coach_habilitado: cuentas.coach_habilitado,
@@ -200,6 +202,7 @@ export async function getAccountFullByLocationId(locationId: string): Promise<Cu
           reglas_etiquetas: cuentas.reglas_etiquetas,
           config_llamadas: cuentas.config_llamadas,
           categorias_llamadas: cuentas.categorias_llamadas,
+          categorias_leads: cuentas.categorias_leads,
           ghl_opportunity_fields_config: cuentas.ghl_opportunity_fields_config,
           ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
           coach_habilitado: cuentas.coach_habilitado,
@@ -770,6 +773,26 @@ export function matchCategoriaPorEtiqueta(
     if (et && tagsNorm.has(et)) return c;
   }
   return null;
+}
+
+// ─── Categorías de LEADS unificadas (etapa del lead por etiqueta GHL) ────────
+// Cada etapa define cómo se evalúa TODA interacción (chat/llamada/cita) del
+// contacto, cómo se resume, y qué reglas de etiquetas aplican SOLO en esa etapa.
+
+export interface CategoriaLead {
+  id: string;
+  nombre: string;
+  etiqueta: string;
+  prompt?: string;
+  prompt_resumen?: string;
+  reglas_etiquetas?: Array<{ id: string; tag: string; condition: string }>;
+}
+
+export function matchCategoriaLead(
+  contactTags: string[] | null | undefined,
+  categoriasLeads: unknown,
+): CategoriaLead | null {
+  return matchCategoriaPorEtiqueta(contactTags, categoriasLeads) as CategoriaLead | null;
 }
 
 /** ¿Alguna categoría de la lista tiene etiqueta configurada? (evita fetch inútil) */

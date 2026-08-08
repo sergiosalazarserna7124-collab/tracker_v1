@@ -165,6 +165,7 @@ export const cuentas = pgTable("cuentas", {
   categorias_llamadas: jsonb("categorias_llamadas"),
   categorias_citas: jsonb("categorias_citas"),
   categorias_chats: jsonb("categorias_chats"),
+  categorias_leads: jsonb("categorias_leads"),
   // ── V5: configuración de integraciones de Ads ─────────────────────────────
   configuracion_ads: jsonb("configuracion_ads"),
   // ── V6: métricas manuales y config ────────────────────────────────────────

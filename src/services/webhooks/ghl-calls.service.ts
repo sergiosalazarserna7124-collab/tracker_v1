@@ -17,6 +17,7 @@ import { db as pgPool } from "../../config/database.js";
 import { llamadas, logLlamadas, eventosHuerfanos } from "../../db/schema.js";
 import {
   addContactNote,
+  matchCategoriaLead,
   getAccountByLocationId,
   getAccountById,
   getAccountFullByLocationId,
@@ -212,6 +213,7 @@ async function resolveAccountFull(
   reglasEtiquetas: unknown;
   configLlamadas: unknown;
   categoriasLlamadas: unknown;
+  categoriasLeads: unknown;
   ghlOpportunityFieldsConfig: unknown;
   isCancelled: boolean;
 }> {
@@ -225,6 +227,7 @@ async function resolveAccountFull(
     reglasEtiquetas: null,
     configLlamadas: null,
     categoriasLlamadas: null,
+    categoriasLeads: null,
     ghlOpportunityFieldsConfig: null,
     isCancelled: false,
   };
@@ -240,6 +243,7 @@ async function resolveAccountFull(
       reglasEtiquetas: account.reglas_etiquetas,
       configLlamadas: account.config_llamadas,
       categoriasLlamadas: account.categorias_llamadas,
+      categoriasLeads: account.categorias_leads,
       ghlOpportunityFieldsConfig: account.ghl_opportunity_fields_config,
       isCancelled: false,
     };
@@ -1261,6 +1265,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     reglasEtiquetas,
     configLlamadas,
     categoriasLlamadas,
+    categoriasLeads,
     ghlOpportunityFieldsConfig,
     isCancelled,
   } = await resolveAccountFull(fields.locationId, "GhlCalls/Effective", fields.idCuentaFromPayload);
@@ -1303,22 +1308,24 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     );
   }
 
-  // AUT-1144: evaluar reglas ANTES de clasificar para resolver categoría → prompt correcto
-  let ghlReglasResult: ReglasEvalResult = { matched_tags: [], matched_rules: [], matched_categoria: null };
-  if (transcript.trim()) {
-    try {
-      ghlReglasResult = await evaluateReglas(transcript, reglasEtiquetas, "call", promptVentas ?? null, openaiApiKey, idCuenta);
-    } catch (err) {
-      console.error("[GhlCalls/Effective] Error evaluando reglas pre-clasificación:", err);
-    }
-  }
-  // Categoría por ETIQUETA del contacto (máxima prioridad): cada categoría de
-  // llamada puede anclarse a una etiqueta de GHL (ej. "lead nuevo", "lead
-  // perfilado") y define CÓMO se evalúa la llamada de ese tipo de contacto.
+  // Categoría por ETIQUETA del contacto: la etapa del LEAD (categorias_leads)
+  // manda sobre todo — su prompt evalúa la llamada y sus reglas de etiquetas
+  // aplican SOLO en esa etapa. Las categorías de llamadas legacy siguen como
+  // segundo nivel.
   let categoriaPorEtiqueta: string | null = null;
-  if (fields.contactId && tokenGhl && categoriasUsanEtiquetas(categoriasLlamadas)) {
+  let promptLlamadasEfectivo = promptLlamadas;
+  let reglasEtiquetasEfectivas = reglasEtiquetas;
+  if (fields.contactId && tokenGhl && (categoriasUsanEtiquetas(categoriasLeads) || categoriasUsanEtiquetas(categoriasLlamadas))) {
     try {
       const contact = await getContactById(fields.contactId, tokenGhl);
+      const leadCat = matchCategoriaLead(contact?.tags, categoriasLeads);
+      if (leadCat) {
+        if (leadCat.prompt?.trim()) promptLlamadasEfectivo = leadCat.prompt.trim();
+        if (Array.isArray(leadCat.reglas_etiquetas) && leadCat.reglas_etiquetas.length > 0) {
+          reglasEtiquetasEfectivas = leadCat.reglas_etiquetas;
+        }
+        console.log(`[GhlCalls/Effective] Etapa del lead por etiqueta "${leadCat.etiqueta}" → ${leadCat.nombre}`);
+      }
       const match = matchCategoriaPorEtiqueta(contact?.tags, categoriasLlamadas);
       if (match) {
         categoriaPorEtiqueta = match.id;
@@ -1326,6 +1333,16 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
       }
     } catch (err) {
       console.warn(`[GhlCalls/Effective] No se pudieron leer tags del contacto para categoría:`, err);
+    }
+  }
+
+  // AUT-1144: evaluar reglas ANTES de clasificar para resolver categoría → prompt correcto
+  let ghlReglasResult: ReglasEvalResult = { matched_tags: [], matched_rules: [], matched_categoria: null };
+  if (transcript.trim()) {
+    try {
+      ghlReglasResult = await evaluateReglas(transcript, reglasEtiquetasEfectivas, "call", promptVentas ?? null, openaiApiKey, idCuenta);
+    } catch (err) {
+      console.error("[GhlCalls/Effective] Error evaluando reglas pre-clasificación:", err);
     }
   }
 
@@ -1349,7 +1366,7 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
       openaiApiKey,
       embudoLlamadas,
       promptVentas,
-      promptLlamadas,
+      promptLlamadasEfectivo,
       idCuenta,
       categoriaGhl,
       categoriasLlamadas,
@@ -1383,8 +1400,8 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
     openaiApiKey,
     embudoPersonalizado,
     promptVentas,
-    reglasEtiquetas,
-    promptLlamadas,
+    reglasEtiquetasEfectivas,
+    promptLlamadasEfectivo,
     ghlReglasResult,
     ghlOpportunityFieldsConfig,
   );

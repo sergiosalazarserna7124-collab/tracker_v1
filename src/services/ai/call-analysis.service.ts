@@ -397,12 +397,15 @@ export async function generateResumenSimple(
   transcript: string,
   openaiApiKey?: string | null,
   idCuenta?: number,
+  promptCustom?: string | null,
 ): Promise<string | null> {
   if (!transcript.trim()) return null;
   try {
     const result = await generateText({
       model: resolveModel(openaiApiKey),
-      system: RESUMEN_SIMPLE_PROMPT,
+      system: promptCustom?.trim()
+        ? `${promptCustom.trim()}\n\nResponde en español, máximo 10 líneas.`
+        : RESUMEN_SIMPLE_PROMPT,
       prompt: transcript.slice(0, 100_000),
       temperature: 0.2,
     });

@@ -1,5 +1,5 @@
 import { db as pgPool } from "../../config/database.js";
-import { getContactById, matchCategoriaPorEtiqueta, categoriasUsanEtiquetas } from "../ghl-api.service.js";
+import { getContactById, matchCategoriaPorEtiqueta, matchCategoriaLead, categoriasUsanEtiquetas } from "../ghl-api.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
 import { evaluateReglas, type DynamicValueContext } from "../ai/reglas-evaluator.service.js";
@@ -17,6 +17,7 @@ interface AccountConfigRow {
   canales_activos: unknown;
   token_ghl: string | null;
   categorias_chats?: unknown;
+  categorias_leads?: unknown;
   locationid: string | null;
 }
 
@@ -80,7 +81,7 @@ export async function tryInlineChatClassification(
       () => pgPool.query<AccountConfigRow>(
         `SELECT openai_api_key, prompt_ventas, embudo_personalizado,
                 criterios_calificacion, reglas_etiquetas, canales_activos,
-                categorias_chats, token_ghl, locationid
+                categorias_chats, categorias_leads, token_ghl, locationid
          FROM cuentas WHERE id_cuenta = $1`,
         [idCuenta],
       ),
@@ -117,15 +118,27 @@ export async function tryInlineChatClassification(
     // Prompt por ETIQUETA del contacto (categorías de chats): si el contacto
     // tiene la etiqueta de una categoría, su chat se analiza con ese prompt.
     let promptChatPorEtiqueta: string | null = null;
+    let reglasEfectivas: unknown = reglasEtiquetas;
     const contactIdParaCategoria = ghlContext?.contactId ?? chatRow.id_lead;
     const tokenParaCategoria = ghlContext?.tokenGhl ?? config.token_ghl;
-    if (contactIdParaCategoria && tokenParaCategoria && categoriasUsanEtiquetas(config.categorias_chats)) {
+    if (contactIdParaCategoria && tokenParaCategoria &&
+        (categoriasUsanEtiquetas(config.categorias_leads) || categoriasUsanEtiquetas(config.categorias_chats))) {
       try {
         const ct = await getContactById(contactIdParaCategoria, tokenParaCategoria);
-        const match = matchCategoriaPorEtiqueta(ct?.tags, config.categorias_chats);
-        if (match?.prompt?.trim()) {
-          promptChatPorEtiqueta = match.prompt.trim();
-          console.info(`[InlineChatClassify] Categoría de chat por etiqueta "${match.etiqueta}" → ${match.nombre}`);
+        const leadCat = matchCategoriaLead(ct?.tags, config.categorias_leads);
+        if (leadCat) {
+          if (leadCat.prompt?.trim()) promptChatPorEtiqueta = leadCat.prompt.trim();
+          if (Array.isArray(leadCat.reglas_etiquetas) && leadCat.reglas_etiquetas.length > 0) {
+            reglasEfectivas = leadCat.reglas_etiquetas;
+          }
+          console.info(`[InlineChatClassify] Etapa del lead por etiqueta "${leadCat.etiqueta}" → ${leadCat.nombre}`);
+        }
+        if (!promptChatPorEtiqueta) {
+          const match = matchCategoriaPorEtiqueta(ct?.tags, config.categorias_chats);
+          if (match?.prompt?.trim()) {
+            promptChatPorEtiqueta = match.prompt.trim();
+            console.info(`[InlineChatClassify] Categoría de chat por etiqueta "${match.etiqueta}" → ${match.nombre}`);
+          }
         }
       } catch { /* best-effort */ }
     }
@@ -134,7 +147,7 @@ export async function tryInlineChatClassification(
     const result = await analyzeChatWithAI({
       messages,
       embudo: embudoChat,
-      reglas_etiquetas: reglasEtiquetas,
+      reglas_etiquetas: reglasEfectivas as typeof reglasEtiquetas,
       prompt_empresa: config.prompt_ventas ?? undefined,
       openai_api_key: config.openai_api_key ?? undefined,
       id_cuenta: idCuenta,
