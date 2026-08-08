@@ -599,7 +599,8 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
                tags_internos = COALESCE($2::jsonb, tags_internos),
                ia_categoria = $3,
                ia_analizado_at = NOW(),
-               ia_objeciones = COALESCE($5::jsonb, ia_objeciones)
+               ia_objeciones = COALESCE($5::jsonb, ia_objeciones),
+               ia_resumen = COALESCE($6, ia_resumen)
            WHERE id_evento = $4`,
           [
             result.categoria,
@@ -609,6 +610,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
             result.objeciones.length > 0
               ? JSON.stringify({ objeciones: result.objeciones, sentimiento: "neutro", senales_compra: [] })
               : null,
+            result.resumen,
           ],
         );
 

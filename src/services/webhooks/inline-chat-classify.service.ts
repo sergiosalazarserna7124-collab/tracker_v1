@@ -171,7 +171,8 @@ export async function tryInlineChatClassification(
       `UPDATE chats_logs
        SET ia_categoria = COALESCE(ia_categoria, $1),
            ia_analizado_at = COALESCE(ia_analizado_at, NOW()),
-           ia_objeciones = COALESCE(ia_objeciones, $2::jsonb)
+           ia_objeciones = COALESCE(ia_objeciones, $2::jsonb),
+           ia_resumen = COALESCE(ia_resumen, $4)
        WHERE id_evento = $3 AND ia_categoria IS NULL`,
       [
         result.categoria ?? "analizado_sin_categoria",
@@ -179,6 +180,7 @@ export async function tryInlineChatClassification(
           ? JSON.stringify({ objeciones: result.objeciones, sentimiento: "neutro", senales_compra: [] })
           : null,
         chatRow.id_evento,
+        result.resumen,
       ],
     );
 

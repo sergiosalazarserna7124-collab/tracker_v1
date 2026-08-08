@@ -51,6 +51,8 @@ export interface ChatAnalysisResult {
   tags_internos: string[];
   confianza: number;
   objeciones: ObjecionDetectada[];
+  /** Resumen breve (1-2 frases) de en qué quedó la conversación. */
+  resumen: string | null;
 }
 
 // ─── Limitar tokens de la conversación (~2000 tokens ≈ 8000 chars) ──────────
@@ -79,7 +81,7 @@ function truncateConversation(messages: ChatMessage[]): string {
 // ─── Schema de salida ────────────────────────────────────────────────────────
 
 function buildChatClassificationSchema(estadosEnum: string[]) {
-  return jsonSchema<{ categoria: string | null; tags: string[]; confianza: number; objeciones: Array<{ objecion: string; categoria: string }> }>({
+  return jsonSchema<{ categoria: string | null; tags: string[]; confianza: number; objeciones: Array<{ objecion: string; categoria: string }>; resumen: string }>({
     type: "object",
     properties: {
       categoria: {
@@ -88,6 +90,10 @@ function buildChatClassificationSchema(estadosEnum: string[]) {
           { type: "null" },
         ],
         description: "Etapa del embudo a la que pertenece este lead",
+      },
+      resumen: {
+        type: "string",
+        description: "Resumen breve (1-2 frases, máx 220 chars) de EN QUÉ QUEDÓ la conversación: lo último que se habló, qué se acordó y quién debe dar el siguiente paso. Ej: 'El lead pidió crear una cuenta; el asesor confirmó que sí se puede y quedó de enviar los pasos. Pendiente respuesta del lead.'",
       },
       tags: {
         type: "array",
@@ -129,7 +135,7 @@ function buildChatClassificationSchema(estadosEnum: string[]) {
         },
       },
     },
-    required: ["categoria", "tags", "confianza", "objeciones"],
+    required: ["categoria", "tags", "confianza", "objeciones", "resumen"],
     additionalProperties: false,
   });
 }
@@ -159,6 +165,7 @@ Eres un sistema especializado en clasificar conversaciones de chat de ventas. De
 2. Qué etiquetas internas aplican según las reglas definidas
 3. Tu nivel de confianza en la clasificación
 4. Qué objeciones de venta expresó el lead (precio, tiempo, confianza, competencia, necesidad, autoridad u otra)
+5. Un resumen breve de EN QUÉ QUEDÓ la conversación (campo "resumen")
 
 Responde ÚNICAMENTE con el JSON solicitado. Sin explicaciones adicionales.`);
 
@@ -228,7 +235,8 @@ Devuelve ÚNICAMENTE este JSON (sin markdown, sin texto adicional):
   "categoria": "id_etapa_o_null",
   "tags": ["tag1", "tag2"],
   "confianza": 0.85,
-  "objeciones": [{"objecion": "texto de la objeción", "categoria": "precio", "respuesta_vendedor": "palabras exactas del asesor aquí", "contexto": "El asesor presentó el precio y el lead respondió con esta objeción"}]
+  "objeciones": [{"objecion": "texto de la objeción", "categoria": "precio", "respuesta_vendedor": "palabras exactas del asesor aquí", "contexto": "El asesor presentó el precio y el lead respondió con esta objeción"}],
+  "resumen": "El lead pidió crear una cuenta; el asesor confirmó que sí se puede y quedó de enviar los pasos. Pendiente respuesta del lead."
 }`);
 
   return parts.join("\n\n");
@@ -258,7 +266,7 @@ export async function analyzeChatWithAI(params: {
   const conversationText = truncateConversation(messages);
 
   if (!conversationText) {
-    return { categoria: null, tags_internos: [], confianza: 0, objeciones: [] };
+    return { categoria: null, tags_internos: [], confianza: 0, objeciones: [], resumen: null };
   }
 
   const { object, usage } = await generateObject({
@@ -283,5 +291,6 @@ export async function analyzeChatWithAI(params: {
             typeof (o as ObjecionDetectada).categoria === "string",
         )
       : [],
+    resumen: typeof object.resumen === "string" && object.resumen.trim() ? object.resumen.trim() : null,
   };
 }
