@@ -3,6 +3,7 @@ import { withRetry } from "../../utils/retry.utils.js";
 import { analyzeChatBatch, analyzeLlamadaBatch } from "../ai/batch-conversation-analysis.service.js";
 import { parseCriteriosCalificacion } from "../data/criterios-calificacion.utils.js";
 import { evaluateReglas, type DynamicValueContext } from "../ai/reglas-evaluator.service.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -310,7 +311,7 @@ export async function runBatchAnalysis(accountIds?: number[]): Promise<BatchAnal
           const transcript = formatChatAsTranscript(messages);
           const dynCtx: DynamicValueContext = {
             contactId: chat.id_lead,
-            bearerToken: item.cuenta.token_ghl,
+            bearerToken: (await getAccessToken(item.cuenta.locationid ?? "")) || item.cuenta.token_ghl,
             locationId: item.cuenta.locationid ?? null,
           };
           await evaluateReglas(

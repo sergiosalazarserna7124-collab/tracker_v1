@@ -2,6 +2,7 @@ import { eq, and, inArray, sql, lt, isNotNull, isNull } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, llamadas } from "../../db/schema.js";
 import { addContactTag, addContactTags, getContactAppointmentDate, getContactById, matchCategoriaPorEtiqueta, matchCategoriaLead, categoriasUsanEtiquetas } from "../ghl-api.service.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import { processInChunks } from "../../utils/batch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { db as pgPool } from "../../config/database.js";
@@ -123,18 +124,18 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
   const tokenRows = await withRetry(
     () =>
       drizzleDb
-        .select({ id_cuenta: cuentas.id_cuenta, token_ghl: cuentas.token_ghl })
+        .select({ id_cuenta: cuentas.id_cuenta, token_ghl: cuentas.token_ghl, locationid: cuentas.locationid })
         .from(cuentas)
         .where(inArray(cuentas.id_cuenta, accountIdsParaFallback)),
     { label: "updateNoShows/tokensParaFallback" },
   );
-  const tokenMapEarly = new Map(
-    tokenRows.filter((r) => r.token_ghl).map((r) => [r.id_cuenta, r.token_ghl as string]),
-  );
+  const tokenMapEarly = new Map(tokenRows.map((r) => [r.id_cuenta, r.token_ghl]));
+  const locMapEarly = new Map(tokenRows.map((r) => [r.id_cuenta, r.locationid]));
 
   const noShowsViaGhl: number[] = [];
   for (const row of pdteSinFechaRows) {
-    const token = tokenMapEarly.get(row.id_cuenta);
+    // App-only: token OAuth (auto-refresh) primero; token_ghl legacy fallback.
+    const token = (await getAccessToken(locMapEarly.get(row.id_cuenta) ?? "")) || tokenMapEarly.get(row.id_cuenta);
     if (!token || !row.ghl_contact_id) continue;
     try {
       const apptDate = await getContactAppointmentDate(row.ghl_contact_id, token, targetDateObj);
@@ -187,17 +188,19 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
   const accountRows = await withRetry(
     () =>
       drizzleDb
-        .select({ id_cuenta: cuentas.id_cuenta, token_ghl: cuentas.token_ghl })
+        .select({ id_cuenta: cuentas.id_cuenta, token_ghl: cuentas.token_ghl, locationid: cuentas.locationid })
         .from(cuentas)
         .where(inArray(cuentas.id_cuenta, uniqueAccountIds)),
     { label: "updateNoShows/getTokens" },
   );
 
+  // Cuenta elegible si tiene token legacy O location (para el token OAuth).
   const tokenByAccount = new Map(
     accountRows
-      .filter((a) => a.token_ghl !== null)
-      .map((a) => [a.id_cuenta, a.token_ghl as string]),
+      .filter((a) => a.token_ghl !== null || a.locationid !== null)
+      .map((a) => [a.id_cuenta, a.token_ghl]),
   );
+  const locByAccount = new Map(accountRows.map((a) => [a.id_cuenta, a.locationid]));
 
   // ── 3. Push tag 'no_show_lm' a GHL con rate limiting ───────────────────────
   // Procesa en lotes de 10 con 500ms de pausa entre lotes para respetar
@@ -212,8 +215,10 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
     contactsToTag,
     10,
     500,
-    (r) =>
-      addContactTag(r.ghl_contact_id as string, tokenByAccount.get(r.id_cuenta)!, "no_show_lm")
+    async (r) => {
+      const tok = (await getAccessToken(locByAccount.get(r.id_cuenta) ?? "")) || tokenByAccount.get(r.id_cuenta);
+      if (!tok) return false;
+      return addContactTag(r.ghl_contact_id as string, tok, "no_show_lm")
         .then(() => true)
         .catch((err: unknown) => {
           console.error(
@@ -221,7 +226,8 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
             err,
           );
           return false;
-        }),
+        });
+    },
   );
 
   const tagged_count = tagResults.filter(Boolean).length;
@@ -277,7 +283,7 @@ async function applyReglaAutomaticaAllAccounts(account_ids: number[]): Promise<n
       const moved = await applyReglaAutomaticaForCuenta(
         cuenta.id_cuenta,
         embudo,
-        cuenta.token_ghl,
+        (await getAccessToken(cuenta.locationid ?? "")) || cuenta.token_ghl,
         cuenta.locationid,
       );
       totalMoved += moved;
@@ -384,6 +390,7 @@ interface ChatLogRow {
 interface CuentaAnalisisRow {
   id_cuenta: number;
   token_ghl: string | null;
+  locationid: string | null;
   openai_api_key: string | null;
   embudo_personalizado: unknown;
   reglas_etiquetas: unknown;
@@ -429,7 +436,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
     : "";
 
   const cuentasQuery = `
-    SELECT c.id_cuenta, c.token_ghl, c.openai_api_key,
+    SELECT c.id_cuenta, c.token_ghl, c.locationid, c.openai_api_key,
            c.embudo_personalizado, c.reglas_etiquetas, c.prompt_ventas,
            c.canales_activos, c.criterios_calificacion, c.categorias_chats, c.categorias_leads,
            c.gemini_api_key, c.gemini_premium_status
@@ -554,10 +561,12 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
         let promptChatPorEtiqueta: string | null = null;
         let reglasChatEfectivas: unknown = reglas_etiquetas;
         const cuentaCats = cuenta as { categorias_chats?: unknown; categorias_leads?: unknown };
-        if (chat.id_lead && cuenta.token_ghl &&
+        // App-only: token OAuth (auto-refresh) primero; token_ghl legacy fallback.
+        const cuentaGhlToken = (await getAccessToken(cuenta.locationid ?? "")) || cuenta.token_ghl;
+        if (chat.id_lead && cuentaGhlToken &&
             (categoriasUsanEtiquetas(cuentaCats.categorias_leads) || categoriasUsanEtiquetas(cuentaCats.categorias_chats))) {
           try {
-            const ct = await getContactById(chat.id_lead, cuenta.token_ghl);
+            const ct = await getContactById(chat.id_lead, cuentaGhlToken);
             const leadCat = matchCategoriaLead(ct?.tags, cuentaCats.categorias_leads);
             if (leadCat) {
               if (leadCat.prompt?.trim()) promptChatPorEtiqueta = leadCat.prompt.trim();
@@ -619,9 +628,9 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
         }
 
         // ── 3d. Aplicar tags en GHL ─────────────────────────────────────────
-        if (result.tags_internos.length > 0 && chat.id_lead && cuenta.token_ghl) {
+        if (result.tags_internos.length > 0 && chat.id_lead && cuentaGhlToken) {
           try {
-            await addContactTags(chat.id_lead, cuenta.token_ghl, result.tags_internos);
+            await addContactTags(chat.id_lead, cuentaGhlToken, result.tags_internos);
           } catch (ghlErr) {
             console.warn(
               `[analyzeChats] GHL tag fallido lead=${chat.id_lead} cuenta=${cuenta.id_cuenta}:`,
