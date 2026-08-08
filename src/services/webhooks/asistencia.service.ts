@@ -3,6 +3,7 @@ import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas } from "../../db/schema.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { safeAddContactTag, removeContactTag, GHL_TAGS } from "../ghl-api.service.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import type { AsistenciaEventBody } from "../../schemas/webhooks/asistencia.schema.js";
 
 const LOG_PREFIX = "[Asistencia]";
@@ -100,17 +101,19 @@ export async function processAsistencia(
         { label: "Asistencia/getAccount" },
       );
 
-      if (account?.token_ghl) {
+      // App-only: token OAuth (auto-refresh) primero; token_ghl legacy fallback.
+      const asistToken = (await getAccessToken(account?.locationid ?? "")) || account?.token_ghl;
+      if (asistToken) {
         if (tipo === "no_show") {
           await safeAddContactTag(
             existing.ghl_contact_id,
-            account.token_ghl,
+            asistToken,
             GHL_TAGS.noshow,
-            account.locationid,
+            account?.locationid,
           );
         } else {
           // asistió manualmente: quitar tag de noshow si existía
-          await removeContactTag(existing.ghl_contact_id, account.token_ghl, GHL_TAGS.noshow).catch(() => {});
+          await removeContactTag(existing.ghl_contact_id, asistToken, GHL_TAGS.noshow).catch(() => {});
         }
       }
     } catch (err) {
