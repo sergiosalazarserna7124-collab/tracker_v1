@@ -1,7 +1,7 @@
 import { eq, and, inArray, sql, lt, isNotNull, isNull } from "drizzle-orm";
 import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, llamadas } from "../../db/schema.js";
-import { addContactTag, addContactTags, getContactAppointmentDate } from "../ghl-api.service.js";
+import { addContactTag, addContactTags, getContactAppointmentDate, getContactById, matchCategoriaPorEtiqueta, categoriasUsanEtiquetas } from "../ghl-api.service.js";
 import { processInChunks } from "../../utils/batch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { db as pgPool } from "../../config/database.js";
@@ -431,7 +431,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
   const cuentasQuery = `
     SELECT c.id_cuenta, c.token_ghl, c.openai_api_key,
            c.embudo_personalizado, c.reglas_etiquetas, c.prompt_ventas,
-           c.canales_activos, c.criterios_calificacion,
+           c.canales_activos, c.criterios_calificacion, c.categorias_chats,
            c.gemini_api_key, c.gemini_premium_status
     FROM cuentas c
     WHERE c.embudo_personalizado IS NOT NULL
@@ -550,6 +550,16 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
         const embudoChat = embudo.filter((e) =>
           !e.fuentes || e.fuentes.length === 0 || e.fuentes.some((f) => ["chat", "chats", "todas"].includes(f)),
         );
+        // Prompt por ETIQUETA del contacto (categorías de chats)
+        let promptChatPorEtiqueta: string | null = null;
+        if (chat.id_lead && cuenta.token_ghl && categoriasUsanEtiquetas((cuenta as { categorias_chats?: unknown }).categorias_chats)) {
+          try {
+            const ct = await getContactById(chat.id_lead, cuenta.token_ghl);
+            const match = matchCategoriaPorEtiqueta(ct?.tags, (cuenta as { categorias_chats?: unknown }).categorias_chats);
+            if (match?.prompt?.trim()) promptChatPorEtiqueta = match.prompt.trim();
+          } catch { /* best-effort */ }
+        }
+
         const result = await analyzeChatWithAI({
           messages,
           embudo: embudoChat,
@@ -558,7 +568,7 @@ export async function analyzeChatsNightly(accountIds?: number[]): Promise<Analyz
           openai_api_key: cuenta.openai_api_key ?? undefined,
           id_cuenta: cuenta.id_cuenta,
           canales_activos: Array.isArray(cuenta.canales_activos) ? cuenta.canales_activos : null,
-          prompt_calificacion_chats,
+          prompt_calificacion_chats: promptChatPorEtiqueta ?? prompt_calificacion_chats,
         });
 
         // ── 3b. Actualizar chats_logs ───────────────────────────────────────

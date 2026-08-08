@@ -1,4 +1,5 @@
 import { db as pgPool } from "../../config/database.js";
+import { getContactById, matchCategoriaPorEtiqueta, categoriasUsanEtiquetas } from "../ghl-api.service.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { analyzeChatWithAI } from "../ai/chat-analysis.service.js";
 import { evaluateReglas, type DynamicValueContext } from "../ai/reglas-evaluator.service.js";
@@ -15,6 +16,7 @@ interface AccountConfigRow {
   reglas_etiquetas: unknown;
   canales_activos: unknown;
   token_ghl: string | null;
+  categorias_chats?: unknown;
   locationid: string | null;
 }
 
@@ -78,7 +80,7 @@ export async function tryInlineChatClassification(
       () => pgPool.query<AccountConfigRow>(
         `SELECT openai_api_key, prompt_ventas, embudo_personalizado,
                 criterios_calificacion, reglas_etiquetas, canales_activos,
-                token_ghl, locationid
+                categorias_chats, token_ghl, locationid
          FROM cuentas WHERE id_cuenta = $1`,
         [idCuenta],
       ),
@@ -112,6 +114,22 @@ export async function tryInlineChatClassification(
 
     const canalesActivos = Array.isArray(config.canales_activos) ? config.canales_activos as string[] : null;
 
+    // Prompt por ETIQUETA del contacto (categorías de chats): si el contacto
+    // tiene la etiqueta de una categoría, su chat se analiza con ese prompt.
+    let promptChatPorEtiqueta: string | null = null;
+    const contactIdParaCategoria = ghlContext?.contactId ?? chatRow.id_lead;
+    const tokenParaCategoria = ghlContext?.tokenGhl ?? config.token_ghl;
+    if (contactIdParaCategoria && tokenParaCategoria && categoriasUsanEtiquetas(config.categorias_chats)) {
+      try {
+        const ct = await getContactById(contactIdParaCategoria, tokenParaCategoria);
+        const match = matchCategoriaPorEtiqueta(ct?.tags, config.categorias_chats);
+        if (match?.prompt?.trim()) {
+          promptChatPorEtiqueta = match.prompt.trim();
+          console.info(`[InlineChatClassify] Categoría de chat por etiqueta "${match.etiqueta}" → ${match.nombre}`);
+        }
+      } catch { /* best-effort */ }
+    }
+
     // 3. Classify
     const result = await analyzeChatWithAI({
       messages,
@@ -121,7 +139,7 @@ export async function tryInlineChatClassification(
       openai_api_key: config.openai_api_key ?? undefined,
       id_cuenta: idCuenta,
       canales_activos: canalesActivos,
-      prompt_calificacion_chats: promptCalificacionChats,
+      prompt_calificacion_chats: promptChatPorEtiqueta ?? promptCalificacionChats,
     });
 
     // 4. Update — only if still unclassified (race-safe with COALESCE)

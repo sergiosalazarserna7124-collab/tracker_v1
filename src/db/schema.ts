@@ -164,6 +164,7 @@ export const cuentas = pgTable("cuentas", {
   // ── V11: categorías de llamada con prompt por categoría (AUT-1143) ────────
   categorias_llamadas: jsonb("categorias_llamadas"),
   categorias_citas: jsonb("categorias_citas"),
+  categorias_chats: jsonb("categorias_chats"),
   // ── V5: configuración de integraciones de Ads ─────────────────────────────
   configuracion_ads: jsonb("configuracion_ads"),
   // ── V6: métricas manuales y config ────────────────────────────────────────
