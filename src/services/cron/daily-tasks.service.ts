@@ -46,7 +46,7 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
   //     significa que la reunión SÍ ocurrió y el sistema ya lo procesó o lo procesará pronto.
   // Acciones:
   //   - categoria → 'no_show'
-  //   - tags: concatena ',noshowautoia' (o lo pone como primer tag si está vacío)
+  //   - tags: concatena ',no_show_lm' (o lo pone como primer tag si está vacío)
 
   const updated = await withRetry(
     () =>
@@ -57,8 +57,8 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
           tags: sql<string>`
             CASE
               WHEN ${agendas.tags} IS NULL OR ${agendas.tags} = ''
-              THEN 'noshowautoia'
-              ELSE ${agendas.tags} || ',noshowautoia'
+              THEN 'no_show_lm'
+              ELSE ${agendas.tags} || ',no_show_lm'
             END
           `,
         })
@@ -152,8 +152,8 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
               tags: sql<string>`
                 CASE
                   WHEN ${agendas.tags} IS NULL OR ${agendas.tags} = ''
-                  THEN 'noshowautoia'
-                  ELSE ${agendas.tags} || ',noshowautoia'
+                  THEN 'no_show_lm'
+                  ELSE ${agendas.tags} || ',no_show_lm'
                 END
               `,
             })
@@ -199,7 +199,7 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
       .map((a) => [a.id_cuenta, a.token_ghl as string]),
   );
 
-  // ── 3. Push tag 'noshowautoia' a GHL con rate limiting ───────────────────────
+  // ── 3. Push tag 'no_show_lm' a GHL con rate limiting ───────────────────────
   // Procesa en lotes de 10 con 500ms de pausa entre lotes para respetar
   // el rate limit de GHL y evitar errores 429 Too Many Requests.
   // Los errores individuales se capturan para no abortar el batch completo.
@@ -213,7 +213,7 @@ export async function updateNoShows(input: UpdateNoShowsInput): Promise<UpdateNo
     10,
     500,
     (r) =>
-      addContactTag(r.ghl_contact_id as string, tokenByAccount.get(r.id_cuenta)!, "noshowautoia")
+      addContactTag(r.ghl_contact_id as string, tokenByAccount.get(r.id_cuenta)!, "no_show_lm")
         .then(() => true)
         .catch((err: unknown) => {
           console.error(

@@ -39,14 +39,11 @@ const ACCOUNT_ALIAS: Record<string, number> = {
   zolutium: 40,
 };
 
+// Decisión de producto: sin etiquetas para no_contesto/buzón/colgó ni reagendado.
 const VOZ_TAG_MAP: Record<string, string> = {
   interesado: GHL_TAGS.interesado_callai,
   no_interesado: GHL_TAGS.no_interesado_callai,
   no_elegible: GHL_TAGS.no_interesado_callai,
-  reagendado: GHL_TAGS.reagenda,
-  no_contesto: GHL_TAGS.no_contestada_llamada,
-  buzon_voz: GHL_TAGS.no_contestada_llamada,
-  colgo_temprano: GHL_TAGS.no_contestada_llamada,
   agendado: GHL_TAGS.agendado_callai,
   confirmado: GHL_TAGS.confirmado_callai,
 };

@@ -537,8 +537,8 @@ export function applyVoicemailCatchGuard(
 
 // ─── Mapeo estado IA → tag GHL ───────────────────────────────────────────────
 // "seguimiento" cuando buzon=false significa que la persona SÍ contestó pero
-// no hubo resultado comercial claro → tag propio, NO el de "no contestó".
-// "no_contestallamadaautoia" solo se aplica desde followUpPath (buzon=true/null).
+// no hubo resultado comercial claro → tag propio. La llamada no contestada ya
+// no lleva etiqueta (decisión de producto).
 
 export function mapEstadoToTag(estado: string | null): string {
   const normalized = (estado ?? "").trim().toLowerCase();
@@ -547,8 +547,8 @@ export function mapEstadoToTag(estado: string | null): string {
     interesado: GHL_TAGS.interesado_llamada,
     programado: GHL_TAGS.programado_llamada,
     no_interesado: GHL_TAGS.no_interesado_llamada,
-    seguimiento: "seguimientollamadaautoia",
+    seguimiento: "seguimientollamada_lm",
   };
 
-  return tagMap[normalized] ?? `${normalized}llamadaautoia`;
+  return tagMap[normalized] ?? `${normalized}llamada_lm`;
 }

@@ -323,12 +323,8 @@ async function handlePendiente(body: GhlBodyPayload, tokenGhl?: string): Promise
     }
   }
 
-  const tagged = await applyGhlTag(
-    fields.locationId,
-    fields.contactId,
-    GHL_TAGS.pendiente,
-    "handlePendiente",
-  );
+  // Decisión de producto: las citas solo etiquetan el no-show (no_show_lm).
+  const tagged = false;
 
   return { id_registro_agenda: id, categoria: "PDTE", action, tagged };
 }
@@ -365,12 +361,8 @@ async function handleCancelada(body: GhlBodyPayload): Promise<AgendaResult> {
     action = "created";
   }
 
-  const tagged = await applyGhlTag(
-    fields.locationId,
-    fields.contactId,
-    GHL_TAGS.cancelada,
-    "handleCancelada",
-  );
+  // Decisión de producto: las citas solo etiquetan el no-show (no_show_lm).
+  const tagged = false;
 
   return { id_registro_agenda: id, categoria: "CANCELADA", action, tagged };
 }
@@ -417,12 +409,8 @@ async function handleReagenda(body: GhlBodyPayload, tokenGhl?: string): Promise<
     action = "created";
   }
 
-  const tagged = await applyGhlTag(
-    fields.locationId,
-    fields.contactId,
-    GHL_TAGS.reagenda,
-    "handleReagenda",
-  );
+  // Decisión de producto: las citas solo etiquetan el no-show (no_show_lm).
+  const tagged = false;
 
   return { id_registro_agenda: id, categoria: "PDTE", action, tagged };
 }
@@ -472,12 +460,8 @@ async function handlePerdido(body: GhlBodyPayload): Promise<AgendaResult> {
   // ── AUT-1061: capturar razón de pérdida y guardar en razones_perdida_data ──
   await appendRazonPerdida(body, fields);
 
-  const tagged = await applyGhlTag(
-    fields.locationId,
-    fields.contactId,
-    GHL_TAGS.perdido,
-    "handlePerdido",
-  );
+  // Decisión de producto: las citas solo etiquetan el no-show (no_show_lm).
+  const tagged = false;
 
   return {
     id_registro_agenda: 0,

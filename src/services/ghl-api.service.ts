@@ -76,25 +76,23 @@ export interface GhlUser {
 
 // ─── Tags por categoría ───────────────────────────────────────────────────────
 
+// Esquema de etiquetas del sistema (sufijo _lm). Decisión de producto 2026-08:
+//  - Citas: SOLO se etiqueta el no-show. Nada de pendiente/cancelada/reagendada/perdida.
+//  - Videollamadas: efectiva siempre que hubo transcripción; cerrada SOLO si la IA
+//    detectó venta con pago (cash collected o facturación > 0). Sin ofertada/noofertada.
+//  - Llamadas: clasificación IA + contestada. SIN etiqueta de "no contestada".
 export const GHL_TAGS = {
-  pendiente: "pdteautoia",
-  cancelada: "canceladaautoia",
-  reagenda: "reagendadoautoia",
-  noshow: "noshowautoia",
-  cerrada: "cerradaautoia",
-  ofertada: "ofertadaautoia",
-  noofertada: "noofertadaautoia",
-  no_contestada_llamada: "no_contestallamadaautoia",
-  interesado_llamada: "interesadollamadaautoia",
-  programado_llamada: "programadollamadaautoia",
-  no_interesado_llamada: "no_interesadollamadaautoia",
-  contestada_llamada: "contestada_autoia_llamada",
-  videollamada_efectiva: "videollamada_efectiva_autoia",
+  noshow: "no_show_lm",
+  cerrada: "cerrada_lm",
+  videollamada_efectiva: "videollamada_efectiva_lm",
+  interesado_llamada: "interesadollamada_lm",
+  programado_llamada: "programadollamada_lm",
+  no_interesado_llamada: "no_interesadollamada_lm",
+  contestada_llamada: "contestada_llamada_lm",
   interesado_callai: "interesadocallai",
   no_interesado_callai: "nointeresadocallai",
   agendado_callai: "agendadocallai",
   confirmado_callai: "confirmadocallai",
-  perdido: "perdidoautoia",
   descartar: "descartarautoia",
   llamar_despues_callai: "llamardespuescallai",
 } as const;

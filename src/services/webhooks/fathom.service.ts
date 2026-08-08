@@ -14,6 +14,7 @@ import {
   updateOpportunityStage,
   createContactTask,
   updateContactCustomFields,
+  ensureCustomField,
   parseFunnelStageMap,
   GHL_TAGS,
 } from "../ghl-api.service.js";
@@ -42,17 +43,18 @@ function formatTranscript(
 }
 
 /**
- * Mapea la categoría devuelta por el clasificador IA al nombre del tag de GHL.
+ * ¿Hubo venta con pago? cerrada_lm SOLO se aplica cuando la IA clasificó la
+ * reunión como Cerrada Y detectó cash collected o facturación mayor a 0.
  */
-function categoriaToGhlTag(
-  categoria: string,
-): string {
-  const map: Record<string, string> = {
-    Cerrada: GHL_TAGS.cerrada,
-    Ofertada: GHL_TAGS.ofertada,
-    No_Ofertada: GHL_TAGS.noofertada,
-  };
-  return map[categoria] ?? GHL_TAGS.noofertada;
+function esCierreConPago(classifier: {
+  categoria?: string;
+  cash_collected?: string | null;
+  facturacion?: string | null;
+}): boolean {
+  if (classifier.categoria !== "Cerrada") return false;
+  const hayCash = Boolean(classifier.cash_collected && classifier.cash_collected !== "0");
+  const hayFacturacion = Boolean(classifier.facturacion && classifier.facturacion !== "0");
+  return hayCash || hayFacturacion;
 }
 
 /**
@@ -464,11 +466,10 @@ export async function processFathomCall(
 
   const locationId = account.locationid;
 
-  // 5a. Aplicar tag de clasificación en GHL
-  if (contactId && account.token_ghl && classifier) {
+  // 5a. Tag de cierre: SOLO cerrada_lm y solo si hubo venta con pago detectado
+  if (contactId && account.token_ghl && classifier && esCierreConPago(classifier)) {
     try {
-      const tag = categoriaToGhlTag(classifier.categoria);
-      await safeAddContactTag(contactId, account.token_ghl, tag, locationId);
+      await safeAddContactTag(contactId, account.token_ghl, GHL_TAGS.cerrada, locationId);
     } catch (err) {
       console.error(
         `[Fathom] GHL tag error for contact ${contactId}:`,
@@ -798,6 +799,7 @@ export async function processFathomCall(
           : null,
         analysisText ? `\n${analysisText}` : null,
         tagsInternos.length > 0 ? `\nEtiquetas: ${tagsInternos.join(", ")}` : null,
+        shareUrl ? `\n🔗 Grabación: ${shareUrl}` : null,
       ]
         .filter(Boolean)
         .join("\n");
@@ -815,16 +817,22 @@ export async function processFathomCall(
       }
     }
 
-    // Nota de transcripción completa (desactivada por defecto — puede superar 65k chars)
-    if (ghlNotasConfig.transcripcion === true && formattedTranscript) {
+    // La transcripción NO va en nota: se guarda en el campo personalizado
+    // "transcrip_fathom" del contacto (se crea solo si no existe).
+    if (formattedTranscript) {
       try {
-        await addContactNote(
-          contactId,
-          account.token_ghl,
-          `🎥 Videollamada — Transcripción\n\n${formattedTranscript}`,
-        );
+        const fieldKey = await ensureCustomField(locationId ?? "", account.token_ghl, {
+          key: "contact.transcrip_fathom",
+          name: "transcrip_fathom",
+          dataType: "LARGE_TEXT",
+        });
+        await updateContactCustomFields(contactId, account.token_ghl, [
+          // GHL limita el tamaño del campo — truncar con margen
+          { key: fieldKey, field_value: formattedTranscript.slice(0, 60_000) },
+        ]);
+        console.info(`[Fathom] Transcripción guardada en campo transcrip_fathom para contact=${contactId}`);
       } catch (err) {
-        console.error(`[Fathom] Error agregando nota transcripción en GHL:`, err);
+        console.error(`[Fathom] Error guardando transcrip_fathom:`, err);
       }
     }
 

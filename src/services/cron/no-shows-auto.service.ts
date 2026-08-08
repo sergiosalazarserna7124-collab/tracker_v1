@@ -22,8 +22,8 @@ import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import { safeAddContactTag } from "../ghl-api.service.js";
 
 const HORAS_ESPERA_FATHOM = 5;
-const TAG_NO_SHOW = "no_show";
-const TAG_INTERNO = "noshowautoia";
+const TAG_NO_SHOW = "no_show_lm";
+const TAG_INTERNO = "no_show_lm";
 
 interface CitaPendiente {
   id_registro_agenda: number;

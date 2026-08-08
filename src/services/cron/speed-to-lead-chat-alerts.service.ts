@@ -55,6 +55,11 @@ export async function runSpeedToLeadChatAlerts(): Promise<SpeedToLeadChatAlertsR
     errores: 0,
   };
 
+  // Decisión de producto (2026-08): las notas de alerta speed-to-lead ya no se
+  // escriben en los contactos. Se deshabilita el cron completo (reversible).
+  console.info("[SpeedToLeadChat] Alertas deshabilitadas por decisión de producto — no se escriben notas.");
+  return result;
+
   // ── 1. Chats que necesitan alerta de 60 minutos ───────────────────────────
   // Para cuentas con bot (chatbot_transfer_marker): usa bot_delegacion_at como referencia
   // y excluye mensajes de bot (source=workflow/api/campaign) del check de respuesta.

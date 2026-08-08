@@ -555,13 +555,8 @@ async function followUpPath(
     }
   }
 
-  // Tag GHL: no contestó
+  // Decisión de producto: ya no se etiqueta la llamada no contestada; solo nota.
   if (contactId && tokenGhl) {
-    try {
-      await safeAddContactTag(contactId, tokenGhl, GHL_TAGS.no_contestada_llamada, fields.locationId);
-    } catch (err) {
-      console.error(`[${label}] Error aplicando tag GHL:`, err);
-    }
     try {
       await addContactNote(contactId, tokenGhl, "Llamada no contestada");
     } catch (err) {
@@ -899,21 +894,8 @@ async function effectivePath(
       catch (err) { console.error(`[GhlCalls/Effective] Error agregando nota IA:`, err); }
     }
 
-    if (transcript && notasLlamadasCfg.transcripcion) {
-      try {
-        // Diarizar si la transcripción llegó como texto plano sin speaker labels
-        const diarizedTranscript = await diarizarTranscripcion(transcript, openaiApiKey, idCuenta);
-        await addContactNote(contactId, tokenGhl, `📞 Llamada GHL — Transcripción\n\n${diarizedTranscript}`);
-      } catch (err) {
-        console.error(`[GhlCalls/Effective] Error diarizando transcript, guardando versión original:`, err);
-        // Fallback: guardar transcript original sin diarizar para no perder el dato
-        try {
-          await addContactNote(contactId, tokenGhl, `📞 Llamada GHL — Transcripción\n\n${transcript}`);
-        } catch (e2) {
-          console.error(`[GhlCalls/Effective] Error agregando nota de transcripción original:`, e2);
-        }
-      }
-    }
+    // Decisión de producto: la transcripción de llamadas NO se pone en notas.
+    // (Queda disponible en el dashboard y en el custom field si está configurado.)
 
     // Completar campos personalizados de GHL configurados por el cliente (best-effort)
     if (camposLlamadasCfg.ia || camposLlamadasCfg.transcripcion) {

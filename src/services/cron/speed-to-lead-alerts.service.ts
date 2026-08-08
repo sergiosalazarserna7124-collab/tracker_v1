@@ -55,6 +55,11 @@ export async function runSpeedToLeadAlerts(): Promise<SpeedToLeadAlertsResult> {
     errores: 0,
   };
 
+  // Decisión de producto (2026-08): las notas de alerta speed-to-lead ya no se
+  // escriben en los contactos. Se deshabilita el cron completo (reversible).
+  console.info("[SpeedToLead] Alertas deshabilitadas por decisión de producto — no se escriben notas.");
+  return result;
+
   // ── 1. Leads que necesitan alerta de 60 minutos ───────────────────────────
   // fecha_evento entre 60 min y 48h atrás, sin alerta previa
   const leads60m = await pgPool.query<LeadPendiente>(
