@@ -6,8 +6,8 @@
  *   - GHL role "admin"  → rol "superadmin" (acceso a todo)
  *   - GHL role "user"   → rol "usuario"    (solo ve datos asignados a él)
  *
- * El rol solo se asigna al CREAR el usuario: si ya existe, nunca se pisa,
- * de modo que los cambios hechos a mano en Lead Master se respetan.
+ * GHL es la ÚNICA fuente de verdad: los usuarios no se editan en Lead Master,
+ * así que el sync también refresca rol y nombre en cada corrida.
  * Requiere el scope users.readonly en la app del marketplace.
  */
 
@@ -112,27 +112,29 @@ async function upsertUsuario(
     { label: "ghlUsersSync/find" },
   );
 
+  const rol = mapRol(ghlUser);
+
   if (rows[0]) {
-    // Existente: NO tocar rol ni permisos (editables en Lead Master).
+    // Existente: GHL manda — refrescar también rol y nombre en cada sync.
     await withRetry(
       () =>
         db.query(
           `UPDATE usuarios_dashboard SET
              ghl_user_id   = $2,
              email         = $3,
-             nombre        = COALESCE(nombre, $4),
+             nombre        = COALESCE($4, nombre),
              nombre_closer = COALESCE(nombre_closer, $4),
+             rol           = $5,
              activo        = TRUE,
              ghl_synced_at = NOW()
            WHERE id_evento = $1`,
-          [rows[0].id_evento, ghlUser.id, email, nombre],
+          [rows[0].id_evento, ghlUser.id, email, nombre, rol],
         ),
       { label: "ghlUsersSync/update" },
     );
     return "actualizado";
   }
 
-  const rol = mapRol(ghlUser);
   await withRetry(
     () =>
       db.query(
