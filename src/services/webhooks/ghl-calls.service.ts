@@ -27,6 +27,9 @@ import {
   updateOpportunityStage,
   parseFunnelStageMap,
   updateContactCustomFields,
+  getContactById,
+  matchCategoriaPorEtiqueta,
+  categoriasUsanEtiquetas,
   GHL_TAGS,
   type CuentaFullRow,
 } from "../ghl-api.service.js";
@@ -1309,8 +1312,26 @@ export async function processGhlCallEffective(body: GhlCallEventBody): Promise<S
       console.error("[GhlCalls/Effective] Error evaluando reglas pre-clasificación:", err);
     }
   }
-  // AUT-1863: webhook category is authoritative; fall back to reglas / matched_categoria
-  const categoriaGhl = resolveWebhookCategoria(fields.categoriaWebhook, categoriasLlamadas)
+  // Categoría por ETIQUETA del contacto (máxima prioridad): cada categoría de
+  // llamada puede anclarse a una etiqueta de GHL (ej. "lead nuevo", "lead
+  // perfilado") y define CÓMO se evalúa la llamada de ese tipo de contacto.
+  let categoriaPorEtiqueta: string | null = null;
+  if (fields.contactId && tokenGhl && categoriasUsanEtiquetas(categoriasLlamadas)) {
+    try {
+      const contact = await getContactById(fields.contactId, tokenGhl);
+      const match = matchCategoriaPorEtiqueta(contact?.tags, categoriasLlamadas);
+      if (match) {
+        categoriaPorEtiqueta = match.id;
+        console.log(`[GhlCalls/Effective] Categoría por etiqueta del contacto: "${match.etiqueta}" → ${match.nombre}`);
+      }
+    } catch (err) {
+      console.warn(`[GhlCalls/Effective] No se pudieron leer tags del contacto para categoría:`, err);
+    }
+  }
+
+  // Prioridad: etiqueta del contacto > webhook > reglas / matched_categoria
+  const categoriaGhl = categoriaPorEtiqueta
+    ?? resolveWebhookCategoria(fields.categoriaWebhook, categoriasLlamadas)
     ?? collectCategoria(ghlReglasResult.matched_rules)
     ?? ghlReglasResult.matched_categoria;
   if (fields.categoriaWebhook) {

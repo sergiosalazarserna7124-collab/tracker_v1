@@ -15,6 +15,9 @@ import {
   createContactTask,
   updateContactCustomFields,
   ensureCustomField,
+  getContactById,
+  matchCategoriaPorEtiqueta,
+  categoriasUsanEtiquetas,
   parseFunnelStageMap,
   GHL_TAGS,
 } from "../ghl-api.service.js";
@@ -214,6 +217,7 @@ export async function processFathomCall(
     openai_api_key: string | null;
     embudo_personalizado: unknown;
     reglas_etiquetas: unknown;
+    categorias_citas: unknown;
     canales_activos: unknown;
     ghl_native_task_workflow: boolean;
     gemini_api_key: string | null;
@@ -236,6 +240,7 @@ export async function processFathomCall(
             openai_api_key: cuentas.openai_api_key,
             embudo_personalizado: cuentas.embudo_personalizado,
             reglas_etiquetas: cuentas.reglas_etiquetas,
+            categorias_citas: cuentas.categorias_citas,
             canales_activos: cuentas.canales_activos,
             ghl_native_task_workflow: cuentas.ghl_native_task_workflow,
             gemini_api_key: cuentas.gemini_api_key,
@@ -393,6 +398,23 @@ export async function processFathomCall(
 
   // ── Fase 4: Motor IA en paralelo ─────────────────────────────────────────
 
+  // Categoría de cita por ETIQUETA del contacto: si el contacto tiene la
+  // etiqueta de una categoría (ej. "lead nuevo", "lead agendado"), la cita se
+  // evalúa con el prompt de esa categoría en vez del prompt general.
+  let categoriaCitaPrompt: string | null = null;
+  if (contactId && account.token_ghl && categoriasUsanEtiquetas(account.categorias_citas)) {
+    try {
+      const contactInfo = await getContactById(contactId, account.token_ghl);
+      const matchCita = matchCategoriaPorEtiqueta(contactInfo?.tags, account.categorias_citas);
+      if (matchCita?.prompt?.trim()) {
+        categoriaCitaPrompt = matchCita.prompt.trim();
+        console.info(`[Fathom] Categoría de cita por etiqueta "${matchCita.etiqueta}" → ${matchCita.nombre}`);
+      }
+    } catch (err) {
+      console.warn(`[Fathom] No se pudieron leer tags del contacto para categoría de cita:`, err);
+    }
+  }
+
   let aiResult: Awaited<ReturnType<typeof analyzeCall>> | null = null;
 
   try {
@@ -400,7 +422,7 @@ export async function processFathomCall(
       aiResult = await analyzeCall(
         formattedTranscript,
         account.prompt_ventas,
-        account.prompt_videollamadas,
+        categoriaCitaPrompt ?? account.prompt_videollamadas,
         account.openai_api_key,
         account.embudo_personalizado,
         account.reglas_etiquetas,

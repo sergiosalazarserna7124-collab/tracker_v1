@@ -745,6 +745,39 @@ export interface GhlCustomField {
   value: string;
 }
 
+// ─── Categorías de evaluación ancladas a etiqueta del contacto ───────────────
+// Cada categoría (de llamadas o de citas) puede tener una `etiqueta`: si el
+// contacto en GHL tiene esa etiqueta, la llamada/cita se evalúa con el prompt
+// de esa categoría. Primera categoría cuyo tag matchee, gana (orden de lista).
+
+export interface CategoriaEvaluacion {
+  id: string;
+  nombre: string;
+  etiqueta?: string;
+  prompt?: string;
+  definicion?: string;
+  temas?: string[];
+}
+
+export function matchCategoriaPorEtiqueta(
+  contactTags: string[] | null | undefined,
+  categorias: unknown,
+): CategoriaEvaluacion | null {
+  if (!Array.isArray(categorias) || !contactTags || contactTags.length === 0) return null;
+  const tagsNorm = new Set(contactTags.map((t) => t.trim().toLowerCase()).filter(Boolean));
+  for (const c of categorias as CategoriaEvaluacion[]) {
+    const et = c?.etiqueta?.trim().toLowerCase();
+    if (et && tagsNorm.has(et)) return c;
+  }
+  return null;
+}
+
+/** ¿Alguna categoría de la lista tiene etiqueta configurada? (evita fetch inútil) */
+export function categoriasUsanEtiquetas(categorias: unknown): boolean {
+  return Array.isArray(categorias) &&
+    (categorias as CategoriaEvaluacion[]).some((c) => c?.etiqueta?.trim());
+}
+
 export async function getContactById(
   contactId: string,
   bearerToken: string,
