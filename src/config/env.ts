@@ -22,9 +22,9 @@ const EnvSchema = Type.Object({
   // "0" = desactivado (default): las no contestadas llegan por la etiqueta
   // "no-contestada" (workflow Call Status); este loop queda como plan B.
   GHL_CALLS_RECONCILE_MIN: Type.String({ default: "0" }),
-  // Minutos entre barridos automáticos de no-shows (citas PDTE de ayer sin
-  // Fathom → no_show). "0" lo desactiva. Default: cada hora.
-  NO_SHOWS_SWEEP_MIN: Type.String({ default: "60" }),
+  // Minutos entre barridos automáticos de no-shows (cita PDTE con ≥5h desde
+  // la reunión y sin Fathom → verificar en GHL → no_show). "0" lo desactiva.
+  NO_SHOWS_SWEEP_MIN: Type.String({ default: "30" }),
 });
 
 export type Env = Static<typeof EnvSchema>;
@@ -42,7 +42,7 @@ function loadEnv(): Env {
     GHL_OAUTH_REDIRECT_URI: process.env.GHL_OAUTH_REDIRECT_URI ?? "https://cerebro-tracker-v6-saas-git-cstkjl7bpa-ue.a.run.app/oauth/callback",
     GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? "",
     GHL_CALLS_RECONCILE_MIN: process.env.GHL_CALLS_RECONCILE_MIN ?? "0",
-    NO_SHOWS_SWEEP_MIN: process.env.NO_SHOWS_SWEEP_MIN ?? "60",
+    NO_SHOWS_SWEEP_MIN: process.env.NO_SHOWS_SWEEP_MIN ?? "30",
   };
 
   if (!Value.Check(EnvSchema, raw)) {
