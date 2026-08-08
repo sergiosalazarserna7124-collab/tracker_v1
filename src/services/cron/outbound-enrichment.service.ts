@@ -1,6 +1,7 @@
 import { db as pgPool } from "../../config/database.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { fetchWithTimeout } from "../../utils/fetch.utils.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
 const GHL_VERSION = "2021-07-28";
@@ -143,10 +144,11 @@ export async function runOutboundEnrichment(): Promise<OutboundEnrichmentResult>
 
     result.chatsScanned++;
     const account = accountMap.get(chat.id_cuenta);
-    if (!account?.token_ghl) continue;
+    const ghlToken = account ? ((await getAccessToken(account.locationid ?? "")) || account.token_ghl) : null;
+    if (!ghlToken) continue;
 
     try {
-      const bearerToken = buildBearerAuth(account.token_ghl);
+      const bearerToken = buildBearerAuth(ghlToken);
       const messages = await fetchMessages(bearerToken, chat.chatid);
 
       const outboundMessages = messages.filter((m) => m.direction === "outbound");

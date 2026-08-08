@@ -6,6 +6,7 @@ import { fetchWithTimeout } from "../../utils/fetch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
 import { tryInlineChatClassification } from "../webhooks/inline-chat-classify.service.js";
 import type { ChatBackfillBodyType } from "../../schemas/quick-triggers/chat-backfill.schema.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
 const GHL_VERSION = "2021-07-28";
@@ -254,11 +255,12 @@ export async function executeChatBackfill(
     .where(eq(cuentas.id_cuenta, idCuenta))
     .limit(1);
 
-  if (!account?.locationid || !account.token_ghl) {
+  const ghlToken = (await getAccessToken(account?.locationid ?? "")) || account?.token_ghl;
+  if (!account?.locationid || !ghlToken) {
     throw new Error("Cuenta sin locationId o token GHL configurado.");
   }
 
-  const bearerToken = buildBearerAuth(account.token_ghl);
+  const bearerToken = buildBearerAuth(ghlToken);
   const sinceMs = new Date(body.since_date).getTime();
   const maxConvs = body.max_conversations ?? 500;
   const dryRun = body.dry_run ?? false;

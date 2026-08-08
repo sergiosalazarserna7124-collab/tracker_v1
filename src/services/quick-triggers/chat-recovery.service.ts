@@ -4,6 +4,7 @@ import { db } from "../../config/database.js";
 import { cuentas } from "../../db/schema.js";
 import { fetchWithTimeout } from "../../utils/fetch.utils.js";
 import { withRetry } from "../../utils/retry.utils.js";
+import { getAccessToken } from "../oauth/ghl-oauth.service.js";
 import type {
   ChatRecoveryPreviewBodyType,
   ChatRecoveryExecuteBodyType,
@@ -141,11 +142,12 @@ async function resolveGhlAccount(idCuenta: number): Promise<{
     .where(eq(cuentas.id_cuenta, idCuenta))
     .limit(1);
 
-  if (!row?.locationid || !row.token_ghl) return null;
+  const ghlToken = (await getAccessToken(row?.locationid ?? "")) || row?.token_ghl;
+  if (!row?.locationid || !ghlToken) return null;
 
   return {
     locationId: row.locationid,
-    bearerToken: buildBearerAuth(row.token_ghl),
+    bearerToken: buildBearerAuth(ghlToken),
   };
 }
 

@@ -6,6 +6,7 @@ import { drizzleDb } from "../../config/drizzle.js";
 import { agendas, cuentas, logLlamadas } from "../../db/schema.js";
 import { env } from "../../config/env.js";
 import { evaluateReglas, type DynamicValueContext } from "../../services/ai/reglas-evaluator.service.js";
+import { getAccessToken } from "../../services/oauth/ghl-oauth.service.js";
 
 interface NormalizedRecord {
   id: number;
@@ -133,7 +134,7 @@ export async function reprocessReglasRoute(app: FastifyInstance) {
 
       const dynCtx: DynamicValueContext = {
         contactId: record.ghl_contact_id,
-        bearerToken: account.token_ghl,
+        bearerToken: (await getAccessToken(account.locationid ?? "")) || account.token_ghl,
         locationId: account.locationid,
       };
 
